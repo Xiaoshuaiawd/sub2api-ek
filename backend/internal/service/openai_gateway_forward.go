@@ -90,7 +90,17 @@ func prismBrowserResponsesURL(baseURL string) string {
 }
 
 // Forward forwards request to OpenAI API
-func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *OpenAIForwardResult, resultErr error) {
+func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	return s.forward(ctx, c, account, body, "")
+}
+
+// ForwardWithOriginalModel preserves the client model when channel mapping
+// has already rewritten the request body before this account attempt.
+func (s *OpenAIGatewayService) ForwardWithOriginalModel(ctx context.Context, c *gin.Context, account *Account, body []byte, originalModel string) (*OpenAIForwardResult, error) {
+	return s.forward(ctx, c, account, body, strings.TrimSpace(originalModel))
+}
+
+func (s *OpenAIGatewayService) forward(ctx context.Context, c *gin.Context, account *Account, body []byte, clientModel string) (result *OpenAIForwardResult, resultErr error) {
 	defer func() {
 		if result != nil && c != nil {
 			result.AuthConnectionID = c.GetString("openai_auth_connection_id")
@@ -234,7 +244,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		view := newOpenAIRequestView(body)
 		SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 		return s.forwardOpenAIPassthrough(ctx, c, account, body, body, view.Model, false,
-			extractOpenAIReasoningEffortFromBody(body, view.Model), view.Stream, startTime)
+			extractOpenAIReasoningEffortFromBody(body, view.Model), view.Stream, startTime, firstNonEmpty(clientModel, view.Model))
 	}
 
 	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)
@@ -350,9 +360,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+	if clientModel != "" {
+		originalModel = clientModel
+	}
 
 	if account.Platform == PlatformGrok {
-		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
+		return s.forwardGrokResponsesWithResponseModel(ctx, c, account, body, reqModel, originalModel, reqStream, startTime)
 	}
 
 	if account.IsOpenAIApiKey() {
@@ -370,12 +383,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		requestView = newOpenAIRequestView(body)
 		reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
-		originalModel = reqModel
+		if clientModel == "" {
+			originalModel = reqModel
+		}
 	}
 
 	if (isOpenAINativeCompactionV2(c) && shouldForwardDeepSeekResponsesCompactViaChatCompletions(account, body)) ||
 		shouldForwardDeepSeekResponsesLiteViaChatCompletions(account, body) {
-		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime)
+		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime, originalModel)
 	}
 	// 上游协议统一由 resolveUpstreamProtocol 判定（按模型分流时带上游模型目录）。OpenAI API Key 账号只会落到
 	// Responses / Chat Completions，上面的归一化对两条路径都生效。
@@ -388,9 +403,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// Responses 客户端 × Anthropic 上游：转成 Anthropic 请求走原生端点。不能落到
 		// raw-CC 分支——其 URL 构造会把 anthropic base 当 CC base 用。
 		// 账号映射未命中时以去除首尾空白的请求模型兜底，计费名与上游模型名一致。
-		return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, reqModel)
+		return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, reqModel, originalModel)
 	case APIProtocolChatCompletions:
-		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime)
+		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime, originalModel)
 	}
 	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 	if account.IsOpenAI() && (account.IsOpenAIApiKey() || account.IsOpenAIOAuthLike()) {
@@ -403,7 +418,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			originalBody = normalizedReasoningBody
 			requestView = newOpenAIRequestView(normalizedReasoningBody)
 			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
-			originalModel = reqModel
+			if clientModel == "" {
+				originalModel = reqModel
+			}
 		}
 		sanitizedBody, changed, sanitizeErr := sanitizeOpenAIResponsesInputItemIDs(body)
 		if sanitizeErr != nil {
@@ -414,7 +431,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			originalBody = sanitizedBody
 			requestView = newOpenAIRequestView(sanitizedBody)
 			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
-			originalModel = reqModel
+			if clientModel == "" {
+				originalModel = reqModel
+			}
 		}
 	}
 
@@ -485,6 +504,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			reasoningEffort,
 			reqStream,
 			startTime,
+			originalModel,
 		)
 	}
 

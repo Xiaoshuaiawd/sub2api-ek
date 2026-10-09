@@ -136,9 +136,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	reasoningEffort *string,
 	reqStream bool,
 	startTime time.Time,
+	responseModelOverride ...string,
 ) (*OpenAIForwardResult, error) {
 	ctx = withOpenAITransportMode(ctx, "passthrough")
 	requestedModel := reqModel
+	responseModel := reqModel
+	if len(responseModelOverride) > 0 && strings.TrimSpace(responseModelOverride[0]) != "" {
+		responseModel = strings.TrimSpace(responseModelOverride[0])
+	}
 	upstreamPassthroughModel := ""
 	if isOpenAIResponsesCompactPath(c) && !account.IsCopilotSDKEnabled() {
 		compactMappedModel := s.resolveOpenAICompactFallbackModel(account, reqModel)
@@ -498,11 +503,15 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 
 		if reqStream {
+			responseUpstreamModel := upstreamPassthroughModel
+			if responseUpstreamModel == "" && responseModel != reqModel {
+				responseUpstreamModel = policyModel
+			}
 			effort := ""
 			if reasoningEffort != nil {
 				effort = *reasoningEffort
 			}
-			result, handleErr := s.handleStreamingResponsePassthroughWithImage(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel, imageBillingModel, effort)
+			result, handleErr := s.handleStreamingResponsePassthroughWithImage(ctx, resp, c, account, startTime, responseModel, responseUpstreamModel, imageBillingModel, effort)
 			if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
 				return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
 			}
@@ -551,7 +560,11 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			imageCount = result.imageCount
 			imageOutputSizes = result.imageOutputSizes
 		} else {
-			result, handleErr := s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, reqModel, upstreamPassthroughModel)
+			responseUpstreamModel := upstreamPassthroughModel
+			if responseUpstreamModel == "" && responseModel != reqModel {
+				responseUpstreamModel = policyModel
+			}
+			result, handleErr := s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, responseModel, responseUpstreamModel)
 			if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
 				return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
 			}
@@ -604,7 +617,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		UpstreamHeaders:               resp.Header,
 		ResponseID:                    responseID,
 		Usage:                         *usage,
-		Model:                         reqModel,
+		Model:                         responseModel,
 		UpstreamModel:                 upstreamPassthroughModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),
 		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
@@ -616,6 +629,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnected,
+	}
+	if forwardResult.UpstreamModel == "" && responseModel != reqModel {
+		forwardResult.UpstreamModel = policyModel
 	}
 	if imageCount > 0 {
 		forwardResult.ImageCount = imageCount
@@ -1113,7 +1129,8 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	// context-window 超限是确定性请求失败（shouldFailoverOpenAIPassthroughResponse
 	// 已保证不切号），其文案对客户端可操作（如触发自动压缩）；在净化信封内保留
 	// 脱敏后的上游消息，而不是抹成通用文案。
-	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
+	// 但若该文案回显了真实模型名，仍要归一成统一错误，避免暴露映射关系。
+	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" && !UpstreamErrorMessageLeaksModel(upstreamMsg) {
 		writeOpenAIPassthroughErrorEnvelope(c, resp.StatusCode, resp.Header, upstreamMsg)
 	} else {
 		writeSanitizedOpenAIPassthroughError(c, resp.StatusCode, resp.Header)

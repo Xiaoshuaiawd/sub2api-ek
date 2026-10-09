@@ -40,6 +40,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	account *Account,
 	body []byte,
 	defaultMappedModel string,
+	responseModelOverride ...string,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
 
@@ -61,11 +62,15 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, fmt.Errorf("missing model in request")
 	}
+	responseModel := originalModel
+	if len(responseModelOverride) > 0 && strings.TrimSpace(responseModelOverride[0]) != "" {
+		responseModel = strings.TrimSpace(responseModelOverride[0])
+	}
 	clientStream := responsesReq.Stream
 
 	// 3. Convert Responses → Anthropic
 	// Resolve the mapped model before choosing its thinking/tool protocol.
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveOpenAIChannelForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	if err := validateClaude55Request(body, upstreamModel); err != nil {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -139,14 +144,18 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
 			return nil, foErr
 		}
-		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		if UpstreamErrorMessageLeaksModel(upstreamMsg) {
+			writeUpstreamModelLeakError(c)
+		} else {
+			writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		}
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
 	if clientStream {
-		return s.handleResponsesStreamingFromNativeAnthropic(resp, c, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, clientToolMapping)
+		return s.handleResponsesStreamingFromNativeAnthropic(resp, c, responseModel, billingModel, upstreamModel, reasoningEffort, startTime, clientToolMapping)
 	}
-	return s.handleResponsesBufferedFromNativeAnthropic(resp, c, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, clientToolMapping)
+	return s.handleResponsesBufferedFromNativeAnthropic(resp, c, responseModel, billingModel, upstreamModel, reasoningEffort, startTime, clientToolMapping)
 }
 
 // handleResponsesBufferedFromNativeAnthropic reads Anthropic SSE events, assembles

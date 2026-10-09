@@ -1908,16 +1908,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		needModelReplace := false
 		clientDisconnected := false
 		mappedModel := ""
-		var mappedModelBytes []byte
 		if originalModel != "" {
 			mappedModel = strings.TrimSpace(gjson.GetBytes(payload, "model").String())
 			if mappedModel == "" {
 				mappedModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
 			}
 			needModelReplace = mappedModel != "" && mappedModel != originalModel
-			if needModelReplace {
-				mappedModelBytes = []byte(mappedModel)
-			}
 		}
 		defer func() {
 			if smartStrict && forwardErr != nil && forwardResult == nil {
@@ -2105,7 +2101,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			imageCounter.AddSSEData(upstreamMessage)
 
 			if !clientDisconnected {
-				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
+				if needModelReplace && openAIWSEventMayContainModel(eventType) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
 				}
 				if openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(upstreamMessage) {

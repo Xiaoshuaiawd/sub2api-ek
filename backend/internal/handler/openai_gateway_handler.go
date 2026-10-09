@@ -1131,7 +1131,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.Forward(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, attemptBody)
+			forwardCtx := rpmAdmission.forwardContext(c.Request.Context(), account)
+			if channelMapping.Mapped {
+				return h.gatewayService.ForwardWithOriginalModel(forwardCtx, c, account, attemptBody, reqModel)
+			}
+			return h.gatewayService.Forward(forwardCtx, c, account, attemptBody)
 		}()
 		if result != nil {
 			result.HeaderTimeoutRetries = headerTimeoutRetries
@@ -4405,6 +4409,10 @@ func (h *OpenAIGatewayHandler) applyOpenAIFailoverPassthroughRule(
 	msg := service.ExtractUpstreamErrorMessage(responseBody)
 	if !rule.PassthroughBody && rule.CustomMessage != nil {
 		msg = *rule.CustomMessage
+	}
+	if service.UpstreamErrorMessageLeaksModel(msg) {
+		leakStatus, _, leakMsg := service.UpstreamModelLeakClientError()
+		respCode, msg = leakStatus, leakMsg
 	}
 
 	if rule.SkipMonitoring {
