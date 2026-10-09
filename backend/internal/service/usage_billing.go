@@ -56,6 +56,10 @@ type UsageBillingCommand struct {
 	// 只用于选择账号配额累加语句，不参与幂等指纹；实际累加哪些维度以数据库中的账号配置为准。
 	AccountQuotaHasDailyLimit  bool
 	AccountQuotaHasWeeklyLimit bool
+	// HybridGroupID > 0 enables subscription-first settlement with whole-request
+	// balance fallback. HybridCostUSD is the source-independent candidate charge.
+	HybridGroupID int64
+	HybridCostUSD float64
 }
 
 func (c *UsageBillingCommand) Normalize() {
@@ -64,7 +68,11 @@ func (c *UsageBillingCommand) Normalize() {
 	}
 	c.RequestID = strings.TrimSpace(c.RequestID)
 	if strings.TrimSpace(c.RequestFingerprint) == "" {
-		c.RequestFingerprint = buildUsageBillingFingerprint(c)
+		if c.HybridGroupID > 0 {
+			c.RequestFingerprint = buildHybridBillingFingerprint(c)
+		} else {
+			c.RequestFingerprint = buildUsageBillingFingerprint(c)
+		}
 	}
 	// 量化必须在指纹计算之后：指纹是请求幂等键，保持由原始金额派生可以避免
 	// 升级前后同一 request_id 的重试算出不同指纹而被判为 fingerprint conflict。
@@ -101,6 +109,7 @@ func (c *UsageBillingCommand) quantizeMonetaryFields() {
 	c.APIKeyRateLimitCost = QuantizeUsageBillingAmount(c.APIKeyRateLimitCost)
 	c.AccountQuotaCost = QuantizeUsageBillingAmount(c.AccountQuotaCost)
 	c.PlatformQuotaCost = QuantizeUsageBillingAmount(c.PlatformQuotaCost)
+	c.HybridCostUSD = QuantizeUsageBillingAmount(c.HybridCostUSD)
 }
 
 // QuantizeUsageBillingAmount 把金额舍入到 UsageBillingMonetaryScale 位小数，
@@ -151,6 +160,26 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// Hybrid requests keep the same identity whether admission or a concurrent
+// subscription debit ultimately selects the wallet. Legacy fingerprints stay
+// byte-for-byte unchanged for standard and strict subscription requests.
+func buildHybridBillingFingerprint(c *UsageBillingCommand) string {
+	raw := fmt.Sprintf(
+		"hybrid:v1|%d|%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%s|%0.10f|%0.10f|%0.10f|%0.10f",
+		c.UserID, c.AccountID, c.APIKeyID, c.HybridGroupID,
+		strings.TrimSpace(c.AccountType), strings.TrimSpace(c.Model),
+		strings.TrimSpace(c.ServiceTier), strings.TrimSpace(c.ReasoningEffort),
+		c.InputTokens, c.OutputTokens, c.CacheCreationTokens, c.CacheReadTokens,
+		c.ImageCount, strings.TrimSpace(c.MediaType),
+		c.HybridCostUSD, c.APIKeyQuotaCost, c.APIKeyRateLimitCost, c.AccountQuotaCost,
+	)
+	if payloadHash := strings.TrimSpace(c.RequestPayloadHash); payloadHash != "" {
+		raw += "|" + payloadHash
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
 func HashUsageRequestPayload(payload []byte) string {
 	if len(payload) == 0 {
 		return ""
@@ -178,13 +207,16 @@ type AccountQuotaState struct {
 }
 
 type UsageBillingApplyResult struct {
-	Applied              bool
-	AutoCreditIssued     bool // balance delta includes a receivable; invalidate rather than replay a debit
-	APIKeyQuotaExhausted bool
-	PlatformQuotaApplied bool               // durable SQL effect; do not replay legacy cache/DB increments
-	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)
-	BalanceOverdrafted   bool               // true when the sufficient-balance guard missed and debt was still recorded
-	QuotaState           *AccountQuotaState // post-increment quota state (nil = no quota increment)
+	Applied                 bool
+	BillingType             int8
+	SubscriptionID          *int64
+	SubscriptionWindowReset bool
+	AutoCreditIssued        bool
+	APIKeyQuotaExhausted    bool
+	PlatformQuotaApplied    bool
+	NewBalance              *float64
+	BalanceOverdrafted      bool
+	QuotaState              *AccountQuotaState
 }
 
 // BatchImageBalanceHoldCommand describes an idempotent balance hold operation.
