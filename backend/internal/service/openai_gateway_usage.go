@@ -218,8 +218,19 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if s.cfg != nil {
 		multiplier = s.cfg.Default.RateMultiplier
 	}
+	walletBaseMultiplier := multiplier
+	subscriptionBaseMultiplier := multiplier
+	selectedSubscription := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 	if apiKey.GroupID != nil && apiKey.Group != nil {
-		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
+		walletBaseMultiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
+		subscriptionBaseMultiplier = walletBaseMultiplier
+		if apiKey.Group.AllowsBalanceFallback() {
+			subscriptionBaseMultiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.SubscriptionBillingRateMultiplier())
+		}
+	}
+	multiplier = walletBaseMultiplier
+	if selectedSubscription {
+		multiplier = subscriptionBaseMultiplier
 	}
 	// Account-side group multiplier is independent from RateMultiplier (which
 	// only changes account cost statistics). A value of 5 offsets a 0.2x group
@@ -371,7 +382,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	// Determine billing type
-	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+	isSubscriptionBilling := selectedSubscription
+	hybridPrices := calculateHybridPriceCandidates(apiKey, result.ImageCount, result.VideoCount, cost, pricingAt, subscriptionBaseMultiplier, walletBaseMultiplier, isSubscriptionBilling)
 	billingType := BillingTypeBalance
 	if isSubscriptionBilling {
 		billingType = BillingTypeSubscription
@@ -574,17 +586,22 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
-		Cost:                       cost,
-		User:                       user,
-		APIKey:                     apiKey,
-		Account:                    account,
-		Subscription:               subscription,
-		RequestPayloadHash:         resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
-		IsSubscriptionBill:         isSubscriptionBilling && !simpleModeKeyRateLimitOnly,
-		AccountRateMultiplier:      accountRateMultiplier,
-		APIKeyService:              input.APIKeyService,
-		Platform:                   quotaPlatform,
-		SimpleModeKeyRateLimitOnly: simpleModeKeyRateLimitOnly,
+		Cost:                             cost,
+		HybridSplitPricing:               apiKey.Group != nil && apiKey.Group.AllowsBalanceFallback(),
+		HybridSubscriptionActualCost:     hybridPrices.subscriptionCost,
+		HybridBalanceActualCost:          hybridPrices.balanceCost,
+		HybridSubscriptionRateMultiplier: hybridPrices.subscriptionRate,
+		HybridBalanceRateMultiplier:      hybridPrices.balanceRate,
+		User:                             user,
+		APIKey:                           apiKey,
+		Account:                          account,
+		Subscription:                     subscription,
+		RequestPayloadHash:               resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+		IsSubscriptionBill:               isSubscriptionBilling && !simpleModeKeyRateLimitOnly,
+		AccountRateMultiplier:            accountRateMultiplier,
+		APIKeyService:                    input.APIKeyService,
+		Platform:                         quotaPlatform,
+		SimpleModeKeyRateLimitOnly:       simpleModeKeyRateLimitOnly,
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {
