@@ -2,7 +2,7 @@
   <header class="glass sticky top-0 z-30 border-b border-gray-200/50 dark:border-dark-700/50">
     <div class="flex h-16 items-center justify-between gap-2 px-2 sm:px-4 md:px-6">
       <!-- Left: Mobile Menu Toggle + Page Title -->
-      <div class="flex min-w-0 items-center gap-2 sm:gap-4">
+      <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-4">
         <button
           @click="toggleMobileSidebar"
           class="btn-ghost btn-icon lg:hidden"
@@ -11,11 +11,11 @@
           <Icon name="menu" size="md" />
         </button>
 
-        <div class="hidden min-w-0 lg:block">
-          <h1 class="truncate text-lg font-semibold text-gray-900 dark:text-white">
+        <div class="min-w-0">
+          <h1 class="truncate text-sm font-semibold text-gray-900 dark:text-white sm:text-base lg:text-lg">
             {{ pageTitle }}
           </h1>
-          <p v-if="pageDescription" class="truncate text-xs text-gray-500 dark:text-dark-400" :title="pageDescription">
+          <p v-if="pageDescription" class="hidden truncate text-xs text-gray-500 dark:text-dark-400 lg:block" :title="pageDescription">
             {{ pageDescription }}
           </p>
         </div>
