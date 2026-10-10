@@ -1,10 +1,15 @@
 <template>
   <aside
+    ref="sidebarRef"
     class="sidebar"
     :class="[
       sidebarCollapsed ? 'w-[72px]' : 'w-64',
       { '-translate-x-full lg:translate-x-0': !mobileOpen }
     ]"
+    @pointerover="showCollapsedTooltip"
+    @pointerout="hideCollapsedTooltip"
+    @focusin="showCollapsedTooltip"
+    @focusout="hideCollapsedTooltip"
   >
     <!-- Logo/Brand -->
     <div class="sidebar-header" :class="{ 'sidebar-header-collapsed': sidebarCollapsed }">
@@ -36,7 +41,7 @@
     </button>
 
     <!-- Navigation -->
-    <nav ref="sidebarNavRef" class="sidebar-nav scrollbar-hide">
+    <nav ref="sidebarNavRef" class="sidebar-nav scrollbar-hide" @scroll="clearCollapsedTooltip">
       <div v-if="authStore.isObserver" class="sidebar-section">
         <router-link to="/admin/accounts" class="sidebar-link mb-1"
           :class="{ 'sidebar-link-active': isActive('/admin/accounts'), 'sidebar-link-collapsed': sidebarCollapsed }"
@@ -67,7 +72,8 @@
                   'sidebar-link-active': isGroupActive(item) && !isGroupExpanded(item),
                   'sidebar-link-collapsed': sidebarCollapsed
                 }"
-                :title="sidebarCollapsed ? item.label : undefined"
+                :aria-label="sidebarCollapsed ? item.label : undefined"
+                :data-tooltip="sidebarCollapsed ? item.label : undefined"
                 @click="handleGroupClick(item)"
               >
                 <component :is="item.icon" class="h-5 w-5 flex-shrink-0" />
@@ -114,6 +120,8 @@
                 class="sidebar-link mb-1"
                 :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
                 :title="sidebarCollapsed ? item.label : undefined"
+                :aria-label="sidebarCollapsed ? item.label : undefined"
+                :data-tooltip="sidebarCollapsed ? item.label : undefined"
                 :id="
                   item.path === '/admin/accounts'
                     ? 'sidebar-channel-manage'
@@ -162,7 +170,8 @@
             :to="item.path"
             class="sidebar-link mb-1"
             :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
-            :title="sidebarCollapsed ? item.label : undefined"
+            :aria-label="sidebarCollapsed ? item.label : undefined"
+            :data-tooltip="sidebarCollapsed ? item.label : undefined"
             :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
             @click="handleMenuItemClick(item.path)"
           >
@@ -183,7 +192,8 @@
             :to="item.path"
             class="sidebar-link mb-1"
             :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
-            :title="sidebarCollapsed ? item.label : undefined"
+            :aria-label="sidebarCollapsed ? item.label : undefined"
+            :data-tooltip="sidebarCollapsed ? item.label : undefined"
             :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
             @click="handleMenuItemClick(item.path)"
           >
@@ -203,7 +213,8 @@
         @click="toggleTheme"
         class="sidebar-link mb-2 w-full"
         :class="{ 'sidebar-link-collapsed': sidebarCollapsed }"
-        :title="sidebarCollapsed ? (isDark ? t('nav.lightMode') : t('nav.darkMode')) : undefined"
+        :aria-label="sidebarCollapsed ? (isDark ? t('nav.lightMode') : t('nav.darkMode')) : undefined"
+        :data-tooltip="sidebarCollapsed ? (isDark ? t('nav.lightMode') : t('nav.darkMode')) : undefined"
       >
         <SunIcon v-if="isDark" class="h-5 w-5 flex-shrink-0 text-amber-500" />
         <MoonIcon v-else class="h-5 w-5 flex-shrink-0" />
@@ -217,7 +228,8 @@
         @click="toggleSidebar"
         class="sidebar-link w-full"
         :class="{ 'sidebar-link-collapsed': sidebarCollapsed }"
-        :title="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
+        :aria-label="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
+        :data-tooltip="sidebarCollapsed ? t('nav.expand') : undefined"
       >
         <ChevronDoubleLeftIcon v-if="!sidebarCollapsed" class="h-5 w-5 flex-shrink-0" />
         <ChevronDoubleRightIcon v-else class="h-5 w-5 flex-shrink-0" />
@@ -225,6 +237,12 @@
       </button>
     </div>
   </aside>
+
+  <Teleport to="body">
+    <Transition name="sidebar-tip">
+      <div v-if="collapsedTooltip" class="sidebar-floating-tip" role="tooltip" :style="{ left: `${collapsedTooltip.left}px`, top: `${collapsedTooltip.top}px` }">{{ collapsedTooltip.label }}</div>
+    </Transition>
+  </Teleport>
 
   <!-- Mobile Overlay -->
   <transition name="fade">
@@ -306,6 +324,8 @@ const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
 const isAdmin = computed(() => authStore.isAdmin)
 const sidebarNavRef = ref<HTMLElement | null>(null)
+const sidebarRef = ref<HTMLElement | null>(null)
+const collapsedTooltip = ref<{ label: string; left: number; top: number } | null>(null)
 const isDark = ref(document.documentElement.classList.contains('dark'))
 
 const homePath = computed(() => (
@@ -993,8 +1013,29 @@ const searchNavItems = computed(() => [
 ])
 
 function toggleSidebar() {
+  collapsedTooltip.value = null
   appStore.toggleSidebar()
 }
+
+function showCollapsedTooltip(event: Event) {
+  if (!sidebarCollapsed.value || window.innerWidth < 1024 || !(event.target instanceof Element)) return
+  const link = event.target.closest<HTMLElement>('.sidebar-link[data-tooltip]')
+  if (!link || !sidebarRef.value?.contains(link)) return
+  const label = link.getAttribute('data-tooltip')
+  if (!label) return
+  const rect = link.getBoundingClientRect()
+  collapsedTooltip.value = { label, left: rect.right + 12, top: rect.top + rect.height / 2 }
+}
+
+function hideCollapsedTooltip(event: PointerEvent | FocusEvent) {
+  if (event.target instanceof Element && event.relatedTarget instanceof Node) {
+    const link = event.target.closest('.sidebar-link[data-tooltip]')
+    if (link?.contains(event.relatedTarget)) return
+  }
+  collapsedTooltip.value = null
+}
+
+function clearCollapsedTooltip() { collapsedTooltip.value = null }
 
 function toggleTheme() {
   isDark.value = !isDark.value
@@ -1118,6 +1159,24 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.sidebar-floating-tip {
+  position: fixed;
+  z-index: 100;
+  padding: 6px 9px;
+  border: 1px solid rgba(15, 23, 42, .08);
+  border-radius: 8px;
+  background: #1d2433;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, .18);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  pointer-events: none;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+.sidebar-tip-enter-active, .sidebar-tip-leave-active { transition: opacity .18s ease, transform .24s cubic-bezier(.2, 1.28, .36, 1); }
+.sidebar-tip-enter-from, .sidebar-tip-leave-to { opacity: 0; transform: translate(-5px, -50%) scale(.96); }
+@media (prefers-reduced-motion: reduce) { .sidebar-tip-enter-active, .sidebar-tip-leave-active { transition: none; } }
 .sidebar-rail {
   position: absolute;
   top: 50%;
@@ -1298,4 +1357,5 @@ onBeforeUnmount(() => {
 
 <style>
 .dark .sidebar .sidebar-rail { border-color: #334155; background: #151f33; color: #a5b4fc; }
+.dark .sidebar-floating-tip { border-color: #334155; background: #e8e9f4; color: #182036; }
 </style>
