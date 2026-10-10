@@ -231,7 +231,7 @@ type Account struct {
 	Platform               string                          `json:"platform"`
 	Type                   string                          `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
-	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
+	// 以及 API Key 账号的上游地址均不返回前端，存在性由 CredentialsStatus 暴露。
 	Credentials             map[string]any                    `json:"credentials"`
 	ExcelBPSCredentialState *service.ExcelBPSCredentialState  `json:"excel_bps_credential_state,omitempty"`
 	CredentialsStatus       map[string]bool                   `json:"credentials_status,omitempty"`
