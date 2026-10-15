@@ -157,6 +157,7 @@ docs/*
 !docs/openai-2fa-dual-oauth.md
 !docs/openai-siwc.md
 !docs/admin-api-keys.md
+!docs/SUBSCRIPTION_BALANCE_SHARED_GROUP.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/easypay-confirmation-recovery.md
