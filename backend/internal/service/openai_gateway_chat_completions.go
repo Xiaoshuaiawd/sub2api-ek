@@ -374,6 +374,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if err := s.checkAPIKeyLongContextBeforeSend(ctx, c, responsesBody, upstreamModel); err != nil {
 		return nil, err
 	}
+	responsesBody, err = stripOpenAIResponsesOutputTokenLimitsForAccount(account, responsesBody)
+	if err != nil {
+		return nil, err
+	}
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)

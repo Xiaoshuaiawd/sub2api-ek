@@ -2532,7 +2532,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamClientDisconnectStillCollec
 	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
 }
 
-func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEndpoint(t *testing.T) {
+func TestOpenAIGatewayService_APIKeyPassthrough_StripsOutputLimitAndUsesResponsesEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -2580,7 +2580,9 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEnd
 	require.NotNil(t, result.ServiceTier)
 	require.Equal(t, "flex", *result.ServiceTier)
 	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, originalBody, upstream.lastBody)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "max_output_tokens").Exists())
+	require.Equal(t, "flex", gjson.GetBytes(upstream.lastBody, "service_tier").String())
+	require.Equal(t, "hi", gjson.GetBytes(upstream.lastBody, "input.0.text").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
 	require.Equal(t, "https://api.openai.com/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer sk-api-key", upstream.lastReq.Header.Get("Authorization"))
