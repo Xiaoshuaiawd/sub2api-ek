@@ -49,7 +49,9 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 
 // AccountHandler handles admin account management
 type AccountHandler struct {
-	adminService            service.AdminService
+	adminService service.AdminService
+	// tokenGuard 供「一键 2FA 导入」在服务端完成首次登录；由装配层注入。
+	tokenGuard              *service.AccountTokenGuardService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
 	openaiOAuthReauth       *service.OpenAIOAuthReauthService
@@ -133,6 +135,11 @@ func NewAccountHandler(
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
 	}
+}
+
+// SetTokenGuardService 注入凭证守护服务，用于服务端「一键 2FA 登录并导入」。
+func (h *AccountHandler) SetTokenGuardService(svc *service.AccountTokenGuardService) {
+	h.tokenGuard = svc
 }
 
 // CreateAccountRequest represents create account request

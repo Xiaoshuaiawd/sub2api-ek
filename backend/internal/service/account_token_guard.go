@@ -60,6 +60,15 @@ type AccountTokenGuardReloginAccount struct {
 	Email     string `json:"email"`
 	Password  string `json:"password"`
 	MFASecret string `json:"mfa_secret"`
+	// RefreshToken 仅用于单次重登请求：有它时本地重登服务会先走 refresh 续期，
+	// 不碰登录页。不写入守护配置，避免明文落库。
+	RefreshToken string `json:"-"`
+	// MailClientID / MailRefreshToken 是邮箱取件凭据（微软 Graph），
+	// 仅在账号没有 2FA、需要走邮箱验证码时使用。
+	MailClientID     string `json:"mail_client_id,omitempty"`
+	MailRefreshToken string `json:"mail_refresh_token,omitempty"`
+	// Force 跳过「已封号账号不再重试」的保护，强制重新登录一次。
+	Force bool `json:"-"`
 }
 
 // AccountTokenGuardConfig 是页面上的全部可配置项。
@@ -174,6 +183,8 @@ type AccountTokenGuardRepository interface {
 type accountTokenGuardAccounts interface {
 	GetByID(ctx context.Context, id int64) (*Account, error)
 	ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error)
+	Create(ctx context.Context, account *Account) error
+	SetError(ctx context.Context, id int64, errorMsg string) error
 	ClearError(ctx context.Context, id int64) error
 	SetSchedulable(ctx context.Context, id int64, schedulable bool) error
 }
@@ -317,7 +328,11 @@ func ValidateAccountTokenGuardConfig(c AccountTokenGuardConfig) error {
 			return errors.New("重登账号邮箱不合法: " + account.Email)
 		}
 		if strings.TrimSpace(account.Password) == "" {
-			return errors.New("重登账号缺少密码: " + account.Email)
+			// 纯邮箱验证码登录的账号没有 GPT 密码，只要有邮箱取件凭据就允许保存。
+			hasMailbox := strings.TrimSpace(account.MailClientID) != "" && strings.TrimSpace(account.MailRefreshToken) != ""
+			if !hasMailbox {
+				return errors.New("重登账号缺少密码: " + account.Email)
+			}
 		}
 	}
 	return nil
@@ -1086,6 +1101,8 @@ func (s *AccountTokenGuardService) reloginAccount(ctx context.Context, cfg Accou
 	if !ok {
 		return "自动重登", errors.New("缺少该账号的重登凭据，请在凭证守护页面补充")
 	}
+	// 账号已有 refresh_token 时一并传给重登服务，让它优先走续期（不经过登录页）。
+	entry.RefreshToken = guardText(account.Credentials["refresh_token"])
 	credential, err := s.relogin(ctx, cfg, entry)
 	if err != nil {
 		return "自动重登", err
@@ -1240,6 +1257,17 @@ func (s *AccountTokenGuardService) relogin(ctx context.Context, cfg AccountToken
 		"auth_mode":  "password_2fa",
 		"password":   entry.Password,
 		"mfa_secret": entry.MFASecret,
+	}
+	// 带上账号现有 refresh_token：本地重登服务优先直接续期，避开登录页风控。
+	if rt := strings.TrimSpace(entry.RefreshToken); rt != "" {
+		payload["refresh_token"] = rt
+	}
+	// 邮箱取件凭据：账号无 2FA 时本地服务要靠它读验证码。
+	if cid := strings.TrimSpace(entry.MailClientID); cid != "" {
+		payload["mail_client_id"] = cid
+	}
+	if mrt := strings.TrimSpace(entry.MailRefreshToken); mrt != "" {
+		payload["mail_refresh_token"] = mrt
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

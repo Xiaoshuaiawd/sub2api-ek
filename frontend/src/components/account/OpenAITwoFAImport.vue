@@ -15,7 +15,7 @@
     <ul v-if="rows.length" class="space-y-2" aria-live="polite">
       <li v-for="(row, index) in rows" :key="row.entry.email" class="flex justify-between gap-4 text-sm">
         <span>{{ index + 1 }}. {{ row.entry.email }}</span>
-        <span>{{ t(`tokenGuard.twoFA.states.${row.status}`) }}</span>
+        <span :class="row.status === 'failed' ? 'text-red-600' : ''">{{ rowText(row) }}</span>
       </li>
     </ul>
     <div class="flex gap-3">
@@ -43,12 +43,16 @@ const props = defineProps<{
   importCredential: (credential: Record<string, unknown>, email: string, login: TokenGuardReloginAccount) => Promise<'created' | 'skipped'>
 }>()
 const emit = defineEmits<{ busy: [value: boolean] }>()
-const { t } = useI18n()
+const { t, te } = useI18n()
 type Row = {
   entry: TokenGuardReloginAccount
   status: 'pending' | 'login' | 'importing' | 'created' | 'skipped' | 'failed' | 'importFailed'
   credential?: Record<string, unknown>
   jobId?: string
+  // 登录失败时后端返回的脱敏原因短码，用于展示准确报错（例如封号）。
+  errorCode?: string
+  // 失败后被登记到账号列表的错误态账号 ID。
+  accountId?: number
 }
 const raw = ref('')
 const encryptionReady = ref(false)
@@ -58,6 +62,16 @@ const busy = ref(false)
 const stopRequested = ref(false)
 const hasPending = computed(() => rows.value.some(row => row.status !== 'created' && row.status !== 'skipped'))
 let disposed = false
+
+// 失败时优先展示后端给出的准确原因（例如「封号」），并把是否已登记到账号列表一并说明。
+function rowText(row: Row): string {
+  if (row.status === 'failed' && row.errorCode) {
+    const key = `tokenGuard.twoFA.errors.${row.errorCode}`
+    const reason = te(key) ? t(key) : t('tokenGuard.twoFA.errors.unknown')
+    return row.accountId ? `${reason} · ${t('tokenGuard.twoFA.addedToAccounts')}` : reason
+  }
+  return t(`tokenGuard.twoFA.states.${row.status}`)
+}
 
 async function discardJob(row: Row) {
   if (!row.jobId) return
@@ -89,6 +103,8 @@ async function run() {
       try {
         if (!row.credential) {
           row.status = 'login'
+          row.errorCode = undefined
+          row.accountId = undefined
           // Keep the job ID on polling failures; retry resumes the same login.
           if (!row.jobId) row.jobId = (await startTwoFALogin(row.entry)).id
           let job = await getTwoFALogin(row.jobId)
@@ -103,6 +119,8 @@ async function run() {
             break
           }
           if (job.status !== 'succeeded' || !job.credential) {
+            row.errorCode = job.error_code
+            row.accountId = job.account_id
             await discardJob(row)
             throw new Error('login_failed')
           }

@@ -329,3 +329,5 @@ func (a *guardMemoryAccounts) ListAllWithFilters(context.Context, string, string
 }
 func (a *guardMemoryAccounts) ClearError(context.Context, int64) error           { return nil }
 func (a *guardMemoryAccounts) SetSchedulable(context.Context, int64, bool) error { return nil }
+func (a *guardMemoryAccounts) Create(context.Context, *Account) error           { return nil }
+func (a *guardMemoryAccounts) SetError(context.Context, int64, string) error    { return nil }

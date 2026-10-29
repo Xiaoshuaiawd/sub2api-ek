@@ -25,6 +25,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// 注意（一键 2FA 导入）：admin.AccountHandler 的凭证守护依赖是通过
+// SetTokenGuardService 在构造后手动注入的，wire 不会生成该调用。
+// 重新生成 wire_gen.go 后，需要手工补回 wire_gen.go 里的
+// accountHandler.SetTokenGuardService(accountTokenGuardService) 这一行。
 type Application struct {
 	Lifecycle     *server.Lifecycle
 	Server        *http.Server
