@@ -419,7 +419,7 @@ func (h *GatewayHandler) GeminiCachedContentsPatch(c *gin.Context) {
 		googleError(c, http.StatusInternalServerError, "Failed to load cached content account")
 		return
 	}
-	if account == nil {
+	if account == nil || service.IsIntelligenceRoutingAccount(account) {
 		googleError(c, http.StatusServiceUnavailable, geminiCachedContentUnavailableMessage)
 		return
 	}
@@ -536,6 +536,10 @@ func (h *GatewayHandler) GeminiCachedContentsDelete(c *gin.Context) {
 	if err != nil {
 		reqLog.Error("gemini.cached_content.load_account_failed", zap.Int64("account_id", record.AccountID), zap.Error(err))
 		googleError(c, http.StatusInternalServerError, "Failed to load cached content account")
+		return
+	}
+	if service.IsIntelligenceRoutingAccount(account) {
+		googleError(c, http.StatusServiceUnavailable, geminiCachedContentUnavailableMessage)
 		return
 	}
 	if account != nil {

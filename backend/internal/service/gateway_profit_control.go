@@ -74,36 +74,35 @@ func (s *GatewayService) resolveProfitControlGroup(ctx context.Context, groupID 
 }
 
 // GatewayProfitControlVetoLatest performs the terminal post-slot check against
-// the latest scheduler snapshot. Snapshot read failures are deliberately
-// fail-open to preserve availability, but are observable.
+// the latest scheduler snapshot. A failed refresh is rejected because the
+// account may have changed routing class while waiting for a slot.
 func (s *GatewayService) GatewayProfitControlVetoLatest(ctx context.Context, selected *Account) (*Account, bool, string) {
-	return profitControlVetoLatest(ctx, selected, s.schedulerSnapshot)
+	return profitControlVetoLatest(ctx, selected, s.schedulerSnapshot, s.accountRepo)
 }
 
-func profitControlVetoLatest(ctx context.Context, selected *Account, snapshot *SchedulerSnapshotService) (*Account, bool, string) {
-	gate, _ := ctx.Value(openAIProfitControlGateCtxKey{}).(*openAIProfitControlGate)
-	if selected == nil || (gate == nil && !IsIntelligenceRouting(ctx)) {
+func profitControlVetoLatest(ctx context.Context, selected *Account, snapshot *SchedulerSnapshotService, repositories ...AccountRepository) (*Account, bool, string) {
+	if selected == nil {
 		return selected, false, ""
 	}
 	latest := selected
 	if snapshot != nil {
 		refreshed, err := snapshot.GetAccount(ctx, selected.ID)
 		if err != nil || refreshed == nil {
-			if IsIntelligenceRouting(ctx) {
-				return nil, true, "intelligence_routing_state_unavailable"
-			}
-			if gate != nil {
-				slog.Warn("profit_control_account_refresh_failed", "group_id", gate.groupID, "platform", gate.platform, "account_id", selected.ID, "error", err)
-				openAIProfitControlObserverInstance.recordRefreshFailure(gate.groupID, gate.platform, gate.threshold)
-			}
+			return nil, true, "intelligence_routing_state_unavailable"
 		} else if !refreshed.UpdatedAt.Before(selected.UpdatedAt) {
 			// 选号路径可能已做过 DB recheck，selected 比缓存快照更新鲜；只有
 			// 快照不落后时才替换，避免终检把新鲜账号换回较旧的缓存对象。
 			latest = refreshed
 		}
+	} else if len(repositories) > 0 && repositories[0] != nil {
+		refreshed, err := repositories[0].GetByID(ctx, selected.ID)
+		if err != nil || refreshed == nil {
+			return nil, true, "intelligence_routing_state_unavailable"
+		}
+		latest = refreshed
 	}
 	if !intelligenceRoutingAllowsAccount(ctx, latest) {
-		return latest, true, "intelligence_routing_not_enabled"
+		return latest, true, "intelligence_routing_class_mismatch"
 	}
 	vetoed, reason := openAIProfitControlVetoReason(ctx, latest)
 	return latest, vetoed, reason

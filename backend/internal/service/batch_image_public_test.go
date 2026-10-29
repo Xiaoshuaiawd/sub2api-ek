@@ -996,3 +996,46 @@ func (r *publicBatchImageUserGroupRateRepo) GetByUserAndGroup(_ context.Context,
 
 var _ BatchImageGroupPricingRepository = (*publicBatchImageGroupRepo)(nil)
 var _ BatchImageUserGroupRateRepository = (*publicBatchImageUserGroupRateRepo)(nil)
+
+func TestBatchImageIntelligenceRouting(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		prompts     []string
+		wantAccount int64
+		mixed       bool
+	}{
+		{"normal selects ordinary", []string{"cat", "dog"}, 202, false},
+		{"test selects dedicated", []string{"鹈鹕骑自行车", "鹈鹕骑自行车"}, 101, false},
+		{"mixed batch rejected", []string{"cat", "鹈鹕骑自行车"}, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo, _, provider, _ := newTestBatchImagePublicService(true)
+			svc.Config.BatchImage.MaxPromptCharsPerItem = 200
+			accounts := svc.AccountRepo.(*publicBatchImageAccountRepo)
+			accounts.accounts[0].Extra = map[string]any{IntelligenceRoutingExtraKey: true}
+			req := validBatchImageSubmitRequest()
+			for i, prompt := range tc.prompts {
+				req.Items[i].Prompt = prompt
+			}
+			got, err := svc.Submit(context.Background(), testBatchImageOwner(), req, "")
+			if tc.mixed {
+				require.Error(t, err)
+				require.Contains(t, infraerrors.Message(err), "mixed")
+				require.Empty(t, provider.submits)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantAccount, *repo.jobs[got.ID].AccountID)
+		})
+	}
+}
+
+func TestBatchImageCancelDoesNotUseDedicatedAccount(t *testing.T) {
+	svc, repo, _, provider, _ := newTestBatchImagePublicService(true)
+	svc.AccountRepo.(*publicBatchImageAccountRepo).accounts[0].Extra = map[string]any{IntelligenceRoutingExtraKey: true}
+	apiKeyID, accountID := int64(22), int64(101)
+	repo.jobs["imgbatch_cancel_iq"] = &BatchImageJob{BatchID: "imgbatch_cancel_iq", UserID: 11, APIKeyID: &apiKeyID, AccountID: &accountID, Provider: BatchImageProviderGeminiAPI, Model: "gemini-2.5-flash-image", Status: BatchImageJobStatusSubmitted, ProviderJobName: batchImageStringPtr("provider/job"), CreatedAt: time.Now()}
+	_, err := svc.Cancel(context.Background(), testBatchImageOwner(), "imgbatch_cancel_iq")
+	require.Error(t, err)
+	require.Zero(t, provider.cancelCount)
+}

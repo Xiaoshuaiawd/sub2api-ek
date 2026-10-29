@@ -393,7 +393,7 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 		return "account_nil"
 	}
 	if !intelligenceRoutingAllowsAccount(ctx, account) {
-		return "intelligence_routing_not_enabled"
+		return "intelligence_routing_class_mismatch"
 	}
 	// account_model composite routes publish an alias that only accounts with an
 	// explicit model mapping own. Both scheduler modes (advanced and legacy) must

@@ -155,7 +155,7 @@ export default {
       notesPlaceholder: 'Enter notes',
       notesHint: 'Notes are optional',
       intelligenceRouting: 'Qualified for intelligence tests',
-      intelligenceRoutingHint: 'Allow this account to handle detected candy tests, pelican-on-a-bicycle tests, and ModelTrace fingerprint requests. It also remains eligible for ordinary requests.',
+      intelligenceRoutingHint: 'When enabled, this account only handles detected candy tests, pelican-on-a-bicycle tests, and ModelTrace fingerprint requests. Ordinary requests are not assigned to it.',
       allPlatforms: 'All Platforms',
       allTypes: 'All Types',
       allStatus: 'All Status',

@@ -2192,7 +2192,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 		return false, "account_nil"
 	}
 	if !intelligenceRoutingAllowsAccount(ctx, account) {
-		return false, "intelligence_routing_not_enabled"
+		return false, "intelligence_routing_class_mismatch"
 	}
 	if account.IsExcelOAuth() && s != nil && s.service != nil && !s.service.excelBPSGloballyEnabled(ctx) {
 		return false, "excel_bps_disabled"
