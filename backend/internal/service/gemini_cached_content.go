@@ -97,8 +97,10 @@ type GeminiCachedContent struct {
 	ExpireTime      time.Time
 	// ChannelUsage 是创建时的渠道计费口径（渠道 ID、请求模型、计费模型来源），延长有效期按同一口径计费。
 	ChannelUsage ChannelUsageFields
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// IntelligenceRouting records whether the cached prompt requires a designated account.
+	IntelligenceRouting bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // PublicName 返回客户端可见的缓存资源名。

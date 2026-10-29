@@ -67,6 +67,14 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+        <label class="flex cursor-pointer items-center gap-2 text-sm">
+          <input v-model="intelligenceRoutingEnabled" type="checkbox" data-testid="intelligence-routing-enabled" />
+          <span>{{ t('admin.accounts.intelligenceRouting') }}</span>
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.intelligenceRoutingHint') }}</p>
+      </div>
+
       <!-- Platform Selection - Segmented Control Style -->
       <div>
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
@@ -4299,6 +4307,7 @@ const oauthStepTitle = computed(() => {
 
 // Platform-specific hints for API Key type
 // 上游ID：直接上游声明请求标识的响应头名，留空不记录。
+const intelligenceRoutingEnabled = ref(false)
 const costMultiplier = ref(DEFAULT_ACCOUNT_COST_MULTIPLIER)
 const upstreamRequestIdHeader = ref('')
 const withAccountExtraSettings = (extra?: Record<string, unknown>): Record<string, unknown> => {
@@ -4306,7 +4315,7 @@ const withAccountExtraSettings = (extra?: Record<string, unknown>): Record<strin
     throw new Error(t('admin.accounts.costMultiplierInvalid'))
   }
   const name = upstreamRequestIdHeader.value.trim()
-  return { ...(extra || {}), cost_multiplier: costMultiplier.value, ...(name ? { upstream_request_id_header: name } : {}) }
+  return { ...(extra || {}), cost_multiplier: costMultiplier.value, intelligence_routing_enabled: intelligenceRoutingEnabled.value, ...(name ? { upstream_request_id_header: name } : {}) }
 }
 
 const baseUrlHint = computed(() => {
@@ -5699,6 +5708,7 @@ const resetForm = () => {
   extraImageModels.value = ''
   extraImageModelPrefixes.value = ''
   form.notes = ''
+  intelligenceRoutingEnabled.value = false
   form.platform = 'anthropic'
   form.type = 'oauth'
   form.credentials = {}
@@ -6610,6 +6620,7 @@ const handleGrokImportSSO = async (ssoInput: string) => {
       proxy_id: form.proxy_id,
       group_ids: form.group_ids,
       credentials,
+      extra: withAccountExtraSettings(),
       concurrency: form.concurrency,
       load_factor: form.load_factor ?? undefined,
       priority: form.priority,

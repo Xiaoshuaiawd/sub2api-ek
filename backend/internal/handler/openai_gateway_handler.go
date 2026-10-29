@@ -726,6 +726,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	bindIntelligenceRouting(c, body)
+
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body
 	body, ok = h.normalizeOpenAIResponsesCompactRequest(c, reqLog, body)
@@ -1547,6 +1549,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+
+	bindIntelligenceRouting(c, body)
 
 	if !gjson.ValidBytes(body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
@@ -2927,6 +2931,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
 	}
+	if service.IsIntelligenceTestRequest(firstMessage) {
+		ctx = service.WithIntelligenceRouting(ctx)
+		c.Request = c.Request.WithContext(ctx)
+	}
 	if middleware2.CheckGroupSubagentFrame(c, firstMessage) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, middleware2.GroupSubagentsBlockedMessage)
 		return
@@ -3455,6 +3463,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// turn 级定价：首轮回退到 TurnStarted 的所属 turn 时刻；后续 turn 由
 		// BeforeTurn 重新冻结 pricingAt 并按最新门复核当前账号。
 		var turnPricing openAIWSTurnPricing
+		var turnNeedsIntelligence atomic.Bool
+		turnNeedsIntelligence.Store(service.IsIntelligenceTestRequest(firstMessage))
 		var turnBillingAPIKeys openAIWSTurnBillingAPIKeys
 		// turnQueuePermissions 由 BeforeRequest 按当前 turn 覆写，BeforeTurn 在
 		// 同一连接循环内读取并复制为不可变 ctx 值，等待 worker 不再读取它。
@@ -3510,6 +3520,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return nil
 			},
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
+				turnNeedsIntelligence.Store(service.IsIntelligenceTestRequest(payload))
 				c.Set(securityAuditWSTurnContextKey, turn)
 				service.BeginOpsStreamTurn(c, turn)
 				// 连接级 cyber session gate 也在 BeforeRequest 先执行，使 native 与
@@ -3628,7 +3639,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					if outboundModel == "" {
 						outboundModel = strings.TrimSpace(wsForwardModel)
 					}
-					if _, admissionErr := h.gatewayService.AdmitOpenAITurn(ctx, c, account, outboundModel); admissionErr != nil {
+					turnAdmissionCtx := ctx
+					if turnNeedsIntelligence.Load() {
+						turnAdmissionCtx = service.WithIntelligenceRouting(turnAdmissionCtx)
+					}
+					latest, admissionErr := h.gatewayService.AdmitOpenAITurn(turnAdmissionCtx, c, account, outboundModel)
+					if admissionErr == nil && turnNeedsIntelligence.Load() && !service.IsIntelligenceRoutingAccount(latest) {
+						return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Intelligence test requires a qualified account; reconnect to reschedule", nil)
+					}
+					if admissionErr != nil {
 						reqLog.Info("openai.websocket_turn_admission_rejected",
 							zap.Int("turn", turn),
 							zap.Int64("account_id", account.ID),

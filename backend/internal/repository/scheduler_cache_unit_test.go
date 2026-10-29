@@ -1264,3 +1264,9 @@ func TestBuildSchedulerMetadataAccount_KeepsExcelBPSModelSelection(t *testing.T)
 		})
 	}
 }
+
+func TestSchedulerMetadataPreservesIntelligenceRoutingFlag(t *testing.T) {
+	account := &service.Account{ID: 1, Extra: map[string]any{service.IntelligenceRoutingExtraKey: true}}
+	meta := buildSchedulerMetadataAccount(*account)
+	require.Equal(t, true, meta.Extra[service.IntelligenceRoutingExtraKey])
+}

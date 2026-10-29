@@ -81,6 +81,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		}
 		return
 	}
+	bindIntelligenceRoutingPrompt(c, parsed.Prompt)
 	requestModel := parsed.Model
 	ensureCompositeTargetPlatform(c, apiKey, requestModel)
 	clientRequestModel := clientRequestedModel(c, requestModel)

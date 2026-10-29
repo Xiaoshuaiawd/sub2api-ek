@@ -262,3 +262,15 @@ func TestWriteGeminiCachedContentUpstreamError_RateLimitMappedUnlessUpstreamGate
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "too small", "请求校验类错误仍原样回写")
 }
+
+func TestGeminiIntelligenceCachedContentRestoresRoutingRequirement(t *testing.T) {
+	repo := &geminiCachedContentHandlerRepoStub{}
+	record := seedGeminiCachedContent(repo, "intelligence", 7, time.Now().Add(time.Hour))
+	record.IntelligenceRouting = true
+	h := newGeminiCachedContentHandlerForTest(repo)
+	key := geminiCachedContentTestAPIKey(service.PlatformGemini)
+	c, _ := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+	_, _, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", []byte(`{"cachedContent":"cachedContents/intelligence","contents":[]}`))
+	require.True(t, ok)
+	require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+}

@@ -269,6 +269,10 @@ func (s *GeminiMessagesCompatService) isAccountUsableForRequestWithPrecheck(
 	useMixedScheduling bool,
 	precheckResult map[int64]bool,
 ) bool {
+	if !intelligenceRoutingAllowsAccount(ctx, account) {
+		return false
+	}
+
 	// 检查模型调度能力
 	// Check model scheduling capability
 	if !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
@@ -460,6 +464,9 @@ func (s *GeminiMessagesCompatService) hydrateSelectedAccount(ctx context.Context
 	}
 	if hydrated == nil {
 		return nil, fmt.Errorf("selected gemini account %d not found during hydration", account.ID)
+	}
+	if !intelligenceRoutingAllowsAccount(ctx, hydrated) {
+		return nil, ErrNoAvailableAccounts
 	}
 	return hydrated, nil
 }

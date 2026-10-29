@@ -392,6 +392,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
+	if !intelligenceRoutingAllowsAccount(ctx, account) {
+		return "intelligence_routing_not_enabled"
+	}
 	// account_model composite routes publish an alias that only accounts with an
 	// explicit model mapping own. Both scheduler modes (advanced and legacy) must
 	// enforce ownership before any priority/sticky/transport consideration; a
@@ -1878,7 +1881,7 @@ func (s *OpenAIGatewayService) filterOpenAIAccountsBySchedulingThreshold(ctx con
 
 	filtered := make([]Account, 0, len(accounts))
 	for i := range accounts {
-		if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, &accounts[i]) {
+		if !intelligenceRoutingAllowsAccount(ctx, &accounts[i]) || s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, &accounts[i]) {
 			continue
 		}
 		filtered = append(filtered, accounts[i])
@@ -1903,6 +1906,9 @@ func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, accou
 	}
 	if hydrated == nil {
 		return nil, fmt.Errorf("selected openai account %d not found during hydration", account.ID)
+	}
+	if !intelligenceRoutingAllowsAccount(ctx, hydrated) {
+		return nil, ErrNoAvailableAccounts
 	}
 	return hydrated, nil
 }

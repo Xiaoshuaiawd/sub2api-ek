@@ -108,6 +108,7 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 			"role": "user", "content": req.Query,
 		}},
 	})
+	bindIntelligenceRouting(c, auditBody)
 	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIChat, searchModel, auditBody); decision != nil && !decision.AllowNextStage {
 		status := decision.HTTPStatus
 		if status == 0 {

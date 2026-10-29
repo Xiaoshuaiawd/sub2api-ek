@@ -386,6 +386,9 @@ func (s *OpenAIGatewayService) admitOpenAITurnWithGroup(
 	if err != nil {
 		return nil, err
 	}
+	if !intelligenceRoutingAllowsAccount(ctx, latest) {
+		return nil, denyOpenAITurn("intelligence_routing_not_enabled")
+	}
 	if err := s.validateExcelOAuthRoute(ctx, latest, outboundModel); err != nil {
 		return nil, &OpenAITurnAdmissionError{Reason: excelOAuthRouteErrorCode, cause: err}
 	}

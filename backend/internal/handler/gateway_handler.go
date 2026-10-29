@@ -160,6 +160,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
+	bindIntelligenceRouting(c, body)
+
 	setOpsRequestContext(c, "", false)
 
 	bodyRef := service.NewRequestBodyRef(body)
@@ -2090,6 +2092,8 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+
+	bindIntelligenceRouting(c, body)
 
 	setOpsRequestContext(c, "", false)
 

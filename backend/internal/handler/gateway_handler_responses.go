@@ -60,6 +60,8 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	bindIntelligenceRouting(c, body)
+
 	setOpsRequestContext(c, "", false)
 
 	// Validate JSON

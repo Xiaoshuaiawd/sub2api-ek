@@ -1410,3 +1410,26 @@ describe('CreateAccountModal Vertex API key auth', () => {
     expect(wrapper.find('[data-testid="vertex-api-key-input"]').exists()).toBe(false)
   })
 })
+
+
+describe('intelligence routing account setting', () => {
+  beforeEach(() => {
+    createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
+  })
+
+  it('defaults off and saves the enabled setting on account creation', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    const toggle = wrapper.get('[data-testid="intelligence-routing-enabled"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    await toggle.setValue(true)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Test account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
+      extra: expect.objectContaining({ intelligence_routing_enabled: true })
+    }))
+  })
+})

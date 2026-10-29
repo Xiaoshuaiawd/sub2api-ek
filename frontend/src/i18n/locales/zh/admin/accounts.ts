@@ -153,6 +153,8 @@ export default {
       notes: '备注',
       notesPlaceholder: '请输入备注',
       notesHint: '备注可选',
+      intelligenceRouting: '智商测试合格',
+      intelligenceRoutingHint: '开启后，此账号可处理识别出的糖果测试、鹈鹕骑自行车和 ModelTrace 指纹请求，也参与普通请求调度。',
       // Filter options
       allPlatforms: '全部平台',
       allTypes: '全部类型',
