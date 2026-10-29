@@ -9350,8 +9350,12 @@
           <BackupSettings />
         </div>
 
+        <div v-show="activeTab === 'juice'" id="settings-section-juice-fixer" tabindex="-1">
+          <JuiceFixerSection />
+        </div>
+
         <!-- Save Button -->
-        <div v-show="activeTab !== 'backup'" class="flex justify-end">
+        <div v-show="activeTab !== 'backup' && activeTab !== 'juice'" class="flex justify-end">
           <button
             type="submit"
             :disabled="saving || loadFailed"
@@ -9490,6 +9494,7 @@ import Toggle from "@/components/common/Toggle.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
+import JuiceFixerSection from "@/views/admin/settings/JuiceFixerSection.vue";
 import ServerlessSettings from "@/components/settings/ServerlessSettings.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
@@ -9564,6 +9569,7 @@ const settingsTabs = [
   { key: "payment" as SettingsTab, icon: "creditCard" as const },
   { key: "email" as SettingsTab, icon: "mail" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
+  { key: "juice" as SettingsTab, icon: "bolt" as const },
 ];
 
 const settingsTabKeyboardActions = {

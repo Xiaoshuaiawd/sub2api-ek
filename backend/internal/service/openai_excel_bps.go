@@ -794,6 +794,10 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	// client effort for usage display, and the BPS-normalized effort for billing.
 	requestedEffort := coalesceRequestedReasoningEffort(RequestedReasoningEffortFromContext(ctx), &bridge.RequestedEffort)
 	result := &OpenAIForwardResult{Model: originalModel, UpstreamModel: model, UpstreamEndpoint: "/basispoints/api/responses", Stream: stream, ReasoningEffort: &bridge.Effort, RequestedReasoningEffort: requestedEffort, RequestID: resp.Header.Get("x-request-id")}
+	clientModel, _ := ctx.Value(openAIClientModelContextKey{}).(string)
+	if clientModel == "" {
+		clientModel = originalModel
+	}
 	if stream {
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
@@ -881,6 +885,13 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			}
 		}
 		if stream {
+			line = s.replaceModelInSSELine(line, model, clientModel)
+			if raw, ok := extractOpenAISSEDataLine(line); ok {
+				clean := SanitizeUpstreamErrorEvent(c, []byte(raw))
+				if !bytes.Equal(clean, []byte(raw)) {
+					line = "data: " + string(clean)
+				}
+			}
 			if _, err = c.Writer.WriteString(line + "\n"); err != nil {
 				result.ClientDisconnect = true
 				if isExcelBPSClientCancellation(c, c.Request.Context().Err()) {
@@ -926,7 +937,14 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	}
 	if !stream {
 		if upstreamFailure != nil {
-			if StopOpenAICompactSSEKeepaliveCommitted(c) {
+			details, _ := json.Marshal(upstreamFailure.Details())
+			if UpstreamErrorMessageLeaksModelForRequest(c, string(details)) {
+				if StopOpenAICompactSSEKeepaliveCommitted(c) {
+					writeOpenAICompactSSEFailureMessage(c, UpstreamModelLeakClientStatus, UpstreamModelLeakClientType, UpstreamModelLeakClientMessage)
+				} else {
+					writeUpstreamModelLeakError(c)
+				}
+			} else if StopOpenAICompactSSEKeepaliveCommitted(c) {
 				writeOpenAICompactSSEFailureMessage(c, upstreamFailure.Status, upstreamFailure.Code, upstreamFailure.Message)
 			} else {
 				c.JSON(upstreamFailure.Status, gin.H{"error": upstreamFailure.Details()})
@@ -938,13 +956,18 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 				detail = bridgeFailure.Details()
 				message = bridgeFailure.Message
 			}
+			detailBody, _ := json.Marshal(detail)
+			if UpstreamErrorMessageLeaksModelForRequest(c, string(detailBody)) {
+				message = UpstreamModelLeakClientMessage
+				detail = map[string]any{"type": UpstreamModelLeakClientType, "code": UpstreamModelLeakClientType, "message": message}
+			}
 			if StopOpenAICompactSSEKeepaliveCommitted(c) {
 				writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "basispoints_protocol_error", message)
 			} else {
 				c.JSON(http.StatusBadGateway, gin.H{"error": detail})
 			}
 		} else {
-			c.Data(200, "application/json", completed)
+			c.Data(200, "application/json", s.replaceModelInResponseBody(completed, model, clientModel))
 		}
 	}
 	if terminal != "response.completed" {

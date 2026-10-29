@@ -29,6 +29,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	account *Account,
 	body []byte,
 	startTime time.Time,
+	responseModels ...string,
 ) (*OpenAIForwardResult, error) {
 
 	// DeepSeek 原生 /responses 不认识 compaction_trigger：remote compaction v2 会得到
@@ -57,6 +58,11 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if originalModel == "" {
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, fmt.Errorf("missing model in request")
+	}
+
+	responseModel := originalModel
+	if len(responseModels) > 0 && strings.TrimSpace(responseModels[0]) != "" {
+		responseModel = responseModels[0]
 	}
 
 	clientStream := responsesReq.Stream
@@ -175,9 +181,9 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		toolTextDecoder = apicompat.NewDeepSeekToolTextDecoder(chatReq.Tools)
 	}
 	if clientStream {
-		return s.streamChatCompletionsAsResponses(c, resp, originalModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, toolTextDecoder)
+		return s.streamChatCompletionsAsResponses(c, resp, responseModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, toolTextDecoder)
 	}
-	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, compact, toolTextDecoder)
+	return s.bufferChatCompletionsAsResponses(c, resp, responseModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, compact, toolTextDecoder)
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(

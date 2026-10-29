@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -133,4 +134,32 @@ func TestForwardAsAnthropic_StreamCyberPolicyNoFailover(t *testing.T) {
 	require.False(t, errors.As(err, &failoverErr), "cyber must NOT trigger failover")
 	require.NotNil(t, GetOpsCyberPolicy(c), "cyber mark must be set")
 	require.Contains(t, rec.Body.String(), "event: error", "must emit anthropic SSE error event")
+}
+
+func TestCompatCyberErrorsHideMappedUpstreamModel(t *testing.T) {
+	for _, anthropic := range []bool{false, true} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("anthropic=%v/stream=%v", anthropic, stream), func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Set("ops_model", "public-model")
+				body := []byte(fmt.Sprintf(`{"model":"public-model","max_tokens":1024,"messages":[{"role":"user","content":"hi"}],"stream":%t}`, stream))
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+				wire := strings.ReplaceAll(compatCyberUpstreamSSE(), "flagged for cyber policy", "model gpt-5.5 blocked by cyber policy")
+				upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}}
+				svc := &OpenAIGatewayService{httpUpstream: upstream}
+				account := compatCyberOAuthAccount()
+				account.Credentials["model_mapping"] = map[string]any{"public-model": "gpt-5.5"}
+				var err error
+				if anthropic {
+					_, err = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.5")
+				} else {
+					_, err = svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.5")
+				}
+				require.Error(t, err)
+				require.NotNil(t, GetOpsCyberPolicy(c))
+				require.NotContains(t, rec.Body.String(), "gpt-5.5")
+			})
+		}
+	}
 }

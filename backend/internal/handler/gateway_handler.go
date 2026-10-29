@@ -176,6 +176,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	reqStream := parsedReq.Stream
 	bindRequestedReasoningEffort(c, body, reqModel)
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
+	service.SetGatewayClientModel(c, clientRequestedModel(c, reqModel))
 	if policyBody, changed, err := applyAnthropicReasoningEffortPolicyForRequest(c, apiKey, body); err != nil {
 		respondOpenAIReasoningEffortPolicyError(c, err, h.errorResponse)
 		return
@@ -1860,6 +1861,13 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 			msg := service.ExtractUpstreamErrorMessage(responseBody)
 			if !rule.PassthroughBody && rule.CustomMessage != nil {
 				msg = *rule.CustomMessage
+			}
+
+			// 透传文案里若回显了真实模型名（渠道/账号映射后的模型），
+			// 改为统一错误，避免把真实模型暴露给客户端。
+			if service.UpstreamErrorMessageLeaksModelForRequest(c, msg) {
+				leakStatus, _, leakMsg := service.UpstreamModelLeakClientError()
+				respCode, msg = leakStatus, leakMsg
 			}
 
 			if rule.SkipMonitoring {

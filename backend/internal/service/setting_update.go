@@ -976,6 +976,8 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	// codex_cli_only 加固策略缓存：设置更新后强制下次重载（涉及 4 个键 + JSON 解析，直接置过期）。
 	s.codexRestrictionPolicySF.Forget("codex_restriction_policy")
 	s.codexRestrictionPolicyCache.Store(&cachedCodexRestrictionPolicy{expiresAt: 0})
+	juiceFixerSettingSF.Forget("juice_fixer_setting")
+	juiceFixerSettingCache.Store(&cachedJuiceFixerSetting{expiresAt: 0})
 	// Cyber 会话屏蔽与严格身份门控必须在后台保存后立即生效，不能继续
 	// 使用最长 60 秒的旧开关快照。保留刚保存成功的白名单，下一次 DB 刷新失败时沿用。
 	s.cyberSessionBlockRuntimeSF.Forget("cyber_session_block_runtime")

@@ -93,6 +93,25 @@ func TestExcelBPSForwardContract(t *testing.T) {
 		})
 	}
 }
+func TestExcelBPSChannelMappingRestoresClientModel(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			wire := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_excel\",\"status\":\"completed\",\"model\":\"gpt-5.6-sol\",\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n"
+			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}}
+			svc := openAIClientToolsTestService(upstream)
+			body := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol","stream":%t,"input":"test"}`, stream))
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			result, err := svc.ForwardWithOriginalModel(context.Background(), c, excelAccount(), body, "public-model")
+			require.NoError(t, err)
+			require.Equal(t, "gpt-5.6-sol", result.UpstreamModel)
+			require.Equal(t, 10, result.Usage.InputTokens)
+			require.Contains(t, rec.Body.String(), `"model":"public-model"`)
+		})
+	}
+}
+
 func TestExcelBPSUsagePreservesRequestedEffortBeforeGroupMapping(t *testing.T) {
 	for _, tc := range []struct {
 		name, requested, ceiling, forwarded string

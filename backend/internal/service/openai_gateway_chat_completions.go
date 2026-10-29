@@ -154,14 +154,18 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 上游协议统一由 resolveUpstreamProtocol 判定（按模型分流时带上游模型目录）。Anthropic 分流必须先于
 	// ShouldUseResponsesAPI：Anthropic 协议账号经 probe 落标
 	// openai_responses_supported=false，否则会命中 CC 直转。
-	routingModel := upstreamRoutingModel(account, body, defaultMappedModel)
+	routingModel := ""
+	if account.routesByModel() {
+		requestedModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+		routingModel = normalizeOpenAIModelForUpstream(account, resolveOpenAIChannelForwardModel(account, requestedModel, defaultMappedModel))
+	}
 	if account.IsOpenCodeGo() && IsOpenCodeUnsupportedModel(routingModel) {
 		return nil, writeOpenCodeUnsupportedModelError(c, false, routingModel)
 	}
 	switch s.resolveUpstreamProtocolFor(ctx, account, inbound, routingModel) {
 	case APIProtocolAnthropic:
 		if convertResponsesShape {
-			return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "")
+			return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, defaultMappedModel, "")
 		}
 		// CC 入站经 CC→Responses→Anthropic 转换链直通供应商原生 Anthropic 端点。
 		return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel)
@@ -191,8 +195,15 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// 2. Resolve model mapping early so compat prompt_cache_key injection can
 	// derive a stable seed from the final upstream model family.
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveOpenAIChannelForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	juiceEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
+	juiceEffort = ApplyThinkingEnabledFallback(juiceEffort, body, billingModel)
+	juiceEffortValue := ""
+	if juiceEffort != nil {
+		juiceEffortValue = *juiceEffort
+	}
+	s.resolveJuiceValueForRequest(c, originalModel, juiceEffortValue)
 	if err := validateGPT61SolCompatRequest(body, upstreamModel); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
@@ -745,7 +756,8 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 			if clientMsg == "" {
 				clientMsg = "Request blocked by upstream cyber-security policy"
 			}
-			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+			status, errType, clientMsg := sanitizeCompatUpstreamError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+			writeChatCompletionsError(c, status, errType, clientMsg)
 			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
 		}
 		message := openAICompatFailedResponseMessage(finalResponse)
@@ -762,10 +774,12 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 				errMsg = message
 			}
 			MarkResponseCommitted(c)
-			writeChatCompletionsError(c, status, errType, errMsg)
+			clientStatus, clientType, clientMsg := sanitizeCompatUpstreamError(c, status, errType, errMsg)
+			writeChatCompletionsError(c, clientStatus, clientType, clientMsg)
 			return nil, fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
 		}
-		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", message)
+		clientStatus, clientType, clientMsg := sanitizeCompatUpstreamError(c, http.StatusBadGateway, "upstream_error", message)
+		writeChatCompletionsError(c, clientStatus, clientType, clientMsg)
 		return nil, fmt.Errorf("upstream response failed: %s", message)
 	}
 	if strings.TrimSpace(finalResponse.Status) == "completed" {
@@ -791,7 +805,16 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	// writeContentType 仅在头不存在时才设置，无法覆盖。这里显式 Set 强制改回 JSON，
 	// 否则下游"看头判流式"的中间层（如 new-api）会把本应聚合的 JSON 当成 SSE 处理。
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	c.JSON(http.StatusOK, chatResp)
+	chatRespWritten := false
+	if juice := GetJuiceResolvedValue(c); juice.OK {
+		if chatBody, marshalErr := json.Marshal(chatResp); marshalErr == nil {
+			c.Data(http.StatusOK, "application/json; charset=utf-8", TransformChatCompletionsBody(chatBody, juice.Value))
+			chatRespWritten = true
+		}
+	}
+	if !chatRespWritten {
+		c.JSON(http.StatusOK, chatResp)
+	}
 
 	result := &OpenAIForwardResult{
 		RequestID:                     requestID,
@@ -874,6 +897,22 @@ func openAIChatChunkHasOutput(chunk apicompat.ChatCompletionsChunk) bool {
 	return false
 }
 
+// openAIChatSSEHasOutput checks the transformed client-facing chunks rather
+// than the upstream chunk that may still be buffered by the Juice transformer.
+func openAIChatSSEHasOutput(sse string) bool {
+	for _, line := range strings.Split(sse, "\n") {
+		payload, ok := extractOpenAISSEDataLine(line)
+		if !ok || payload == "[DONE]" {
+			continue
+		}
+		var chunk apicompat.ChatCompletionsChunk
+		if json.Unmarshal([]byte(payload), &chunk) == nil && openAIChatChunkHasOutput(chunk) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleChatStreamingResponse reads Responses SSE events from upstream,
 // converts each to Chat Completions SSE chunks, and writes them to the client.
 func (s *OpenAIGatewayService) handleChatStreamingResponse(
@@ -900,6 +939,17 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	clientDisconnected := false
 	clientOutputStarted := false
 	pendingSSE := make([]string, 0, 4)
+	juice := GetJuiceResolvedValue(c)
+	var juiceTransformer *JuiceSSETransformer
+	if juice.OK {
+		juiceTransformer = NewJuiceSSETransformer(JuiceStreamKindChat, juice.Value)
+	}
+	transformJuice := func(sse string) string {
+		if juiceTransformer == nil {
+			return sse
+		}
+		return juiceSSELinesToString(juiceTransformer.TransformEvent(juiceSSEStringToLines(sse)))
+	}
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var streamFailoverErr *UpstreamFailoverError
 	var streamNonFailoverErr error
@@ -1003,7 +1053,8 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					if clientMsg == "" {
 						clientMsg = "Request blocked by upstream cyber-security policy"
 					}
-					if _, err := fmt.Fprint(c.Writer, buildChatStreamErrorSSE(code, clientMsg)); err == nil {
+					_, clientCode, clientMsg := sanitizeCompatUpstreamError(c, http.StatusBadRequest, code, clientMsg)
+					if _, err := fmt.Fprint(c.Writer, buildChatStreamErrorSSE(clientCode, clientMsg)); err == nil {
 						_, _ = fmt.Fprint(c.Writer, "data: [DONE]\n\n")
 						if fl, ok := c.Writer.(http.Flusher); ok {
 							fl.Flush()
@@ -1044,14 +1095,15 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			// Record the terminal outcome explicitly instead of relying on wire
 			// capture to distinguish it from a recovered upstream attempt.
 			MarkOpsStreamFailure(c, defaultErrType, openAIStreamFailedEventErrorCode(payloadBytes), defaultMsg, failureStatus)
+			clientStatus, clientType, clientMsg := sanitizeCompatUpstreamError(c, defaultStatus, defaultErrType, defaultMsg)
 			errorPayload, _ := json.Marshal(gin.H{
 				"error": gin.H{
-					"type":    defaultErrType,
-					"message": defaultMsg,
+					"type":    clientType,
+					"message": clientMsg,
 				},
 			})
 			if c != nil && c.Writer != nil && !c.Writer.Written() {
-				writeChatCompletionsError(c, defaultStatus, defaultErrType, defaultMsg)
+				writeChatCompletionsError(c, clientStatus, clientType, clientMsg)
 				clientOutputStarted = true
 			} else if c != nil && c.Writer != nil && !clientDisconnected {
 				if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", errorPayload); err != nil {
@@ -1089,10 +1141,18 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					)
 					continue
 				}
+				sse = transformJuice(sse)
+				if sse == "" {
+					continue
+				}
 				// A role-only chunk is protocol metadata, regardless of request size.
 				// Keep it private until useful output or a successful terminal so a
 				// subsequent capacity rejection can still enter bounded failover.
-				if !clientOutputStarted && ((!isTerminalEvent && !openAIChatChunkHasOutput(chunk)) || !refusalDetector.ShouldReleaseClientOutput()) {
+				hasClientOutput := openAIChatChunkHasOutput(chunk)
+				if juiceTransformer != nil {
+					hasClientOutput = openAIChatSSEHasOutput(sse)
+				}
+				if !clientOutputStarted && ((!isTerminalEvent && !hasClientOutput) || !refusalDetector.ShouldReleaseClientOutput()) {
 					pendingSSE = append(pendingSSE, sse)
 					continue
 				}
@@ -1138,11 +1198,25 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if streamNonFailoverErr != nil {
 			return resultWithUsage(), streamNonFailoverErr
 		}
+		if juiceTransformer != nil && !clientDisconnected {
+			tail := juiceSSELinesToString(juiceTransformer.Flush())
+			if tail != "" {
+				if !clientOutputStarted {
+					pendingSSE = append(pendingSSE, tail)
+				} else if _, err := fmt.Fprint(c.Writer, tail); err != nil {
+					clientDisconnected = true
+				}
+			}
+		}
 		if finalChunks := apicompat.FinalizeResponsesChatStream(state); len(finalChunks) > 0 && !clientDisconnected {
 			for _, chunk := range finalChunks {
 				refusalDetector.ObserveChatChunk(chunk)
 				sse, err := apicompat.ChatChunkToSSE(chunk)
 				if err != nil {
+					continue
+				}
+				sse = transformJuice(sse)
+				if sse == "" {
 					continue
 				}
 				if !clientOutputStarted && !refusalDetector.ShouldReleaseClientOutput() {

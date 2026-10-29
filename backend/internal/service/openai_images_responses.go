@@ -1116,6 +1116,10 @@ func writeOpenAIImagesUpstreamErrorResponse(c *gin.Context, err *OpenAIImagesUps
 		return false
 	}
 	StopOpenAIImagesJSONKeepaliveCommitted(c)
+	if UpstreamErrorMessageLeaksModelForRequest(c, err.clientMessage()) || UpstreamErrorMessageLeaksModelForRequest(c, err.Code) || UpstreamErrorMessageLeaksModelForRequest(c, err.Param) || UpstreamErrorMessageLeaksModelForRequest(c, err.clientErrorType()) {
+		writeUpstreamModelLeakError(c)
+		return true
+	}
 	errorObj := gin.H{
 		"type":    err.clientErrorType(),
 		"message": err.clientMessage(),
@@ -1133,6 +1137,7 @@ func writeOpenAIImagesUpstreamErrorResponse(c *gin.Context, err *OpenAIImagesUps
 }
 
 func (s *OpenAIGatewayService) writeOpenAIImagesStreamEvent(c *gin.Context, flusher http.Flusher, eventName string, payload []byte) error {
+	payload = rewriteOpenAIImagesClientPayload(c, payload, eventName)
 	if strings.TrimSpace(eventName) != "" {
 		if _, err := fmt.Fprintf(c.Writer, "event: %s\n", eventName); err != nil {
 			return err
@@ -1389,7 +1394,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 		return OpenAIUsage{}, 0, nil, err
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-	c.Data(resp.StatusCode, "application/json; charset=utf-8", responseBody)
+	c.Data(resp.StatusCode, "application/json; charset=utf-8", rewriteOpenAIImagesClientPayload(c, responseBody, ""))
 	return usage, len(results), openAIResponsesImageResultSizes(results), nil
 }
 

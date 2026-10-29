@@ -1945,6 +1945,7 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 }
 
 type openAIResponsesWSUsageLogCase struct {
+	upstreamResponseModel  string
 	authSetup              func(*service.APIKey, *config.Config) *service.APIKeyService
 	afterAccountSlot       func()
 	closeStatus            coderws.StatusCode
@@ -2976,10 +2977,14 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 				}
 			}
 
+			responseModel := tc.upstreamResponseModel
+			if responseModel == "" {
+				responseModel = gjson.GetBytes(payload, "model").String()
+			}
 			response := fmt.Sprintf(
 				`{"type":"response.completed","response":{"id":"resp_usage_e2e_%d","model":%q,"usage":{"input_tokens":2,"output_tokens":1}}}`,
 				frame,
-				gjson.GetBytes(payload, "model").String(),
+				responseModel,
 			)
 			if gjson.GetBytes(payload, "type").String() == "session.update" {
 				// Session configuration is acknowledged without creating a billable turn.

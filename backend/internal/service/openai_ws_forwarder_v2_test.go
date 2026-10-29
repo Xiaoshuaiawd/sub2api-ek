@@ -208,3 +208,32 @@ func TestForwardOpenAIWSV2_OverloadBeforeOutputAllowsAccountFailover(t *testing.
 		})
 	}
 }
+
+func TestForwardOpenAIWSV2HidesModelInFailure(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+			c.Set("ops_model", "public-model")
+			cfg := newOpenAIWSV2TestConfig()
+			cfg.Security.URLAllowlist.Enabled = false
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+			event := []byte(`{"type":"response.failed","response":{"id":"resp_cyber","status":"failed","error":{"code":"cyber_policy","message":"model gpt-5.5 blocked"},"usage":{"input_tokens":9,"output_tokens":2}}}`)
+			pool := newOpenAIWSConnPool(cfg)
+			pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: &openAIWSCaptureConn{events: [][]byte{event}}})
+			svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &httpUpstreamRecorder{}, cache: &stubGatewayCache{}, openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector(), openaiWSPool: pool}
+			account := &Account{ID: 5883, Name: "openai-ws-v2-cyber", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Credentials: map[string]any{"api_key": "sk-test"}, Extra: map[string]any{"responses_websockets_v2_enabled": true}}
+			body := []byte(fmt.Sprintf(`{"model":"gpt-5.5","stream":%t,"input":"hello"}`, stream))
+			_, err := svc.ForwardWithOriginalModel(context.Background(), c, account, body, "public-model")
+			require.NoError(t, err)
+			require.NotContains(t, rec.Body.String(), "model gpt-5.5 blocked")
+			mark := GetOpsCyberPolicy(c)
+			require.NotNil(t, mark)
+			require.Contains(t, mark.Message, "model gpt-5.5 blocked")
+			require.Equal(t, 9, mark.UpstreamInTok)
+		})
+	}
+}

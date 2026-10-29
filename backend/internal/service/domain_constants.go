@@ -632,6 +632,9 @@ const (
 	// SettingKeyRectifierSettings stores JSON config for rectifier settings (thinking signature + budget).
 	SettingKeyRectifierSettings = "rectifier_settings"
 
+	// SettingKeyJuiceFixerSetting stores the Juice rewrite rules.
+	SettingKeyJuiceFixerSetting = "juice_fixer_setting"
+
 	// =========================
 	// Beta Policy Settings
 	// =========================

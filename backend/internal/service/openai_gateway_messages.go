@@ -127,6 +127,7 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 	// 2. Model mapping
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	SetOpsUpstreamModel(c, upstreamModel)
 	if err := validateGPT61SolCompatRequest(body, upstreamModel); err != nil {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
@@ -678,7 +679,8 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			if clientMsg == "" {
 				clientMsg = "Request blocked by upstream cyber-security policy"
 			}
-			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+			status, errType, clientMsg := sanitizeCompatUpstreamError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+			writeAnthropicError(c, status, errType, clientMsg)
 			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
 		}
 		message := openAICompatFailedResponseMessage(finalResponse)
@@ -695,10 +697,12 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 				errMsg = message
 			}
 			MarkResponseCommitted(c)
-			writeAnthropicError(c, status, errType, errMsg)
+			clientStatus, clientType, clientMsg := sanitizeCompatUpstreamError(c, status, errType, errMsg)
+			writeAnthropicError(c, clientStatus, clientType, clientMsg)
 			return nil, fmt.Errorf("upstream response failed (passthrough): %s", errMsg)
 		}
-		writeAnthropicError(c, http.StatusBadGateway, "api_error", message)
+		clientStatus, clientType, clientMsg := sanitizeCompatUpstreamError(c, http.StatusBadGateway, "upstream_error", message)
+		writeAnthropicError(c, clientStatus, clientType, clientMsg)
 		return nil, fmt.Errorf("upstream response failed: %s", message)
 	}
 	if strings.TrimSpace(finalResponse.Status) == "completed" {
@@ -1157,7 +1161,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 						if clientMsg == "" {
 							clientMsg = "Request blocked by upstream cyber-security policy"
 						}
-						if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE("invalid_request_error", clientMsg)); err == nil {
+						_, clientType, clientMsg := sanitizeCompatUpstreamError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+						if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE(clientType, clientMsg)); err == nil {
 							c.Writer.Flush()
 						}
 						clientDisconnected = true
@@ -1189,13 +1194,14 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					errStatus, errType, errMsg = status, et, em
 					MarkResponseCommitted(c)
 				}
+				clientStatus, clientType, clientMsg := sanitizeCompatUpstreamError(c, errStatus, errType, errMsg)
 				if !clientDisconnected {
 					if !clientOutputStarted {
-						writeAnthropicError(c, errStatus, errType, errMsg)
+						writeAnthropicError(c, clientStatus, clientType, clientMsg)
 						clientOutputStarted = true
 					} else {
 						writeStreamHeaders()
-						if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE(errType, errMsg)); err == nil {
+						if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE(clientType, clientMsg)); err == nil {
 							c.Writer.Flush()
 						}
 					}

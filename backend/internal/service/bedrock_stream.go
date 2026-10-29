@@ -143,6 +143,9 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 确定 SSE event type
 			eventType := gjson.GetBytes(sseData, "type").String()
+			if eventType == "message_start" {
+				sseData = rewriteGatewayClientModel(c, sseData, "message.model")
+			}
 
 			// 写入标准 SSE 格式
 			if !clientDisconnected {

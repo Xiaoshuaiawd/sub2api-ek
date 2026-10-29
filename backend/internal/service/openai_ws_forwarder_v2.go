@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -558,10 +557,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	var finalResponse []byte
 	wroteDownstream := false
 	needModelReplace := originalModel != mappedModel
-	var mappedModelBytes []byte
-	if needModelReplace && mappedModel != "" {
-		mappedModelBytes = []byte(mappedModel)
-	}
 	bufferedStreamEvents := make([][]byte, 0, 4)
 	flushEarlyEvents := reqStream && decision.Reason == openAIOAuthWSSSEAccelerationReason
 	eventCount := 0
@@ -664,6 +659,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if clientDisconnected {
 			return
 		}
+		message = SanitizeUpstreamErrorEvent(c, message)
 		frame := make([]byte, 0, len(message)+8)
 		frame = append(frame, "data: "...)
 		frame = append(frame, message...)
@@ -839,7 +835,7 @@ readLoop:
 		}
 
 		if !clientDisconnected {
-			if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(message, mappedModelBytes) {
+			if needModelReplace && openAIWSEventMayContainModel(eventType) {
 				message = replaceOpenAIWSMessageModel(message, mappedModel, originalModel)
 			}
 			if openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(message) {
@@ -930,12 +926,8 @@ readLoop:
 				emitStreamMessage(message, true)
 			}
 			if !reqStream {
-				c.JSON(statusCode, gin.H{
-					"error": gin.H{
-						"type":    "upstream_error",
-						"message": errMsg,
-					},
-				})
+				clientStatus, clientType, clientMsg := sanitizeCompatUpstreamError(c, statusCode, "upstream_error", errMsg)
+				c.JSON(clientStatus, gin.H{"error": gin.H{"type": clientType, "message": clientMsg}})
 			}
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 		}
@@ -1015,7 +1007,7 @@ readLoop:
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
 
-		c.Data(http.StatusOK, "application/json", finalResponse)
+		c.Data(http.StatusOK, "application/json", SanitizeUpstreamErrorEvent(c, finalResponse))
 	} else {
 		flushStreamWriter(true)
 	}

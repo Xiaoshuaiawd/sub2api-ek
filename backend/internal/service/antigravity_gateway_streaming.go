@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/sjson"
 )
 
 type antigravityStreamResult struct {
@@ -953,6 +954,11 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, errType, errMsg)
 	}
+	if clientModel := gatewayClientResponseModel(c, originalModel); clientModel != originalModel {
+		if rewritten, err := sjson.SetBytes(claudeResp, "model", clientModel); err == nil {
+			claudeResp = rewritten
+		}
+	}
 	c.Data(http.StatusOK, "application/json", claudeResp)
 	return streamRes, nil
 }
@@ -970,7 +976,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 		return nil, errors.New("streaming not supported")
 	}
 
-	processor := antigravity.NewStreamingProcessor(originalModel)
+	processor := antigravity.NewStreamingProcessor(gatewayClientResponseModel(c, originalModel))
 	var firstTokenMs *int
 	// 使用 Scanner 并限制单行大小，避免 ReadString 无上限导致 OOM
 	scanner := bufio.NewScanner(resp.Body)

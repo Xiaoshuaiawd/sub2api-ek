@@ -272,7 +272,7 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 			return nil, s.writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Failed to read upstream stream")
 		}
 		collectedBytes, _ := json.Marshal(collected)
-		chatResp, usageObj2, err := geminiResponseToChatCompletions(collected, originalModel, collectedBytes, usageObj)
+		chatResp, usageObj2, err := geminiResponseToChatCompletions(collected, gatewayClientResponseModel(c, originalModel), collectedBytes, usageObj)
 		if err != nil {
 			return nil, s.writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 		}
@@ -477,7 +477,7 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsNonStreamingResponseF
 		return nil, s.writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 	}
 
-	chatResp, usage, err := geminiResponseToChatCompletions(geminiResp, originalModel, respBody, nil)
+	chatResp, usage, err := geminiResponseToChatCompletions(geminiResp, gatewayClientResponseModel(c, originalModel), respBody, nil)
 	if err != nil {
 		return nil, s.writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 	}
@@ -538,9 +538,9 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 	}
 
 	anthState := apicompat.NewAnthropicEventToResponsesState()
-	anthState.Model = originalModel
+	anthState.Model = gatewayClientResponseModel(c, originalModel)
 	ccState := apicompat.NewResponsesEventToChatState()
-	ccState.Model = originalModel
+	ccState.Model = gatewayClientResponseModel(c, originalModel)
 	ccState.IncludeUsage = includeUsage
 
 	var usage ClaudeUsage
@@ -585,7 +585,7 @@ func (s *GeminiMessagesCompatService) handleChatCompletionsStreamingResponseFrom
 			ID:         messageID,
 			Type:       "message",
 			Role:       "assistant",
-			Model:      originalModel,
+			Model:      gatewayClientResponseModel(c, originalModel),
 			Content:    []apicompat.AnthropicContentBlock{},
 			StopReason: nil, // JSON null
 			Usage:      apicompat.AnthropicUsage{},

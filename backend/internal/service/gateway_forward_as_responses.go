@@ -76,6 +76,7 @@ func (s *GatewayService) ForwardAsResponses(
 			mappedModel = normalized
 		}
 	}
+	SetOpsUpstreamModel(c, mappedModel)
 	if err := validateClaude55Request(body, mappedModel); err != nil {
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
@@ -168,7 +169,7 @@ func (s *GatewayService) ForwardAsResponses(
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 
 		if isAnthropicCompatSafetyRejection(respBody) {
-			writeResponsesError(c, http.StatusForbidden, "permission_error", upstreamMsg)
+			writeGatewayResponsesUpstreamError(c, http.StatusForbidden, "permission_error", upstreamMsg)
 			MarkResponseCommitted(c)
 			return nil, fmt.Errorf("upstream safety rejection: %s", upstreamMsg)
 		}
@@ -197,7 +198,7 @@ func (s *GatewayService) ForwardAsResponses(
 		}
 
 		// Non-failover error: return Responses-formatted error to client
-		writeResponsesError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
+		writeGatewayResponsesUpstreamError(c, mapUpstreamStatusCode(resp.StatusCode), "server_error", upstreamMsg)
 		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
@@ -435,7 +436,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		// Stop queued success events after a terminal safety rejection.
 		if event.Type == "error" && isAnthropicCompatSafetyRejection([]byte(payload)) {
 			message := sanitizeUpstreamErrorMessage(gjson.Get(payload, "error.message").String())
-			writeResponsesError(c, http.StatusForbidden, "permission_error", message)
+			writeGatewayResponsesUpstreamError(c, http.StatusForbidden, "permission_error", message)
 			MarkResponseCommitted(c)
 			return nil, fmt.Errorf("upstream safety rejection: %s", message)
 		}
@@ -505,7 +506,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		finalResp.Model = mappedModel
 	}
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
-	responsesResp.Model = originalModel // Use original model name
+	responsesResp.Model = gatewayClientResponseModel(c, originalModel)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -564,7 +565,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	c.Writer.WriteHeader(http.StatusOK)
 
 	state := apicompat.NewAnthropicEventToResponsesState()
-	state.Model = originalModel
+	state.Model = gatewayClientResponseModel(c, originalModel)
 	state.PreserveThinkingSignatures = isClaude55SignedThinkingModel(mappedModel)
 	clientToolRestorer := apicompat.NewResponsesClientToolStreamRestorer(clientToolMapping)
 	var usage ClaudeUsage
@@ -727,6 +728,12 @@ func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
 		return json.RawMessage(fragment)
 	}
 	return json.RawMessage(string(existing) + fragment)
+}
+
+// writeGatewayResponsesUpstreamError redacts upstream model identifiers only in client-facing errors.
+func writeGatewayResponsesUpstreamError(c *gin.Context, statusCode int, code, message string) {
+	statusCode, code, message = sanitizeCompatUpstreamError(c, statusCode, code, message)
+	writeResponsesError(c, statusCode, code, message)
 }
 
 // writeResponsesError writes an error response in OpenAI Responses API format.

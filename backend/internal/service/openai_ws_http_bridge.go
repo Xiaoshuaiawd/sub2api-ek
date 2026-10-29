@@ -684,12 +684,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	failureAccountSideEffectsApplied := false
 	mappedModel := actualModel
 	needModelReplace := false
-	var mappedModelBytes []byte
 	if originalModel != "" {
 		needModelReplace = mappedModel != "" && mappedModel != originalModel
-		if needModelReplace {
-			mappedModelBytes = []byte(mappedModel)
-		}
 	}
 
 	resultWithUsage := func() *OpenAIForwardResult {
@@ -825,7 +821,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		imageCounter.AddSSEData(upstreamMessage)
 
-		if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && strings.Contains(trimmedData, mappedModel) {
+		if needModelReplace && openAIWSEventMayContainModel(eventType) {
 			upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
 		}
 		if s.toolCorrector != nil && openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(upstreamMessage) {
@@ -921,7 +917,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		// server_is_overloaded / slow_down 判致命并终止会话，改写后走客户端内置
 		// 重试。账号状态与终止事件判定（下方 handleOpenAIWSTerminalTransientFailure）
 		// 仍使用未改写的 upstreamMessage。
-		clientMessage := upstreamMessage
+		clientMessage := SanitizeUpstreamErrorEvent(c, upstreamMessage, eventType)
 		if eventType == "error" || eventType == "response.failed" {
 			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 				clientMessage = rewritten

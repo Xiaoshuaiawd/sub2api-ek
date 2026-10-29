@@ -2529,3 +2529,24 @@ func TestOpenAIWSHTTPBridge_IdleTimeoutClosesClientSession(t *testing.T) {
 	}
 	require.Len(t, upstream.bodies, 1, "an idle client must not leave a continuation request running")
 }
+
+func TestProxyOpenAIWSHTTPBridgeHidesModelInClientFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	wire := "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_test\",\"error\":{\"code\":\"cyber_policy\",\"message\":\"model xy blocked\"},\"usage\":{\"input_tokens\":9,\"output_tokens\":2}}}\n\n"
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(wire))}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{Status: StatusActive, Schedulable: true, ID: 112, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Set("ops_model", "public-model")
+	payload := []byte(`{"type":"response.create","model":"xy","input":"hi"}`)
+	var sent [][]byte
+	_, err := svc.proxyOpenAIWSHTTPBridgeTurn(context.Background(), c, account, "sk-test", payload, len(payload), "public-model", "", "", "", "", 1, func(b []byte) error { sent = append(sent, append([]byte(nil), b...)); return nil })
+	require.NoError(t, err)
+	require.Len(t, sent, 1)
+	require.NotContains(t, string(sent[0]), "model xy")
+	mark := GetOpsCyberPolicy(c)
+	require.NotNil(t, mark)
+	require.Contains(t, mark.Message, "model xy")
+	require.Equal(t, 9, mark.UpstreamInTok)
+}

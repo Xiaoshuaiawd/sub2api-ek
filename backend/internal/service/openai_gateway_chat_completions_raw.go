@@ -92,8 +92,15 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletionsWithStartTime(
 	clientStream := gjson.GetBytes(body, "stream").Bool()
 
 	// 2. Resolve model mapping (same as ForwardAsChatCompletions)
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveOpenAIChannelForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	juiceEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
+	juiceEffort = ApplyThinkingEnabledFallback(juiceEffort, body, billingModel)
+	juiceEffortValue := ""
+	if juiceEffort != nil {
+		juiceEffortValue = *juiceEffort
+	}
+	s.resolveJuiceValueForRequest(c, originalModel, juiceEffortValue)
 	if err := validateGPT61SolCompatRequest(body, upstreamModel); err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
@@ -336,6 +343,12 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var terminal openAIRawStreamTerminalState
 	var regionalUsagePayload []byte
+	juice := GetJuiceResolvedValue(c)
+	var juiceTransformer *JuiceSSETransformer
+	var juiceEventLines []string
+	if juice.OK {
+		juiceTransformer = NewJuiceSSETransformer(JuiceStreamKindChat, juice.Value)
+	}
 
 	writeLine := func(line string) {
 		if clientDisconnected {
@@ -395,7 +408,17 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		line = stripEmptyChatToolCallIdentityFromSSELine(line)
 
 		line = s.replaceModelInSSELine(line, upstreamModel, originalModel)
-		writeLine(line)
+		if juiceTransformer != nil {
+			juiceEventLines = append(juiceEventLines, line)
+			if line == "" {
+				for _, transformed := range juiceTransformer.TransformEvent(juiceEventLines) {
+					writeLine(transformed)
+				}
+				juiceEventLines = nil
+			}
+		} else {
+			writeLine(line)
+		}
 		if line == "" {
 			if !clientDisconnected && clientOutputStarted {
 				c.Writer.Flush()
@@ -464,6 +487,20 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		// 补发 SSE error 帧并把本次请求计入 SLA 失败。
 		recordOpenAIRawStreamTruncation(c, account, requestID, cause, "http_error")
 		return resultWithUsage(), newOpenAIUpstreamStreamReadError(cause)
+	}
+
+	if juiceTransformer != nil && scanErr == nil && !clientDisconnected && !refusalDetector.IsSilentRefusal() {
+		if len(juiceEventLines) > 0 {
+			for _, line := range juiceTransformer.TransformEvent(juiceEventLines) {
+				writeLine(line)
+			}
+		}
+		for _, line := range juiceTransformer.Flush() {
+			writeLine(line)
+		}
+		if clientOutputStarted && !clientDisconnected {
+			c.Writer.Flush()
+		}
 	}
 
 	if scanErr == nil && !clientDisconnected && !clientOutputStarted {
@@ -569,6 +606,9 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	}
 	respBody = applyOllamaCloudRawChatCompletionsResponse(account, respBody)
 	respBody = s.replaceModelInResponseBody(respBody, upstreamModel, originalModel)
+	if juice := GetJuiceResolvedValue(c); juice.OK {
+		respBody = TransformChatCompletionsBody(respBody, juice.Value)
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

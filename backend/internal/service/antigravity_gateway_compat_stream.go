@@ -449,7 +449,7 @@ func (s *AntigravityGatewayService) handleChatCompletionsStreamingFromAntigravit
 		resp,
 		startTime,
 		originalModel,
-		newAntigravityChatStreamAdapter(originalModel, includeUsage),
+		newAntigravityChatStreamAdapter(gatewayClientResponseModel(c, originalModel), includeUsage),
 		"antigravity chat completions stream",
 	)
 }
@@ -465,7 +465,7 @@ func (s *AntigravityGatewayService) handleResponsesStreamingFromAntigravity(
 		resp,
 		startTime,
 		originalModel,
-		newAntigravityResponsesStreamAdapter(originalModel),
+		newAntigravityResponsesStreamAdapter(gatewayClientResponseModel(c, originalModel)),
 		"antigravity responses stream",
 	)
 }

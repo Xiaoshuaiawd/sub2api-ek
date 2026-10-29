@@ -239,7 +239,7 @@ func writeWebSearchStreamResponse(
 	setSSEHeaders(c)
 	w := c.Writer
 	for _, fn := range []func() error{
-		func() error { return writeSSEMessageStart(w, msgID, model) },
+		func() error { return writeSSEMessageStart(w, msgID, gatewayClientResponseModel(c, model)) },
 		func() error { return writeSSEServerToolUse(w, toolUseID, query, 0) },
 		func() error { return writeSSEToolResult(w, toolUseID, resp.Results, 1) },
 		func() error { return writeSSETextBlock(w, textSummary, 2) },
@@ -355,7 +355,7 @@ func writeWebSearchNonStreamResponse(
 	textSummary := buildTextSummary(query, resp.Results)
 
 	msg := map[string]any{
-		"id": msgID, "type": "message", "role": "assistant", "model": model,
+		"id": msgID, "type": "message", "role": "assistant", "model": gatewayClientResponseModel(c, model),
 		"content": []any{
 			map[string]any{
 				"type": "server_tool_use", "id": toolUseID,

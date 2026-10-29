@@ -565,6 +565,13 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			}
 
 			if !clientDisconnected {
+				if clientModel := gatewayClientResponseModel(c, ""); clientModel != "" {
+					if data, ok := extractAnthropicSSEDataLine(line); ok && gjson.Get(data, "type").String() == "message_start" && gjson.Get(data, "message.model").Type == gjson.String {
+						if rewritten, err := sjson.Set(data, "message.model", clientModel); err == nil {
+							line = "data: " + rewritten
+						}
+					}
+				}
 				restored := string(reverseToolNamesIfPresent(c, []byte(line)))
 				if _, err := io.WriteString(w, restored); err != nil {
 					clientDisconnected = true
@@ -899,6 +906,11 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 		contentType = "application/json"
 	}
 	body = reverseToolNamesIfPresent(c, body)
+	if clientModel := gatewayClientResponseModel(c, ""); clientModel != "" && gjson.GetBytes(body, "model").Type == gjson.String {
+		if rewritten, err := sjson.SetBytes(body, "model", clientModel); err == nil {
+			body = rewritten
+		}
+	}
 	c.Data(resp.StatusCode, contentType, body)
 	return usage, nil
 }
