@@ -41,6 +41,13 @@ describe('initial 2FA login input', () => {
       { email: 'second@example.com', password: 'password', mfa_secret: 'SECRET' }
     ])
   })
+  it('accepts the six-field mailbox export format and uses the GPT password plus 2FA', () => {
+    expect(parseTwoFALoginText(
+      'User@example.com----MailboxPwd123----9e5f94bc-e8a4-4e73-b8be-63364c29d753----M.C516_BL2.0.U.MsaArtifacts-ABC----gpt@Pass1!----JBSWY3DPEHPK3PXP'
+    )).toEqual([
+      { email: 'user@example.com', password: 'gpt@Pass1!', mfa_secret: 'JBSWY3DPEHPK3PXP' }
+    ])
+  })
   it.each(['', 'bad', 'u@example.com----p----', 'u@example.com----p----s----extra', 'u@example.com----p----s\nU@example.com----p----s'])('rejects invalid or duplicate entries', input => {
     expect(() => parseTwoFALoginText(input)).toThrow('invalid_batch')
   })
