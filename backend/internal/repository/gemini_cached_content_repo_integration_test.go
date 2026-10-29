@@ -28,6 +28,7 @@ func TestGeminiCachedContentRepository_Lifecycle(t *testing.T) {
 		}
 	}
 	first := newRecord("a", apiKeyID, 42, now.Add(time.Hour))
+	first.IntelligenceRouting = true
 	require.NoError(t, repo.Create(ctx, first))
 	require.Positive(t, first.ID)
 	require.False(t, first.CreatedAt.IsZero())
@@ -45,6 +46,7 @@ func TestGeminiCachedContentRepository_Lifecycle(t *testing.T) {
 
 	got, err := repo.GetForOwner(ctx, apiKeyID, first.PublicID)
 	require.NoError(t, err)
+	require.True(t, got.IntelligenceRouting)
 	require.Equal(t, "cachedContents/upa", got.UpstreamName)
 	require.Equal(t, int64(2730), got.TotalTokenCount)
 	require.True(t, got.ExpireTime.Equal(first.ExpireTime))
@@ -56,6 +58,8 @@ func TestGeminiCachedContentRepository_Lifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	require.Equal(t, second.PublicID, list[0].PublicID)
+	require.False(t, list[0].IntelligenceRouting)
+	require.True(t, list[1].IntelligenceRouting)
 	page, err := repo.ListForOwner(ctx, apiKeyID, 42, now, list[0].ID, 10)
 	require.NoError(t, err)
 	require.Len(t, page, 1)

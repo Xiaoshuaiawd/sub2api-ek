@@ -102,6 +102,16 @@ describe('EditAccountModal Prism OAuth switch', () => {
     mocks.listByAccount.mockResolvedValue([])
   })
 
+  it('loads and saves intelligence routing while preserving other settings', async () => {
+    const wrapper = mountModal(buildOAuthAccount({ extra: { fixture_flag: true, intelligence_routing_enabled: true } }))
+    await flushPromises()
+    const toggle = wrapper.get('[data-testid="intelligence-routing-enabled"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    await toggle.setValue(false)
+    await submit(wrapper)
+    expect(mocks.updateAccount.mock.calls[0][1].extra).toMatchObject({ fixture_flag: true, intelligence_routing_enabled: false })
+  })
+
   it('hides BPS and Prism account settings when the global switches are off', () => {
     mocks.publicSettings = { excel_bps_enabled: false, prism_browser_enabled: false }
     const wrapper = mountModal()

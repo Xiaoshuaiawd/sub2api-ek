@@ -26,6 +26,14 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+        <label class="flex cursor-pointer items-center gap-2 text-sm">
+          <input v-model="intelligenceRoutingEnabled" type="checkbox" data-testid="intelligence-routing-enabled" />
+          <span>{{ t('admin.accounts.intelligenceRouting') }}</span>
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.intelligenceRoutingHint') }}</p>
+      </div>
+
       <SIWCAccountSettings v-if="account.platform === 'openai' && account.type === 'oauth' && !isSparkShadow"
         v-model:enabled="siwcEnabled" :account-id="account.id" :active="show" />
 
@@ -4837,6 +4845,7 @@ const mixedChannelWarningMessageText = computed(() => {
   return mixedChannelWarningRawMessage.value
 })
 
+const intelligenceRoutingEnabled = ref(false)
 const costMultiplier = ref(DEFAULT_ACCOUNT_COST_MULTIPLIER)
 const costMultiplierAutoSync = ref(true)
 
@@ -4960,6 +4969,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.concurrency = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
+  intelligenceRoutingEnabled.value = newAccount.extra?.intelligence_routing_enabled === true
   costMultiplier.value = readAccountCostMultiplier(newAccount.extra)
   costMultiplierAutoSync.value = newAccount.extra?.upstream_billing_provider !== 'new_api' && newAccount.extra?.cost_multiplier_auto_sync !== false
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
@@ -6974,6 +6984,7 @@ const handleSubmit = async () => {
     } else {
       delete costExtra.cost_multiplier_auto_sync
     }
+    costExtra.intelligence_routing_enabled = intelligenceRoutingEnabled.value
     updatePayload.extra = costExtra
 
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {

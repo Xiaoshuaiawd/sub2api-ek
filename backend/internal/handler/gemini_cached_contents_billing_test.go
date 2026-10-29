@@ -953,3 +953,15 @@ func TestGeminiCachedContentMutationRecovery_ForgetsRecordWhenAccountDeleted(t *
 	require.NoError(t, err)
 	require.Zero(t, recovered, "不再重复处理")
 }
+
+func TestGeminiCachedContentsCreateRecordsIntelligenceRouting(t *testing.T) {
+	env := newCachedBillingEnv(t, 500, 900)
+	env.accounts[900].Extra = map[string]any{service.IntelligenceRoutingExtraKey: true}
+	env.upstream.createBody = cachedBillingCreateBody(time.Now().Add(100 * time.Hour))
+	rec := env.serve(http.MethodPost, "/v1beta/cachedContents", `{"model":"models/gemini-2.5-pro","ttl":"86400s","contents":[{"role":"user","parts":[{"text":"画一个鹈鹕骑自行车"}]}]}`, nil, env.h.GeminiCachedContentsCreate)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Len(t, env.repo.records, 1)
+	for _, record := range env.repo.records {
+		require.True(t, record.IntelligenceRouting)
+	}
+}

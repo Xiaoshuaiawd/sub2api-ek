@@ -105,6 +105,7 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 	if !ok {
 		return
 	}
+	bindIntelligenceRouting(c, body)
 	req, err := service.ParseGeminiCachedContentCreateRequest(body, svc.Now(), svc.MaxTTL())
 	if err != nil {
 		googleError(c, http.StatusBadRequest, err.Error())
@@ -291,18 +292,19 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 
 		expireTime := service.ClampGeminiCachedContentExpire(upstream.ExpireTime, svc.Now().Add(ttl))
 		record := &service.GeminiCachedContent{
-			PublicID:        publicID,
-			UserID:          authSubject.UserID,
-			APIKeyID:        apiKey.ID,
-			GroupID:         *apiKey.GroupID,
-			AccountID:       account.ID,
-			UpstreamName:    upstream.Name,
-			Model:           modelName,
-			UpstreamModel:   upstreamModel,
-			DisplayName:     req.DisplayName,
-			TotalTokenCount: tokens,
-			ExpireTime:      expireTime,
-			ChannelUsage:    usageFields,
+			PublicID:            publicID,
+			UserID:              authSubject.UserID,
+			APIKeyID:            apiKey.ID,
+			GroupID:             *apiKey.GroupID,
+			AccountID:           account.ID,
+			UpstreamName:        upstream.Name,
+			Model:               modelName,
+			UpstreamModel:       upstreamModel,
+			DisplayName:         req.DisplayName,
+			TotalTokenCount:     tokens,
+			ExpireTime:          expireTime,
+			ChannelUsage:        usageFields,
+			IntelligenceRouting: service.IsIntelligenceRouting(c.Request.Context()),
 		}
 		persistCtx, cancelPersist := geminiCachedContentPersistContext(c)
 		err = svc.Save(persistCtx, record)
@@ -612,6 +614,9 @@ func (h *GatewayHandler) resolveGeminiCachedContentBinding(c *gin.Context, reqLo
 	if err != nil {
 		googleError(c, http.StatusBadRequest, "Invalid cachedContent reference")
 		return nil, nil, false
+	}
+	if record.IntelligenceRouting {
+		c.Request = c.Request.WithContext(service.WithIntelligenceRouting(c.Request.Context()))
 	}
 	return record, rewritten, true
 }

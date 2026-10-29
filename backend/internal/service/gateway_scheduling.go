@@ -1500,7 +1500,7 @@ func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID in
 	if err != nil || account == nil {
 		return account, err
 	}
-	if s.isAccountBlockedBySchedulingThreshold(ctx, account) {
+	if !intelligenceRoutingAllowsAccount(ctx, account) || s.isAccountBlockedBySchedulingThreshold(ctx, account) {
 		return nil, nil
 	}
 	// Sticky / non-list selection must honor free soft-gate (same as listSchedulableAccounts).
@@ -1519,7 +1519,7 @@ func (s *GatewayService) filterAccountsBySchedulingThreshold(ctx context.Context
 
 	filtered := make([]Account, 0, len(accounts))
 	for i := range accounts {
-		if s.isAccountBlockedBySchedulingThreshold(ctx, &accounts[i]) {
+		if !intelligenceRoutingAllowsAccount(ctx, &accounts[i]) || s.isAccountBlockedBySchedulingThreshold(ctx, &accounts[i]) {
 			continue
 		}
 		filtered = append(filtered, accounts[i])
@@ -1545,12 +1545,18 @@ func (s *GatewayService) hydrateSelectedAccount(ctx context.Context, account *Ac
 	if hydrated == nil {
 		return nil, fmt.Errorf("selected gateway account %d not found during hydration", account.ID)
 	}
+	if !intelligenceRoutingAllowsAccount(ctx, hydrated) {
+		return nil, ErrNoAvailableAccounts
+	}
 	return hydrated, nil
 }
 
 func (s *GatewayService) newSelectionResult(ctx context.Context, account *Account, acquired bool, release func(), waitPlan *AccountWaitPlan) (*AccountSelectionResult, error) {
 	hydrated, err := s.hydrateSelectedAccount(ctx, account)
 	if err != nil {
+		if release != nil {
+			release()
+		}
 		return nil, err
 	}
 	return attachSelectionProfitGate(ctx, &AccountSelectionResult{
