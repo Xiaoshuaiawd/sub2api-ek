@@ -283,6 +283,7 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 		return nil, errors.New("prism adapter model is required")
 	}
 	upstreamModel := account.GetMappedModel(model)
+	SetOpsUpstreamModel(c, upstreamModel)
 	if upstreamModel != model {
 		mapped, mapErr := sjson.SetBytes(body, "model", upstreamModel)
 		if mapErr != nil {
@@ -313,7 +314,11 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 			fail(http.StatusBadGateway, "prism_unavailable", "Prism adapter rejected the gateway; check the adapter key and endpoint")
 			return nil, fmt.Errorf("prism adapter returned HTTP %d", status)
 		}
-		writeError(status, responseBody)
+		if UpstreamErrorMessageLeaksModelForRequest(c, string(responseBody)) {
+			fail(UpstreamModelLeakClientStatus, UpstreamModelLeakClientType, UpstreamModelLeakClientMessage)
+		} else {
+			writeError(status, responseBody)
+		}
 		return nil, prismBrowserForwardError(status, responseBody)
 	}
 	responseID, err := prismBrowserTerminal(responseBody, upstreamModel, stream)
@@ -324,6 +329,15 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 	if err := prismBrowserValidateToolCatalog(body, responseBody, stream); err != nil {
 		fail(http.StatusBadGateway, "invalid_prism_response", "Prism adapter returned an undeclared client tool")
 		return nil, err
+	}
+	clientModel, _ := ctx.Value(openAIClientModelContextKey{}).(string)
+	if clientModel == "" {
+		clientModel = model
+	}
+	if stream {
+		responseBody = []byte(s.replaceModelInSSEBody(string(responseBody), upstreamModel, clientModel))
+	} else {
+		responseBody = s.replaceModelInResponseBody(responseBody, upstreamModel, clientModel)
 	}
 	contentType := "application/json"
 	if stream {

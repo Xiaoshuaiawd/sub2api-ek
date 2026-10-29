@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -150,7 +151,13 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 			}
 			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody, RetryableOnSameAccount: retryableOnSameAccount}
 		}
-		writeOpenAIEmbeddingsUpstreamResponse(c, resp, respBody, s.responseHeaderFilter)
+		// Keep the original upstream body for retry and operations, but do not
+		// expose its mapped model identifier to the downstream caller.
+		if UpstreamErrorMessageLeaksModelForRequest(c, string(respBody)) {
+			writeUpstreamModelLeakError(c)
+		} else {
+			writeOpenAIEmbeddingsUpstreamResponse(c, resp, respBody, s.responseHeaderFilter)
+		}
 		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
 	}
 
@@ -162,7 +169,15 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 		return nil, fmt.Errorf("read upstream body: %w", err)
 	}
 
-	writeOpenAIEmbeddingsUpstreamResponse(c, resp, respBody, s.responseHeaderFilter)
+	// Only the protocol model field is rewritten; usage and embedding data are
+	// retained from the original response for billing and downstream use.
+	clientBody := respBody
+	if responseModel := gjson.GetBytes(respBody, "model"); responseModel.Type == gjson.String {
+		if rewritten, rewriteErr := sjson.SetBytes(respBody, "model", gatewayClientResponseModel(c, originalModel)); rewriteErr == nil {
+			clientBody = rewritten
+		}
+	}
+	writeOpenAIEmbeddingsUpstreamResponse(c, resp, clientBody, s.responseHeaderFilter)
 
 	return &OpenAIForwardResult{
 		RequestID:       firstNonEmptyString(resp.Header.Get("x-request-id"), resp.Header.Get("request-id")),

@@ -1042,6 +1042,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		interTurnStarted:     make(chan struct{}, 1),
 		restoreResponseModel: func(payload []byte) []byte {
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+			payload = SanitizeUpstreamErrorEvent(c, payload, eventType)
 			if !openAIWSEventMayContainModel(eventType) {
 				return payload
 			}

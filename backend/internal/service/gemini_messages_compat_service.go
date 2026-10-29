@@ -1061,7 +1061,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 			collectedBytes, _ := json.Marshal(collected)
 			upstreamResponseModelObserverFromContext(c).ObserveGemini(collectedBytes)
 			observeGeminiImageOutputs(c, collectedBytes)
-			claudeResp, usageObj2 := convertGeminiToClaudeMessage(collected, originalModel, collectedBytes, false)
+			claudeResp, usageObj2 := convertGeminiToClaudeMessage(collected, gatewayClientResponseModel(c, originalModel), collectedBytes, false)
 			c.JSON(http.StatusOK, claudeResp)
 			usage = usageObj2
 			if usageObj != nil && (usageObj.InputTokens > 0 || usageObj.OutputTokens > 0) {
@@ -2185,7 +2185,7 @@ func (s *GeminiMessagesCompatService) handleNonStreamingResponse(c *gin.Context,
 		return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
 	}
 
-	claudeResp, usage := convertGeminiToClaudeMessage(geminiResp, originalModel, unwrappedBody, false)
+	claudeResp, usage := convertGeminiToClaudeMessage(geminiResp, gatewayClientResponseModel(c, originalModel), unwrappedBody, false)
 	c.JSON(http.StatusOK, claudeResp)
 
 	return usage, nil
@@ -2210,7 +2210,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 			"id":            messageID,
 			"type":          "message",
 			"role":          "assistant",
-			"model":         originalModel,
+			"model":         gatewayClientResponseModel(c, originalModel),
 			"content":       []any{},
 			"stop_reason":   nil,
 			"stop_sequence": nil,

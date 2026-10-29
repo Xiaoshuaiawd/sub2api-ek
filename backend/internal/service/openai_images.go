@@ -1016,7 +1016,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 	// Gin's Data renderer only fills an absent Content-Type. Override the
 	// copied upstream value so the response-header policy above takes effect.
 	c.Header("Content-Type", contentType)
-	c.Data(resp.StatusCode, contentType, body)
+	c.Data(resp.StatusCode, contentType, rewriteOpenAIImagesClientPayload(c, body, ""))
 
 	usage, _ := extractOpenAIUsageFromJSONBytes(body)
 	return usage, extractOpenAIImageCountFromJSONBytes(body), collectOpenAIResponseImageOutputSizesFromJSONBytes(body), nil
@@ -1053,6 +1053,27 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	fallbackTooLarge := false
 	var sseData openAISSEDataAccumulator
 	var streamErr error
+	// Native image SSE must preserve complete frames while rewriting JSON data.
+	// Billing continues to parse the original upstream bytes separately.
+	var clientFrame [][]byte
+	var clientFrameBytes int64
+	flushClientFrame := func() {
+		if len(clientFrame) == 0 {
+			return
+		}
+		if !clientDisconnected {
+			frame := rewriteOpenAIImagesClientSSEFrame(c, clientFrame)
+			if _, err := c.Writer.Write(frame); err != nil {
+				clientDisconnected = true
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Images stream client disconnected, continue draining upstream for billing")
+			} else {
+				flusher.Flush()
+				lastDownstreamWriteAt = time.Now()
+			}
+		}
+		clientFrame = nil
+		clientFrameBytes = 0
+	}
 	finish := func() error {
 		if direct == nil {
 			return nil
@@ -1101,7 +1122,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		}
 		eventType := gjson.GetBytes(dataBytes, "type").String()
 		if direct != nil && strings.TrimSpace(direct.Model) != "" {
-			dataBytes, _ = sjson.SetBytes(dataBytes, "model", strings.TrimSpace(direct.Model))
+			dataBytes, _ = sjson.SetBytes(dataBytes, "model", gatewayClientResponseModel(c, strings.TrimSpace(direct.Model)))
 		}
 		// 原生编辑事件可能仍使用 image_generation 前缀；对外维持既有编辑事件名。
 		if strings.HasPrefix(eventType, "image_generation.") && direct.IsEdits() {
@@ -1131,6 +1152,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 
 	flushSSEEvent := func() {
 		sseData.Flush(processSSEData)
+		if direct == nil {
+			flushClientFrame()
+		}
 	}
 
 	processLine := func(line []byte) {
@@ -1141,17 +1165,20 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}
+		trimmedLine := strings.TrimRight(string(line), "\r\n")
 		if !clientDisconnected && direct == nil {
-			if _, writeErr := c.Writer.Write(line); writeErr != nil {
-				clientDisconnected = true
-				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Images stream client disconnected, continue draining upstream for billing")
-			} else {
-				flusher.Flush()
-				lastDownstreamWriteAt = time.Now()
+			clientFrameBytes += int64(len(line))
+			if clientFrameBytes > fallbackLimit {
+				clientFrame = nil
+				streamErr = fmt.Errorf("%w: image SSE event limit=%d", ErrUpstreamResponseBodyTooLarge, fallbackLimit)
+				return
+			}
+			clientFrame = append(clientFrame, append([]byte(nil), line...))
+			if strings.TrimSpace(trimmedLine) == "" {
+				flushClientFrame()
 			}
 		}
 
-		trimmedLine := strings.TrimRight(string(line), "\r\n")
 		if _, ok := extractOpenAISSEDataLine(trimmedLine); ok || strings.TrimSpace(trimmedLine) == "" {
 			sseData.AddLine(trimmedLine, processSSEData)
 			return
@@ -1189,6 +1216,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		for {
 			line, err := reader.ReadBytes('\n')
 			processLine(line)
+			if direct == nil && streamErr != nil {
+				return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, streamErr
+			}
 			if err == io.EOF {
 				break
 			}
@@ -1273,6 +1303,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 				return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, ev.err
 			}
 			processLine(ev.line)
+			if direct == nil && streamErr != nil {
+				return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, streamErr
+			}
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
 			if time.Since(lastRead) < streamInterval {

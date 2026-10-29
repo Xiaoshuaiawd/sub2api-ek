@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -171,6 +172,36 @@ func TestPrismBrowserExplicitMappingReachesAdapter(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "my-sol", result.Model)
 	require.Equal(t, "gpt-6.1-sol", result.UpstreamModel)
+}
+
+func TestPrismBrowserChannelMappingRestoresClientModel(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "json", true: "stream"}[stream], func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				require.Equal(t, "gpt-6.1-sol", body["model"])
+				terminal := `{"id":"resp_fixture","status":"completed","model":"gpt-6.1-sol","usage":null,"output":[{"content":[{"text":"hello"}]}]}`
+				if stream {
+					_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":"+terminal+"}\n\n")
+				} else {
+					_, _ = io.WriteString(w, terminal)
+				}
+			}))
+			defer server.Close()
+			s, account := prismTestService(server.URL)
+			account.Credentials["model_mapping"] = map[string]any{"channel-model": "gpt-6.1-sol"}
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			body := []byte(fmt.Sprintf(`{"model":"channel-model","input":"hi","stream":%t}`, stream))
+			ctx := context.WithValue(context.Background(), openAIClientModelContextKey{}, "public-model")
+			result, err := s.forwardPrismBrowser(ctx, c, account, body, time.Now())
+			require.NoError(t, err)
+			require.Equal(t, "gpt-6.1-sol", result.UpstreamModel)
+			require.Contains(t, rec.Body.String(), `"model":"public-model"`)
+		})
+	}
 }
 
 func prismTestService(endpoint string) (*OpenAIGatewayService, *Account) {

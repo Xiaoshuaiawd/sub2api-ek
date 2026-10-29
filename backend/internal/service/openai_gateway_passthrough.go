@@ -135,7 +135,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	reasoningEffort *string,
 	reqStream bool,
 	startTime time.Time,
+	responseModels ...string,
 ) (*OpenAIForwardResult, error) {
+	responseModel := reqModel
+	if len(responseModels) > 0 && strings.TrimSpace(responseModels[0]) != "" {
+		responseModel = responseModels[0]
+	}
 	ctx = withOpenAITransportMode(ctx, "passthrough")
 	requestedModel := reqModel
 	upstreamPassthroughModel := ""
@@ -491,12 +496,16 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			s.noteOpenAICodexTurnStateProvenance(c, account)
 		}
 
+		responseUpstreamModel := upstreamPassthroughModel
+		if responseUpstreamModel == "" && responseModel != reqModel {
+			responseUpstreamModel = policyModel
+		}
 		if reqStream {
 			effort := ""
 			if reasoningEffort != nil {
 				effort = *reasoningEffort
 			}
-			result, handleErr := s.handleStreamingResponsePassthroughWithImage(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel, imageBillingModel, effort)
+			result, handleErr := s.handleStreamingResponsePassthroughWithImage(ctx, resp, c, account, startTime, responseModel, responseUpstreamModel, imageBillingModel, effort)
 			if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
 				return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
 			}
@@ -523,7 +532,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 					(result.usage.InputTokens > 0 || result.usage.OutputTokens > 0 || result.imageCount > 0) {
 					return &OpenAIForwardResult{
 						RequestID: resp.Header.Get("x-request-id"), ResponseID: result.responseID,
-						Usage: *result.usage, Model: reqModel, UpstreamModel: upstreamPassthroughModel,
+						Usage: *result.usage, Model: responseModel, UpstreamModel: upstreamPassthroughModel,
 						Stream: true, Duration: time.Since(startTime), FirstTokenMs: result.firstTokenMs,
 						ReasoningEffort: reasoningEffort, ImageCount: result.imageCount,
 						UpstreamHeaders: resp.Header, ResponseHeaders: resp.Header,
@@ -545,7 +554,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			imageCount = result.imageCount
 			imageOutputSizes = result.imageOutputSizes
 		} else {
-			result, handleErr := s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, reqModel, upstreamPassthroughModel)
+			result, handleErr := s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, responseModel, responseUpstreamModel)
 			if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
 				return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
 			}
@@ -598,7 +607,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		UpstreamHeaders:               resp.Header,
 		ResponseID:                    responseID,
 		Usage:                         *usage,
-		Model:                         reqModel,
+		Model:                         responseModel,
 		UpstreamModel:                 upstreamPassthroughModel,
 		UpstreamResponseModel:         observedUpstreamResponseModel(c),
 		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
@@ -610,6 +619,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		Duration:                      time.Since(startTime),
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnected,
+	}
+	if forwardResult.UpstreamModel == "" && responseModel != reqModel {
+		forwardResult.UpstreamModel = policyModel
 	}
 	if imageCount > 0 {
 		forwardResult.ImageCount = imageCount
@@ -1104,7 +1116,8 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	// context-window 超限是确定性请求失败（shouldFailoverOpenAIPassthroughResponse
 	// 已保证不切号），其文案对客户端可操作（如触发自动压缩）；在净化信封内保留
 	// 脱敏后的上游消息，而不是抹成通用文案。
-	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
+	// 但若该文案回显了真实模型名，仍要归一成统一错误，避免暴露映射关系。
+	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" && !UpstreamErrorMessageLeaksModelForRequest(c, upstreamMsg) {
 		writeOpenAIPassthroughErrorEnvelope(c, resp.StatusCode, resp.Header, upstreamMsg)
 	} else {
 		writeSanitizedOpenAIPassthroughError(c, resp.StatusCode, resp.Header)
@@ -2197,7 +2210,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		if clientDisconnected || !writePendingLines() {
 			return
 		}
-		if _, err := fmt.Fprint(w, buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtTracker.Value(), bareErrorPayload, failedMessage)); err != nil {
+		clientPayload := sanitizeClientOpenAIStreamError(c, bareErrorPayload, "error")
+		clientMessage := safeUpstreamStreamErrorMessage(c, failedMessage)
+		if _, err := fmt.Fprint(w, buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtTracker.Value(), clientPayload, clientMessage)); err != nil {
 			clientDisconnected = true
 			return
 		}
@@ -2383,12 +2398,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 							// 命中透传规则也要记录 ops 上游错误事件（对齐 CC/Messages 与
 							// antigravity 先例），否则透传命中的 failed 在监控中不可见。
 							s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "http_error", dataBytes, failedMessage)
+							clientStatus, clientType, clientMessage := safeUpstreamStreamPassthroughError(c, status, errType, errMsg)
 							MarkResponseCommitted(c)
 							c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-							c.JSON(status, gin.H{
+							c.JSON(clientStatus, gin.H{
 								"error": gin.H{
-									"type":    errType,
-									"message": errMsg,
+									"type":    clientType,
+									"message": clientMessage,
 								},
 							})
 							return resultWithUsage(), fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
@@ -2421,6 +2437,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				dataBytes = sanitizedData
 				trimmedData = strings.TrimSpace(string(sanitizedData))
 				line = "data: " + string(sanitizedData)
+			}
+			// Keep the original data for failover and accounting; only change the wire copy.
+			if eventType == "error" || eventType == "response.failed" || eventType == "response.incomplete" {
+				if clientData := sanitizeClientOpenAIStreamError(c, dataBytes, eventType); !bytes.Equal(clientData, dataBytes) {
+					line = "data: " + string(clientData)
+				}
 			}
 			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataStartsClientOutput(trimmedData, eventType)
 			if lineStartsClientOutput {

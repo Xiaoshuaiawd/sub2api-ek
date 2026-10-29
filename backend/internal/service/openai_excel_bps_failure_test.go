@@ -173,3 +173,21 @@ func TestExcelBPSFailureClassification(t *testing.T) {
 		}
 	}
 }
+
+func TestExcelBPSFailureHidesUpstreamModel(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			wire := strings.ReplaceAll(bpsFailureWire(t, "response.failed", "invalid_value", "", 0), "PRIVATE_UPSTREAM_BODY", "gpt-6-astra is unavailable")
+			upstream := &httpUpstreamRecorder{resp: bpsCompletionResponse(http.StatusOK, wire)}
+			svc := openAIClientToolsTestService(upstream)
+			body, err := json.Marshal(map[string]any{"model": "gpt-6-astra", "stream": stream, "input": "hello"})
+			require.NoError(t, err)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			_, err = svc.ForwardWithOriginalModel(context.Background(), c, excelAccount(), body, "public-model")
+			require.Error(t, err)
+			require.NotContains(t, rec.Body.String(), "gpt-6-astra")
+		})
+	}
+}

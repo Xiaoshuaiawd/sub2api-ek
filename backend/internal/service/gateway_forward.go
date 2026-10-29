@@ -137,6 +137,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				passthroughModel = mappedModel
 			}
 		}
+		SetOpsUpstreamModel(c, passthroughModel)
 		return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
 			Body:          passthroughBody,
 			Parsed:        parsed,
@@ -321,6 +322,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		parsed.Model = mappedModel
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
 	}
+
+	SetOpsUpstreamModel(c, mappedModel)
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
 		if err := replaceBody(injectAnthropicCacheControlTTL1h(body)); err != nil {

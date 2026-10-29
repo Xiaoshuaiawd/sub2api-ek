@@ -186,3 +186,59 @@ func TestForwardEmbeddings_NonAccessFailoverKeepsLegacyShape(t *testing.T) {
 	require.Nil(t, failoverErr.ResponseHeaders)
 	require.False(t, c.Writer.Written())
 }
+
+func TestForwardEmbeddingsPreservesClientModelAndUpstreamBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"channel-model","input":"hello"}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewReader(body))
+	SetGatewayClientModel(c, "public-model")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"model":"real-model","data":[{"embedding":[0.1]}],"usage":{"prompt_tokens":7}}`))}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "sk-test", "model_mapping": map[string]any{"channel-model": "real-model"}}}
+	result, err := svc.ForwardEmbeddings(context.Background(), c, account, body, "")
+	require.NoError(t, err)
+	require.Equal(t, "real-model", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "public-model", gjson.Get(rec.Body.String(), "model").String())
+	require.Equal(t, "channel-model", result.Model)
+	require.Equal(t, "real-model", result.BillingModel)
+	require.Equal(t, "real-model", result.UpstreamModel)
+	require.Equal(t, 7, result.Usage.InputTokens)
+}
+
+func TestForwardEmbeddingsHidesUpstreamModelInErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, upstreamBody := range []string{`{"error":{"message":"real-model rejected request","code":"real-model"}}`, `real-model rejected request`} {
+		t.Run(upstreamBody, func(t *testing.T) {
+			body := []byte(`{"model":"channel-model","input":"hello"}`)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewReader(body))
+			SetGatewayClientModel(c, "public-model")
+			upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(upstreamBody))}}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			account := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "sk-test", "model_mapping": map[string]any{"channel-model": "real-model"}}}
+			_, err := svc.ForwardEmbeddings(context.Background(), c, account, body, "")
+			require.Error(t, err)
+			require.Equal(t, http.StatusBadGateway, rec.Code)
+			require.NotContains(t, rec.Body.String(), "real-model")
+			require.Contains(t, rec.Body.String(), UpstreamModelLeakClientMessage)
+		})
+	}
+}
+
+func TestForwardEmbeddingsKeepsUnrelatedClientErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"public-model","input":"hello"}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewReader(body))
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"invalid input"}}`))}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "sk-test"}}
+	_, err := svc.ForwardEmbeddings(context.Background(), c, account, body, "")
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "invalid input", gjson.Get(rec.Body.String(), "error.message").String())
+}

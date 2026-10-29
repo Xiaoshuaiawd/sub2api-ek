@@ -135,11 +135,68 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 		}()
 	}
-	writePendingString := func(value string) (int, error) {
+	rawWritePendingString := func(value string) (int, error) {
 		if firstOutputStage != nil && !firstOutputStage.closed {
 			return firstOutputStage.WriteString(value)
 		}
 		return bufferedWriter.WriteString(value)
+	}
+	// Only transform client-facing events; upstream parsing, failover and usage
+	// accounting continue to see the original data. Keep at most one pending
+	// text event so numbers split across SSE events can be replaced.
+	var juiceTransformer *JuiceSSETransformer
+	if juice := GetJuiceResolvedValue(c); juice.OK {
+		juiceTransformer = NewJuiceSSETransformer(JuiceStreamKindResponses, juice.Value)
+	}
+	var juicePending string
+	juiceVisibleOutput := false
+	writeJuiceLines := func(lines []string) error {
+		if len(lines) == 0 {
+			return nil
+		}
+		for _, line := range lines {
+			if data, ok := extractOpenAISSEDataLine(line); ok && gjson.Get(data, "type").String() == "response.output_text.delta" && gjson.Get(data, "delta").String() != "" {
+				juiceVisibleOutput = true
+			}
+		}
+		_, err := rawWritePendingString(juiceSSELinesToString(lines))
+		return err
+	}
+	writePendingString := func(value string) (int, error) {
+		if juiceTransformer == nil {
+			return rawWritePendingString(value)
+		}
+		juicePending += value
+		for {
+			end := strings.Index(juicePending, "\n\n")
+			if end < 0 {
+				break
+			}
+			frame := juicePending[:end+2]
+			juicePending = juicePending[end+2:]
+			if strings.TrimSpace(frame) == ":" {
+				if _, err := rawWritePendingString(frame); err != nil {
+					return 0, err
+				}
+				continue
+			}
+			if err := writeJuiceLines(juiceTransformer.TransformEvent(juiceSSEStringToLines(frame))); err != nil {
+				return 0, err
+			}
+		}
+		return len(value), nil
+	}
+	flushJuice := func() error {
+		if juiceTransformer == nil {
+			return nil
+		}
+		if juicePending != "" {
+			if err := writeJuiceLines(juiceTransformer.TransformEvent(juiceSSEStringToLines(juicePending))); err != nil {
+				return err
+			}
+			juicePending = ""
+		}
+		return writeJuiceLines(juiceTransformer.Flush())
 	}
 	pendingBytes := func() int64 {
 		if firstOutputStage != nil && !firstOutputStage.closed {
@@ -298,6 +355,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			observeOpenAIHTTPProgress(ctx)
 		}
 		shouldFlush := eventShouldFlush || (queueDrained && clientOutputStarted)
+		// A Juice text event can be held until its number is complete. Do not
+		// commit attempt-local headers while no transformed output is available:
+		// a subsequent upstream failure must still be able to fail over safely.
+		if juiceTransformer != nil && juiceTransformer.PendingTextRunes() > 0 && !juiceVisibleOutput {
+			shouldFlush = false
+		}
 		eventInProgress = false
 		if !clientDisconnected {
 			if completedProgressEvent {
@@ -389,6 +452,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		lastDownstreamWriteAt = time.Now()
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
+		if !clientDisconnected {
+			if err := flushJuice(); err != nil {
+				handlePendingWriteError(err)
+			}
+		}
 		if stageFirstOutput && eventInProgress {
 			// EOF dispatches the final SSE event even without a trailing blank line.
 			completeGuardedEvent(true)
@@ -399,7 +467,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		if codexFailureTerminal && sawBareError && !sawResponseFailed && !clientDisconnected {
 			applyAttemptResponseHeaders()
-			if _, err := writePendingString(buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtStamper.Value(), bareErrorPayload, failedMessage)); err != nil {
+			clientPayload := sanitizeClientOpenAIStreamError(c, bareErrorPayload, "error")
+			clientMessage := safeUpstreamStreamErrorMessage(c, failedMessage)
+			if _, err := writePendingString(buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtStamper.Value(), clientPayload, clientMessage)); err != nil {
 				handlePendingWriteError(err)
 			} else {
 				failureDelivered = true
@@ -648,12 +718,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 							// 命中透传规则也要记录 ops 上游错误事件（对齐 CC/Messages 与
 							// antigravity 先例），否则透传命中的 failed 在监控中不可见。
 							s.recordOpenAIStreamUpstreamError(c, account, false, upstreamRequestID, "http_error", dataBytes, failedMessage)
+							clientStatus, clientType, clientMessage := safeUpstreamStreamPassthroughError(c, status, errType, errMsg)
 							MarkResponseCommitted(c)
 							c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-							c.JSON(status, gin.H{
+							c.JSON(clientStatus, gin.H{
 								"error": gin.H{
-									"type":    errType,
-									"message": errMsg,
+									"type":    clientType,
+									"message": clientMessage,
 								},
 							})
 							streamEarlyErr = fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
@@ -726,6 +797,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				dataBytes = stampedData
 				data = string(stampedData)
 				line = "data: " + data
+			}
+			// Sanitize only the downstream copy after classification and accounting.
+			if eventType == "error" || eventType == "response.failed" || eventType == "response.incomplete" {
+				if clientData := sanitizeClientOpenAIStreamError(c, dataBytes, eventType); !bytes.Equal(clientData, dataBytes) {
+					line = "data: " + string(clientData)
+				}
 			}
 			// Replace model in response if needed.
 			if needModelReplace {
@@ -836,6 +913,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				return
 			}
 			shouldFlush = eventShouldFlush || (queueDrained && clientOutputStarted)
+			if juiceTransformer != nil && juiceTransformer.PendingTextRunes() > 0 && !juiceVisibleOutput {
+				shouldFlush = false
+			}
 			eventShouldFlush = false
 			if failureDelivered {
 				terminalFailurePending = false
@@ -1150,6 +1230,25 @@ func openAICompatPayloadWithEventType(payload, eventType string) string {
 		return payload
 	}
 	return patched
+}
+
+// Keep the raw upstream event for classification and diagnostics.
+func sanitizeClientOpenAIStreamError(c *gin.Context, data []byte, eventType string) []byte {
+	return SanitizeUpstreamErrorEvent(c, data, eventType)
+}
+
+func safeUpstreamStreamErrorMessage(c *gin.Context, message string) string {
+	if UpstreamErrorMessageLeaksModelForRequest(c, message) {
+		return UpstreamModelLeakClientMessage
+	}
+	return message
+}
+
+func safeUpstreamStreamPassthroughError(c *gin.Context, status int, errType, message string) (int, string, string) {
+	if UpstreamErrorMessageLeaksModelForRequest(c, message) || UpstreamErrorMessageLeaksModelForRequest(c, errType) {
+		return UpstreamModelLeakClientError()
+	}
+	return status, errType, message
 }
 
 func effectiveOpenAISSEEventType(payload []byte, eventType string) string {
@@ -1737,6 +1836,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	}
 	body = restoreCodexToolNamesFromContext(c, body)
 	body = ensureOpenAIResponseObjectCreatedAt(body)
+	if juice := GetJuiceResolvedValue(c); juice.OK {
+		body = TransformResponsesBody(body, juice.Value)
+	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	// Codex 协议要求 /responses/compact JSON 响应携带 x-codex-turn-state
 	// （codex-api/src/endpoint/compact.rs 从响应头捕获），显式回传。
@@ -1852,6 +1954,14 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		body = []byte(bodyText)
 	}
 
+	if juice := GetJuiceResolvedValue(c); juice.OK {
+		if ok {
+			body = TransformResponsesBody(body, juice.Value)
+		} else {
+			lines := strings.Split(string(body), "\n")
+			body = []byte(strings.Join(TransformJuiceSSELines(lines, juice.Value, TransformResponsesStreamChunks), "\n"))
+		}
+	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, usage, terminalType, false)
 	s.relayOpenAICodexTurnState(c, account, resp.Header)

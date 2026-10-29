@@ -1774,16 +1774,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		needModelReplace := false
 		clientDisconnected := false
 		mappedModel := ""
-		var mappedModelBytes []byte
 		if originalModel != "" {
 			mappedModel = strings.TrimSpace(gjson.GetBytes(payload, "model").String())
 			if mappedModel == "" {
 				mappedModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
 			}
 			needModelReplace = mappedModel != "" && mappedModel != originalModel
-			if needModelReplace {
-				mappedModelBytes = []byte(mappedModel)
-			}
 		}
 		for {
 			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
@@ -1941,7 +1937,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			imageCounter.AddSSEData(upstreamMessage)
 
 			if !clientDisconnected {
-				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
+				if needModelReplace && openAIWSEventMayContainModel(eventType) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
 				}
 				if openAIWSEventMayContainToolCalls(eventType) && openAIWSMessageLikelyContainsToolCalls(upstreamMessage) {
@@ -1961,7 +1957,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				// markOpenAIWSClientVisibleFailure 与 handleOpenAIWSTerminalTransientFailure
 				// 仍要按未改写的原始 payload 判定账号状态，这正是
 				// sanitizeOpenAICapacityShedErrorCodeForClient 注释里写明的前提。
-				clientMessage := upstreamMessage
+				clientMessage := SanitizeUpstreamErrorEvent(c, upstreamMessage, eventType)
 				if eventType == "error" || eventType == "response.failed" {
 					if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 						clientMessage = rewritten

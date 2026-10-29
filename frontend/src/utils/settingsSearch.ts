@@ -1,6 +1,6 @@
 import type { SearchNavItem } from '@/utils/featureSearch'
 
-export const SETTINGS_TABS = ['general', 'agreement', 'features', 'security', 'users', 'gateway', 'payment', 'email', 'backup'] as const
+export const SETTINGS_TABS = ['general', 'agreement', 'features', 'security', 'users', 'gateway', 'payment', 'email', 'backup', 'juice'] as const
 export type SettingsTab = typeof SETTINGS_TABS[number]
 
 interface SettingsSection {
@@ -18,6 +18,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { tab: 'gateway', id: 'overload-cooldown', titleKey: 'admin.settings.overloadCooldown.title' },
   { tab: 'gateway', id: 'rate-limit429cooldown', titleKey: 'admin.settings.rateLimit429Cooldown.title' },
   { tab: 'gateway', id: 'stream-timeout', titleKey: 'admin.settings.streamTimeout.title' },
+  { tab: 'juice', id: 'juice-fixer', titleKey: 'admin.settings.juiceFixer.title' },
   { tab: 'gateway', id: 'rectifier', titleKey: 'admin.settings.rectifier.title' },
   { tab: 'gateway', id: 'beta-policy', titleKey: 'admin.settings.betaPolicy.title' },
   { tab: 'gateway', id: 'openai-fast-policy', titleKey: 'admin.settings.openaiFastPolicy.title' },

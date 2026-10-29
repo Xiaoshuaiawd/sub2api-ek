@@ -72,6 +72,8 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	}
 
 	// Extract model and stream
+	service.SetJuiceContext(c, service.BuildJuiceContext(body))
+
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || modelResult.String() == "" {
 		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
@@ -80,6 +82,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	reqModel := modelResult.String()
 	bindRequestedReasoningEffort(c, body, reqModel)
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
+	service.SetGatewayClientModel(c, clientRequestedModel(c, reqModel))
 	if !compositeTargetPlatformResolved(c, apiKey, reqModel) {
 		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by composite groups")
 		return

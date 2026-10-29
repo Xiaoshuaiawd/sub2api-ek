@@ -754,6 +754,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	service.SetJuiceContext(c, service.BuildJuiceContext(body))
+
 	// 使用 gjson 只读提取字段做校验，避免完整 Unmarshal
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || modelResult.String() == "" {
@@ -1126,6 +1128,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
+			if channelMapping.Mapped {
+				return h.gatewayService.ForwardWithOriginalModel(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, attemptBody, reqModel)
+			}
 			return h.gatewayService.Forward(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, attemptBody)
 		}()
 		if retryOpenAIInitialAdmission(c, err, result, forwardBody, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
@@ -4282,6 +4287,11 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 			msg := service.ExtractUpstreamErrorMessage(responseBody)
 			if !rule.PassthroughBody && rule.CustomMessage != nil {
 				msg = *rule.CustomMessage
+			}
+
+			if service.UpstreamErrorMessageLeaksModelForRequest(c, msg) {
+				leakStatus, _, leakMsg := service.UpstreamModelLeakClientError()
+				respCode, msg = leakStatus, leakMsg
 			}
 
 			if rule.SkipMonitoring {

@@ -634,7 +634,11 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		if contentType == "" {
 			contentType = "application/json"
 		}
-		c.Data(resp.StatusCode, contentType, body)
+		if UpstreamErrorMessageLeaksModelForRequest(c, string(body)) {
+			writeUpstreamModelLeakError(c)
+		} else {
+			c.Data(resp.StatusCode, contentType, body)
+		}
 		if account != nil && account.IsGrok() {
 			return nil, &grokContentPolicyError{message: cyberMsg}
 		}
@@ -654,12 +658,13 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			c, account.Platform, resp.StatusCode, body,
 			http.StatusForbidden, "invalid_request_error", clientMsg,
 		)
-		c.JSON(status, gin.H{
-			"error": gin.H{
-				"type":    errType,
-				"message": errMsg,
-			},
-		})
+		if UpstreamErrorMessageLeaksModelForRequest(c, errMsg) {
+			writeUpstreamModelLeakError(c)
+		} else {
+			c.JSON(status, gin.H{
+				"error": gin.H{"type": errType, "message": errMsg},
+			})
+		}
 		return nil, &grokContentPolicyError{message: clientMsg}
 	}
 
@@ -722,6 +727,14 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
+		// 透传体/自定义文案里若回显了真实模型名，改为统一错误，避免暴露映射关系。
+		if UpstreamErrorMessageLeaksModelForRequest(c, errMsg) {
+			writeUpstreamModelLeakError(c)
+			if upstreamMsg == "" {
+				upstreamMsg = errMsg
+			}
+			return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
+		}
 		MarkResponseCommitted(c)
 		c.JSON(status, gin.H{
 			"error": gin.H{
@@ -846,6 +859,11 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		errMsg = "Upstream request failed"
 	}
 	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
+		// context-window 文案对客户端可操作，但若回显了真实模型名仍需隐藏。
+		if UpstreamErrorMessageLeaksModelForRequest(c, upstreamMsg) {
+			writeUpstreamModelLeakError(c)
+			return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+		}
 		errMsg = upstreamMsg
 	}
 
@@ -885,7 +903,11 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		message := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(body))
 		setOpsUpstreamError(c, resp.StatusCode, message, truncateString(string(body), 2048))
 		MarkResponseCommitted(c)
-		writeError(c, resp.StatusCode, "permission_error", message)
+		if UpstreamErrorMessageLeaksModelForRequest(c, message) {
+			writeError(c, UpstreamModelLeakClientStatus, UpstreamModelLeakClientType, UpstreamModelLeakClientMessage)
+		} else {
+			writeError(c, resp.StatusCode, "permission_error", message)
+		}
 		return nil, fmt.Errorf("upstream response failed: %s", message)
 	}
 
@@ -905,7 +927,11 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		if clientMsg == "" {
 			clientMsg = "Request blocked by upstream cyber-security policy"
 		}
-		writeError(c, resp.StatusCode, "invalid_request_error", clientMsg)
+		if UpstreamErrorMessageLeaksModelForRequest(c, clientMsg) {
+			writeError(c, UpstreamModelLeakClientStatus, UpstreamModelLeakClientType, UpstreamModelLeakClientMessage)
+		} else {
+			writeError(c, resp.StatusCode, "invalid_request_error", clientMsg)
+		}
 		if account != nil && account.IsGrok() {
 			return nil, &grokContentPolicyError{message: clientMsg}
 		}
@@ -922,7 +948,11 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			c, account.Platform, resp.StatusCode, body,
 			http.StatusForbidden, "invalid_request_error", clientMsg,
 		)
-		writeError(c, status, errType, errMsg)
+		if UpstreamErrorMessageLeaksModelForRequest(c, errMsg) {
+			writeError(c, UpstreamModelLeakClientStatus, UpstreamModelLeakClientType, UpstreamModelLeakClientMessage)
+		} else {
+			writeError(c, status, errType, errMsg)
+		}
 		return nil, &grokContentPolicyError{message: clientMsg}
 	}
 
@@ -951,7 +981,12 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		http.StatusBadGateway, "api_error", "Upstream request failed",
 	); matched {
 		MarkResponseCommitted(c)
-		writeError(c, status, errType, errMsg)
+		// 透传文案里若回显了真实模型名（渠道/账号映射后的模型），改为统一错误。
+		if UpstreamErrorMessageLeaksModelForRequest(c, errMsg) {
+			writeError(c, UpstreamModelLeakClientStatus, UpstreamModelLeakClientType, UpstreamModelLeakClientMessage)
+		} else {
+			writeError(c, status, errType, errMsg)
+		}
 		if upstreamMsg == "" {
 			upstreamMsg = errMsg
 		}
@@ -1029,6 +1064,13 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		errType = "rate_limit_error"
 	case resp.StatusCode >= 500:
 		errType = "api_error"
+	}
+
+	// 上游把映射后的真实模型名回显在错误里时不能透传给客户端（会暴露映射关系）。
+	// 账号状态/限流处理已在上面完成，原始错误也已记入 ops 日志，这里只改下发内容。
+	if UpstreamErrorMessageLeaksModelForRequest(c, upstreamMsg) {
+		writeError(c, UpstreamModelLeakClientStatus, UpstreamModelLeakClientType, UpstreamModelLeakClientMessage)
+		return nil, fmt.Errorf("upstream error: %d %s", resp.StatusCode, upstreamMsg)
 	}
 
 	writeError(c, resp.StatusCode, errType, upstreamMsg)

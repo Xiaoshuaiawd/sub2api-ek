@@ -85,6 +85,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	requestModel := parsed.Model
 	ensureCompositeTargetPlatform(c, apiKey, requestModel)
 	clientRequestModel := clientRequestedModel(c, requestModel)
+	service.SetGatewayClientModel(c, clientRequestModel)
 	routingModel := requestModel
 	if resolvedModel, ok := service.ResolvedUpstreamModelFromContext(c.Request.Context()); ok {
 		routingModel = resolvedModel

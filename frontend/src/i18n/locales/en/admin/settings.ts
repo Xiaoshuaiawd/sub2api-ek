@@ -15,6 +15,21 @@ export default {
         email: 'Email',
         backup: 'Backup',
         payment: 'Payment',
+        juice: 'Juice Fixer',
+      },
+      juiceFixer: {
+        title: 'Juice Value Fixer',
+        description: 'When a request mentions Juice, replace the response value using rules matched by model and reasoning effort.',
+        enabled: 'Enable Juice value fixing',
+        model: 'Model',
+        modelPlaceholder: 'e.g. gpt-5.6-sol',
+        reasoningEffort: 'Reasoning effort',
+        reasoningEffortPlaceholder: 'empty = any effort',
+        value: 'Value',
+        addRule: 'Add rule',
+        removeRule: 'Remove rule',
+        emptyRules: 'No rules configured. Add a rule to enable Juice value matching.',
+        saveSuccess: 'Juice fixer settings saved',
       },
       features: {
         excelBpsImages: {

@@ -453,6 +453,18 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
+		// 透传文案里若回显了真实模型名，改为统一错误，避免暴露映射关系。
+		if UpstreamErrorMessageLeaksModelForRequest(c, errMsg) {
+			writeUpstreamModelLeakAnthropicError(c)
+			summary := upstreamMsg
+			if summary == "" {
+				summary = errMsg
+			}
+			if summary == "" {
+				return nil, fmt.Errorf("upstream error: %d (passthrough rule matched)", resp.StatusCode)
+			}
+			return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, summary)
+		}
 		c.JSON(status, gin.H{
 			"type": "error",
 			"error": gin.H{
@@ -477,6 +489,16 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 
 	switch resp.StatusCode {
 	case 400:
+		// 400 原样回写上游 body 便于客户端定位；但若 body 回显了真实模型名
+		// （渠道/账号映射后的模型），改为统一错误，避免暴露映射关系。
+		if UpstreamErrorMessageLeaksModelForRequest(c, string(body)) {
+			writeUpstreamModelLeakAnthropicError(c)
+			summary := upstreamMsg
+			if summary == "" {
+				return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+			}
+			return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, summary)
+		}
 		c.Data(http.StatusBadRequest, "application/json", body)
 		summary := upstreamMsg
 		if summary == "" {
@@ -624,6 +646,18 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 		"upstream_error",
 		"Upstream request failed after retries",
 	); matched {
+		// 透传文案里若回显了真实模型名，改为统一错误，避免暴露映射关系。
+		if UpstreamErrorMessageLeaksModelForRequest(c, errMsg) {
+			writeUpstreamModelLeakAnthropicError(c)
+			summary := upstreamMsg
+			if summary == "" {
+				summary = errMsg
+			}
+			if summary == "" {
+				return nil, fmt.Errorf("upstream error: %d (retries exhausted, passthrough rule matched)", resp.StatusCode)
+			}
+			return nil, fmt.Errorf("upstream error: %d (retries exhausted, passthrough rule matched) message=%s", resp.StatusCode, summary)
+		}
 		c.JSON(status, gin.H{
 			"type": "error",
 			"error": gin.H{
@@ -869,7 +903,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 		flusher.Flush()
 	}
 
-	needModelReplace := originalModel != mappedModel
+	clientModel := gatewayClientResponseModel(c, originalModel)
+	needModelReplace := clientModel != mappedModel
 	sawTerminalEvent := false
 	useNoopDeltaKeepalive := c != nil && c.Request != nil && shouldUseClaudeCodeNoopDeltaKeepalive(c.GetHeader("User-Agent"))
 	noopDeltaKeepaliveBlockIndex := -1
@@ -999,8 +1034,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 		if needModelReplace {
 			if msg, ok := event["message"].(map[string]any); ok {
-				if model, ok := msg["model"].(string); ok && model == mappedModel {
-					msg["model"] = originalModel
+				if model, ok := msg["model"].(string); ok && (model == mappedModel || clientModel != originalModel) {
+					msg["model"] = clientModel
 					eventChanged = true
 				}
 			}
@@ -1488,8 +1523,13 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	}
 
 	// 如果有模型映射，替换响应中的model字段
-	if originalModel != mappedModel {
-		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
+	clientModel := gatewayClientResponseModel(c, originalModel)
+	if clientModel != originalModel && gjson.GetBytes(body, "model").Type == gjson.String {
+		if rewritten, err := sjson.SetBytes(body, "model", clientModel); err == nil {
+			body = rewritten
+		}
+	} else if clientModel != mappedModel {
+		body = s.replaceModelInResponseBody(body, mappedModel, clientModel)
 	}
 
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

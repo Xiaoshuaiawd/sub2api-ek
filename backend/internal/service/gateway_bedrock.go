@@ -72,6 +72,7 @@ func (s *GatewayService) forwardBedrock(
 	if !ok {
 		return nil, fmt.Errorf("unsupported bedrock model: %s", reqModel)
 	}
+	SetOpsUpstreamModel(c, mappedModel)
 	if mappedModel != reqModel {
 		logger.LegacyPrintf("service.gateway", "[Bedrock] Model mapping: %s -> %s (account: %s)", reqModel, mappedModel, account.Name)
 	}
@@ -405,6 +406,7 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	if v := resp.Header.Get("x-amzn-requestid"); v != "" {
 		c.Header("x-request-id", v)
 	}
+	body = rewriteGatewayClientModel(c, body, "model")
 	c.Data(resp.StatusCode, "application/json", body)
 	return usage, nil
 }
