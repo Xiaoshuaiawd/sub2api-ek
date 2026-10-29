@@ -197,6 +197,22 @@ func NewBatchImagePublicService(repo BatchImageRepository, accountRepo AccountRe
 	}
 }
 
+var ErrBatchImageMixedIntelligenceRouting = infraerrors.New(400, "BATCH_IMAGE_MIXED_ROUTING", "mixed intelligence test and ordinary prompts are not supported in one batch")
+var ErrBatchImageCancelIntelligenceAccount = infraerrors.New(503, "BATCH_IMAGE_CANCEL_ACCOUNT_UNAVAILABLE", "the account for this batch is unavailable for ordinary requests")
+
+func batchImageIntelligenceRouting(items []BatchImageSubmitItem) (bool, error) {
+	var required bool
+	for i, item := range items {
+		body, _ := json.Marshal(map[string]string{"prompt": item.Prompt})
+		current := IsIntelligenceTestRequest(body)
+		if i > 0 && current != required {
+			return false, ErrBatchImageMixedIntelligenceRouting
+		}
+		required = current
+	}
+	return required, nil
+}
+
 func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOwner, req BatchImageSubmitRequest, idempotencyKey string) (*BatchImagePublicBatch, error) {
 	if !s.enabled() {
 		return nil, ErrBatchImageDisabled
@@ -205,6 +221,11 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err != nil {
 		return nil, err
 	}
+	required, err := batchImageIntelligenceRouting(normalized.Items)
+	if err != nil {
+		return nil, err
+	}
+	ctx = WithIntelligenceRoutingRequired(ctx, required)
 	// 与 ListModels 使用同一鉴权谓词（AllowBatchImageGeneration + Platform==Gemini），
 	// 避免两个入口校验口径不一致留下防御纵深缺口。
 	if err := s.ensureGroupAllowsBatchImage(ctx, owner.GroupID); err != nil {
@@ -350,7 +371,13 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	hbDone := make(chan struct{})
 	go s.runSubmitHeartbeat(hbCtx, job.BatchID, hbDone)
-	providerJob, err := provider.Submit(ctx, job, account, input)
+	var providerJob *BatchProviderJob
+	latestAccount, accountErr := s.AccountRepo.GetByID(ctx, account.ID)
+	if accountErr != nil || !intelligenceRoutingAllowsAccount(ctx, latestAccount) {
+		err = ErrBatchImageNoAccountAvailable
+	} else {
+		providerJob, err = provider.Submit(ctx, job, latestAccount, input)
+	}
 	hbCancel()
 	<-hbDone
 	if err != nil {
@@ -731,6 +758,9 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		if err != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
+		if account == nil || IsIntelligenceRoutingAccount(account) {
+			return nil, ErrBatchImageCancelIntelligenceAccount
+		}
 		if err := provider.Cancel(ctx, job, account); err != nil {
 			return nil, ErrBatchImageCancelFailed
 		}
@@ -953,7 +983,7 @@ func (s *BatchImagePublicService) selectProviderAndAccount(ctx context.Context, 
 		})
 		for i := range accounts {
 			account := accounts[i]
-			if !account.IsSchedulable() || !account.IsModelSupportedInGroup(owner.GroupID, model) {
+			if !intelligenceRoutingAllowsAccount(ctx, &account) || !account.IsSchedulable() || !account.IsModelSupportedInGroup(owner.GroupID, model) {
 				continue
 			}
 			if provider.SupportsAccount(&account) {

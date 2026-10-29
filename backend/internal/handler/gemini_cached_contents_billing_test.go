@@ -965,3 +965,27 @@ func TestGeminiCachedContentsCreateRecordsIntelligenceRouting(t *testing.T) {
 		require.True(t, record.IntelligenceRouting)
 	}
 }
+
+func TestGeminiCachedContentsManagementRejectsDedicatedAccounts(t *testing.T) {
+	for _, method := range []string{http.MethodPatch, http.MethodDelete} {
+		for _, testCache := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/test-cache=%t", method, testCache), func(t *testing.T) {
+				env := newCachedBillingEnv(t, 1000, 900)
+				env.seed(time.Now().Add(time.Hour))
+				env.repo.records["abc"].IntelligenceRouting = testCache
+				env.accounts[900].Extra = map[string]any{service.IntelligenceRoutingExtraKey: true}
+				var rec *httptest.ResponseRecorder
+				if method == http.MethodPatch {
+					rec = env.patch()
+				} else {
+					rec = env.serve(http.MethodDelete, "/v1beta/cachedContents/abc", "", gin.Params{{Key: "cacheID", Value: "abc"}}, env.h.GeminiCachedContentsDelete)
+				}
+				require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+				require.Zero(t, env.upstream.methodCalls(method))
+				require.Empty(t, env.repo.deleted)
+				require.Empty(t, env.repo.mutations)
+				require.Empty(t, env.usage.totals())
+			})
+		}
+	}
+}

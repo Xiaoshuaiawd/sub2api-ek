@@ -3625,7 +3625,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if cyberBlockedThisConn && !h.cyberPolicyLogOnly(c, apiKey) {
 					return newOpenAIWSLocalAdmissionCloseError(cyberSessionBlockedClientMsg)
 				}
-				turnBillingCtx := turnBillingAPIKeys.begin(ctx, h.apiKeyService, turn, apiKey)
+				turnBillingCtx := turnBillingAPIKeys.begin(service.WithIntelligenceRoutingRequired(ctx, turnNeedsIntelligence.Load()), h.apiKeyService, turn, apiKey)
 				// MapRequestModel 已在当前 turn 的 payload 解析阶段完成。这里
 				// 再用最终出站模型做一次权威资格终检，确保账号被禁用、移组、
 				// 到期或该模型票据失效后，不会先抢槽再把请求交给旧账号。
@@ -3639,14 +3639,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					if outboundModel == "" {
 						outboundModel = strings.TrimSpace(wsForwardModel)
 					}
-					turnAdmissionCtx := ctx
-					if turnNeedsIntelligence.Load() {
-						turnAdmissionCtx = service.WithIntelligenceRouting(turnAdmissionCtx)
-					}
-					latest, admissionErr := h.gatewayService.AdmitOpenAITurn(turnAdmissionCtx, c, account, outboundModel)
-					if admissionErr == nil && turnNeedsIntelligence.Load() && !service.IsIntelligenceRoutingAccount(latest) {
-						return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Intelligence test requires a qualified account; reconnect to reschedule", nil)
-					}
+					_, admissionErr := h.gatewayService.AdmitOpenAITurn(turnBillingCtx, c, account, outboundModel)
 					if admissionErr != nil {
 						reqLog.Info("openai.websocket_turn_admission_rejected",
 							zap.Int("turn", turn),

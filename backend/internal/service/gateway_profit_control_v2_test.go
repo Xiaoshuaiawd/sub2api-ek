@@ -367,7 +367,7 @@ func TestGatewayProfitControlTerminalRefreshFallsBackFromCacheToDatabase(t *test
 	require.Equal(t, openAIProfitFilterReasonThreshold, reason)
 }
 
-func TestGatewayProfitControlTerminalRefreshFailureFallsBackToSelectedObject(t *testing.T) {
+func TestGatewayProfitControlTerminalRefreshFailureRejectsStaleAccount(t *testing.T) {
 	selected := gatewayProfitTestAccount(151, PlatformAntigravity, 0.2, 1)
 	snapshot := NewSchedulerSnapshotService(
 		&gatewayProfitSnapshotCache{err: errors.New("cache unavailable")},
@@ -383,9 +383,9 @@ func TestGatewayProfitControlTerminalRefreshFailureFallsBackToSelectedObject(t *
 	})
 
 	latest, vetoed, reason := profitControlVetoLatest(ctx, &selected, snapshot)
-	require.Same(t, &selected, latest)
-	require.False(t, vetoed)
-	require.Empty(t, reason)
+	require.Nil(t, latest)
+	require.True(t, vetoed)
+	require.Equal(t, "intelligence_routing_state_unavailable", reason)
 }
 
 // 选号结果携带门：门安装在调度栈局部 ctx 上，handler 必须经
