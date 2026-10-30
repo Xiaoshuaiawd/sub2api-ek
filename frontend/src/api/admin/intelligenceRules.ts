@@ -11,6 +11,15 @@ export interface IntelligenceBuiltinRule {
   name: string
   description: string
   enabled: boolean
+  condition?: IntelligenceCondition
+  default_condition?: IntelligenceCondition
+}
+export interface IntelligenceCondition {
+  op: 'all' | 'any' | 'not' | 'contains_any' | 'regex'
+  children?: IntelligenceCondition[]
+  values?: string[]
+  pattern?: string
+  text?: 'plain' | 'qin' | 'visual'
 }
 export interface IntelligenceBuiltinExtension {
   type: 'contains' | 'regex'
@@ -21,6 +30,7 @@ export interface IntelligenceRulesConfig {
   builtin_disabled_ids?: string[]
   builtins?: IntelligenceBuiltinRule[]
   builtin_extensions?: Record<string, IntelligenceBuiltinExtension[]>
+  builtin_conditions?: Record<string, IntelligenceCondition>
 }
 
 export async function getRules(): Promise<IntelligenceRulesConfig> {

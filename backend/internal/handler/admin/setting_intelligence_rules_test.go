@@ -65,3 +65,32 @@ func TestIntelligenceRulesHandler(t *testing.T) {
 	require.Equal(t, 400, w.Code)
 	require.Equal(t, before, repo.raw)
 }
+
+func TestIntelligenceRulesHandlerBuiltinConditions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &intelligenceRulesHandlerRepo{}
+	h := &SettingHandler{settingService: service.NewSettingService(repo, nil)}
+	r := gin.New()
+	r.GET("/rules", h.GetIntelligenceRules)
+	r.PUT("/rules", h.UpdateIntelligenceRules)
+	call := func(method, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/rules", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		return w
+	}
+	w := call(http.MethodGet, "")
+	require.Equal(t, 200, w.Code)
+	require.Contains(t, w.Body.String(), `"default_condition"`)
+	require.Contains(t, w.Body.String(), `"condition"`)
+	w = call(http.MethodPut, `{"rules":[],"builtin_conditions":{"builtin.candy_named":{"op":"contains_any","text":"plain","values":["超级糖"]}}}`)
+	require.Equal(t, 200, w.Code)
+	require.Contains(t, w.Body.String(), "超级糖")
+	w = call(http.MethodPut, `{"rules":[]}`)
+	require.Equal(t, 200, w.Code)
+	require.Contains(t, w.Body.String(), "超级糖", "old client saves must preserve edited default rules")
+	w = call(http.MethodPut, `{"rules":[],"builtin_conditions":{}}`)
+	require.Equal(t, 200, w.Code)
+	require.NotContains(t, w.Body.String(), "超级糖")
+}
