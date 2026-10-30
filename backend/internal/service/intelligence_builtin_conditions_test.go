@@ -8,7 +8,7 @@ import (
 )
 
 func TestDefaultBuiltinConditionTreesMatchNativePredicates(t *testing.T) {
-	corpus := []string{"", "hello", "糖果测试", "candy test", "鹈鹕骑自行车", "秦始皇开坦克 SVG", "知识库截止到哪一年 最新 iphone 型号", "modeltrace 指纹", "选择300个1到999的整数不要使用工具", "用 SVG 做 3D 海底城市", "create svg loading spinner", "DRAW ＳＶＧ 3Ｄ", "用s\u200bv\u200bg画小猫跳舞"}
+	corpus := []string{"", "hello", "糖果测试", "candy test", "鹈鹕骑自行车", "秦始皇开坦克 SVG", "知识库截止到哪一年 最新 iphone 型号", "modeltrace 指纹", "选择300个1到999的整数不要使用工具", "用 SVG 做 3D 海底城市", "create svg loading spinner", "DRAW ＳＶＧ 3Ｄ", "用s\u200bv\u200bg画小猫跳舞", "do you know Thibault Sottiaux on X?", "不使用工具，100 欧姆电阻串并联得到 67 欧姆，最少多少个？", "using 100-ohm resistors, how many to make 67 ohms?"}
 	rng := rand.New(rand.NewSource(42))
 	words := []string{"糖果", "形状", "至少", "modeltrace", "指纹", "random", "300", "integer", "without", "code", "qin", "shi", "huang", "tank", "鹈鹕", "自行车", "svg", "html", "2d", "draw", "cat", "button", "animation", ""}
 	for i := 0; i < 500; i++ {

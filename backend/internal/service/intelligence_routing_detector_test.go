@@ -10,7 +10,7 @@ import (
 
 func TestIntelligenceBuiltinMatches(t *testing.T) {
 	definitions := IntelligenceBuiltinRules()
-	require.Len(t, definitions, 8)
+	require.Len(t, definitions, 10)
 	ids := map[string]bool{}
 	for _, def := range definitions {
 		require.NotEmpty(t, def.ID)
@@ -44,6 +44,8 @@ func TestIntelligenceBuiltinMatchAttribution(t *testing.T) {
 		{"ModelTrace 指纹", "builtin.modeltrace_named"},
 		{"不要用工具，在 1 到 1000 之间生成 300 个整数", "builtin.modeltrace_structure"},
 		{"用 SVG 绘制三维海底城市", "builtin.svg_scene"},
+		{"don't search the internet, do you know Thibault Sottiaux on X. answer yes or no", "builtin.thibault_sottiaux"},
+		{"不使用外部工具或者代码，计算如下问题：只有许多 100 欧姆的电阻，如何通过串联和并联，获取 67 欧姆电阻？最少需要多少个？", "builtin.resistor_100_to_67"},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			matches := MatchIntelligenceBuiltins(tc.text)
@@ -79,6 +81,21 @@ func TestIsIntelligenceTestRequest(t *testing.T) {
 	}{
 		{"candy built in", `{"messages":[{"role":"user","content":"袋子里有苹果味和桃子味糖果，有圆形和星形，最少摸多少颗才能保证不同形状？"}]}`, true},
 		{"candy named", `{"input":"来一道糖果测试"}`, true},
+		{"thibault exact", `{"input":"don't search the internet, do you know Thibault Sottiaux on X. answer yes or no"}`, true},
+		{"thibault variant", `{"input":"不要联网，你认识 Thibault\nSottiaux 吗？只回答是或否"}`, true},
+		{"thibault compact handle", `{"input":"听说过 @ThibaultSottiaux 吗？"}`, true},
+		{"thibault unrelated", `{"input":"请总结 Thibault Sottiaux 的一篇文章"}`, false},
+		{"resistor exact", `{"input":"不使用外部工具或者代码，计算如下问题：只有许多 100 欧姆的电阻，如何通过串联和并联，获取 67 欧姆电阻？最少需要多少个？"}`, true},
+		{"resistor english", `{"input":"Using 100-ohm resistors in series and parallel, what is the fewest number needed to make 67 ohms?"}`, true},
+		{"resistor unicode", `{"input":"１００Ω电阻串并联得到６７Ω，最少需要几个？"}`, true},
+		{"resistor traditional count", `{"input":"將100歐姆電阻組合得到67歐姆，要幾顆？"}`, true},
+		{"resistor english get", `{"input":"How many 100 ohm resistors are needed to get 67 ohms?"}`, true},
+		{"resistor r notation", `{"input":"用 100R 电阻串联和并联得到 67R，最少几颗？"}`, true},
+		{"resistor target is not get", `{"input":"compare 100 ohm and 67 ohm resistor, which has minimum resistance? target value"}`, false},
+		{"resistor wrong values", `{"input":"100 欧姆电阻通过串并联得到 68 欧姆，最少需要几个？"}`, false},
+		{"resistor wrong fractional values", `{"input":"100Ω 电阻组成 0.67Ω，最少几个？"}`, false},
+		{"resistor unrelated", `{"input":"解释 100 欧姆和 67 欧姆的电阻有什么不同"}`, false},
+		{"resistor in previous user turn", `{"messages":[{"role":"user","content":"100欧姆电阻串并联得到67欧姆，最少需要多少个？"},{"role":"assistant","content":"稍等"},{"role":"user","content":"你好"}]}`, false},
 		{"candy english", `{"input":"A bag has apple and peach candies of different shapes. What is the minimum number to draw to guarantee a matching pair?"}`, true},
 		{"pelican split content", `{"messages":[{"role":"user","content":[{"type":"text","text":"画一只鹈鹕"},{"type":"text","text":"骑着自行车的动画"}]}]}`, true},
 		{"pelican english", `{"contents":[{"role":"user","parts":[{"text":"Animate a PELICAN riding a bicycle"}]}]}`, true},

@@ -136,6 +136,25 @@ func TestBindIntelligenceRoutingCapturesOnlyMatches(t *testing.T) {
 	require.Equal(t, 503, recorder.Code)
 }
 
+func TestBindIntelligenceRoutingNewBenchmarksCapture(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &intelligenceCaptureRepo{}
+	settings := service.NewSettingService(intelligenceRulesRoutingRepo{}, nil)
+	settings.SetIntelligenceContextRepository(store)
+	for _, tc := range []struct{ body, id string }{
+		{`{"input":"don't search the internet, do you know Thibault Sottiaux on X. answer yes or no"}`, "builtin.thibault_sottiaux"},
+		{`{"input":"不使用外部工具或者代码，只有许多100欧姆的电阻，如何串联和并联获取67欧姆？最少需要多少个？"}`, "builtin.resistor_100_to_67"},
+	} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+		c.Set("api_key", &service.APIKey{ID: 7, UserID: 9})
+		require.True(t, bindIntelligenceRouting(c, []byte(tc.body), settings))
+		require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+		require.Equal(t, tc.body, string(store.stored[len(store.stored)-1].Body))
+		require.Equal(t, tc.id, store.stored[len(store.stored)-1].MatchedRules[0].ID)
+	}
+}
+
 func TestBindIntelligenceRoutingPreservesCompressedOriginal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := &intelligenceCaptureRepo{}

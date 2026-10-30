@@ -19,6 +19,11 @@ var intelligenceVisualMotionPattern = regexp.MustCompile(`\b(?:animat(?:e|es|ed|
 var intelligenceUIElementPattern = regexp.MustCompile(`\b(?:icons?|logos?|spinners?|loading|buttons?|charts?|graphs?|dashboards?|progress\s+bars?)\b`)
 var intelligenceNarrativePattern = regexp.MustCompile(`\b(?:cats?|dogs?|fox(?:es)?|pandas?|penguins?|flamingos?|horses?|robots?|astronauts?|animals?|characters?|people|person|emperor|dragons?|wizards?|beach|forest)\b`)
 var intelligenceVisualSceneTaskPattern = regexp.MustCompile(`(?:画|畫|绘|繪|制作|製作|生成|创作|創作|描绘|描繪|输出|輸出|\b(?:draw|illustrat(?:e|ing)|create|generate|render|make|return|output)\b).{0,80}(?:一只|一隻|一位|一名|一座|一辆|一輛|人物|角色|动物|動物|猫|貓|企鹅|企鵝|狐狸|熊猫|熊貓|机器人|機器人|宇航员|宇航員|\b(?:cats?|dogs?|fox(?:es)?|pandas?|penguins?|flamingos?|horses?|robots?|astronauts?|animals?|characters?|people|person|emperor|dragons?|wizards?|beach|forest|planets?)\b)`)
+var intelligenceThibaultName = regexp.MustCompile(`\bthibault[\s._-]*sottiaux\b`)
+var intelligencePersonQuestion = regexp.MustCompile(`\b(?:know|knows|heard|aware|familiar|recognize|recognise)\b`)
+var intelligenceHundredOhms = regexp.MustCompile(`(?:^|[^0-9.])(?:100(?:\.0+)?|一百|one\s+hundred)\s*[-‐‑–—]?\s*(?:欧姆|歐姆|欧|歐|ohms?|ω|r\b)`)
+var intelligenceSixtySevenOhms = regexp.MustCompile(`(?:^|[^0-9.])(?:67(?:\.0+)?|六十七|sixty[-\s]+seven)\s*[-‐‑–—]?\s*(?:欧姆|歐姆|欧|歐|ohms?|ω|r\b)`)
+var intelligenceResistorGet = regexp.MustCompile(`\bget\b`)
 
 type IntelligenceRuleMatch struct {
 	ID      string `json:"id"`
@@ -42,6 +47,8 @@ var intelligenceBuiltinRules = []IntelligenceBuiltinRule{
 	{ID: "builtin.modeltrace_named", Name: "ModelTrace 指纹名称", Description: "同时提及 ModelTrace 与指纹或测试"},
 	{ID: "builtin.modeltrace_structure", Name: "ModelTrace 随机整数题结构", Description: "满足数量、范围和不使用工具等条件的随机整数题"},
 	{ID: "builtin.svg_scene", Name: "SVG 视觉绘制题结构", Description: "SVG 及二维、三维、HTML、运动场景等绘制变体"},
+	{ID: "builtin.thibault_sottiaux", Name: "Thibault Sottiaux 认识与否", Description: "询问是否认识 Thibault Sottiaux 的中英文变体"},
+	{ID: "builtin.resistor_100_to_67", Name: "100 欧姆电阻组成 67 欧姆", Description: "使用 100 欧姆电阻组合得到 67 欧姆并求最少数量"},
 }
 
 func IntelligenceBuiltinRules() []IntelligenceBuiltinRule {
@@ -356,6 +363,16 @@ func intelligencePromptMatchIndexes(s string) []int {
 		modelTraceCount.MatchString(s) && intelligenceContainsAny(s, "禁止", "不要", "不使用", "不借助", "without", "no tool", "do not", "don't", "不得") &&
 		intelligenceContainsAny(s, "工具", "代码", "代碼", "随机", "隨機", "tool", "code", "random") {
 		matches = append(matches, 6)
+	}
+	text := normalizeIntelligenceVisualText(s)
+	if intelligenceThibaultName.MatchString(text) && (intelligencePersonQuestion.MatchString(text) || intelligenceContainsAny(text, "认识", "認識", "知道", "了解", "熟悉", "听过", "聽過", "听说过", "聽說過", "认得", "認得", "见过", "見過")) {
+		matches = append(matches, 8)
+	}
+	if intelligenceHundredOhms.MatchString(text) && intelligenceSixtySevenOhms.MatchString(text) &&
+		intelligenceContainsAny(text, "电阻", "電阻", "resistor", "resistance", "欧姆", "歐姆", "ohm", "ω") &&
+		intelligenceContainsAny(text, "最少", "最小", "至少", "几只", "幾隻", "几个", "幾個", "几颗", "幾顆", "几根", "幾根", "多少个", "多少個", "多少只", "多少隻", "多少颗", "多少顆", "最低", "minimum", "fewest", "least", "how many", "minimize", "minimise") &&
+		(intelligenceResistorGet.MatchString(text) || intelligenceContainsAny(text, "串联", "串聯", "并联", "並聯", "串并联", "串並聯", "组合", "組合", "组成", "組成", "获得", "獲得", "得到", "获取", "獲取", "构成", "構成", "实现", "實現", "等效", "凑出", "湊出", "合成", "series", "parallel", "combine", "build", "make", "construct", "obtain", "achieve", "equivalent", "yield", "produce", "reach")) {
+		matches = append(matches, 9)
 	}
 	return matches
 }

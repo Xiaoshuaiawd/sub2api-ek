@@ -76,10 +76,16 @@ func DefaultIntelligenceBuiltinConditions() map[string]IntelligenceCondition {
 	ui := condAny(rv(intelligenceUIElementPattern), v("图标", "圖標", "按钮", "按鈕", "加载", "載入", "进度条", "進度條", "图表", "圖表", "流程图", "流程圖"))
 	scene := condAny(rv(intelligenceNarrativePattern), rv(intelligenceRiderPattern), v("一只", "一隻", "一位", "一名", "一座", "一辆", "一輛", "人物", "角色", "动物", "動物", "猫", "貓", "企鹅", "企鵝", "狐狸", "熊猫", "熊貓", "火烈鸟", "火烈鳥", "海滩", "海灘", "森林", "沙滩", "沙灘", "机器人", "機器人", "宇航员", "宇航員"))
 	visual := condAll(svg, create, condAny(condAll(vehicle, rv(intelligenceRiderPattern)), dimension, v("html"), condAll(condAny(motion, rv(intelligenceVisualSceneTaskPattern)), condAny(condNot(ui), scene))))
+	thibault := condAll(rv(intelligenceThibaultName), condAny(rv(intelligencePersonQuestion), v("认识", "認識", "知道", "了解", "熟悉", "听过", "聽過", "听说过", "聽說過", "认得", "認得", "见过", "見過")))
+	resistors := condAll(rv(intelligenceHundredOhms), rv(intelligenceSixtySevenOhms),
+		v("电阻", "電阻", "resistor", "resistance", "欧姆", "歐姆", "ohm", "ω"),
+		v("最少", "最小", "至少", "几只", "幾隻", "几个", "幾個", "几颗", "幾顆", "几根", "幾根", "多少个", "多少個", "多少只", "多少隻", "多少颗", "多少顆", "最低", "minimum", "fewest", "least", "how many", "minimize", "minimise"),
+		condAny(rv(intelligenceResistorGet), v("串联", "串聯", "并联", "並聯", "串并联", "串並聯", "组合", "組合", "组成", "組成", "获得", "獲得", "得到", "获取", "獲取", "构成", "構成", "实现", "實現", "等效", "凑出", "湊出", "合成", "series", "parallel", "combine", "build", "make", "construct", "obtain", "achieve", "equivalent", "yield", "produce", "reach")))
 	return map[string]IntelligenceCondition{
 		"builtin.knowledge_iphone": knowledge, "builtin.pelican_bicycle": pelican, "builtin.qin_tank": qin,
 		"builtin.candy_named": candyName, "builtin.candy_structure": candy, "builtin.modeltrace_named": traceName,
 		"builtin.modeltrace_structure": trace, "builtin.svg_scene": visual,
+		"builtin.thibault_sottiaux": thibault, "builtin.resistor_100_to_67": resistors,
 	}
 }
 

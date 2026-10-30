@@ -76,6 +76,22 @@ func TestIntelligenceClassificationReportsMatches(t *testing.T) {
 	require.NotEmpty(t, result)
 }
 
+func TestIntelligenceNewBenchmarksOCRAndDisable(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}]}]}`)
+	text := "只 有 100 欧 姆 的 电 阻，串 并 联 得 到 67 欧 姆，最 少 需 要 几 个？"
+	matches, err := intelligenceClassifyWithOCRRules(context.Background(), body, IntelligenceRules{}, func(context.Context, string) (string, error) { return text, nil })
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	require.Equal(t, "builtin.resistor_100_to_67", matches[0].ID)
+	rules := IntelligenceRules{BuiltinDisabledIDs: []string{"builtin.resistor_100_to_67", "builtin.thibault_sottiaux"}}
+	matches, err = intelligenceClassifyWithOCRRules(context.Background(), body, rules, func(context.Context, string) (string, error) { return text, nil })
+	require.NoError(t, err)
+	require.Empty(t, matches)
+	matches, err = ClassifyIntelligenceRequest(context.Background(), []byte(`{"input":"Do you know Thibault Sottiaux?"}`), rules)
+	require.NoError(t, err)
+	require.Empty(t, matches)
+}
+
 func TestIntelligenceRulesBatchPrompt(t *testing.T) {
 	rules := IntelligenceRules{Rules: []IntelligenceRule{{Name: "custom", Type: "contains", Pattern: "自定义测试题", Enabled: true}}}
 	required, err := batchImageIntelligenceRouting([]BatchImageSubmitItem{{Prompt: "画自定义测试题"}}, rules)
