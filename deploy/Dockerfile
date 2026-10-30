@@ -97,6 +97,10 @@ RUN apk add --no-cache \
     tzdata \
     curl \
     su-exec \
+    tesseract-ocr \
+    tesseract-ocr-data-eng \
+    tesseract-ocr-data-chi_sim \
+    tesseract-ocr-data-chi_tra \
     && rm -rf /var/cache/apk/*
 
 # Create non-root user
