@@ -402,7 +402,9 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		return
 	}
 
-	bindIntelligenceRouting(c, body)
+	if !bindIntelligenceRouting(c, body) {
+		return
+	}
 	cachePrefetch := h.prefetchGeminiCachedContentBinding(c, apiKey, body)
 
 	setOpsRequestContext(c, modelName, stream)

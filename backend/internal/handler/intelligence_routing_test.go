@@ -34,6 +34,21 @@ func TestBindIntelligenceRouting(t *testing.T) {
 	require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
 
 	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	bindIntelligenceRouting(c, []byte(`{"messages":[{"role":"user","content":"知识库截止日期是什么？不要联网，最新 iPhone 型号出到多少？"}]}`))
+	require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	bindIntelligenceRouting(c, []byte(`{"messages":[{"role":"user","content":"Hello"}]}`))
 	require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
+}
+
+func TestBindIntelligenceRoutingUnsupportedImage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	ok := bindIntelligenceRouting(c, []byte(`{"input":[{"role":"user","content":[{"type":"input_image","file_id":"unavailable"}]}]}`))
+	require.False(t, ok)
+	require.True(t, c.IsAborted())
+	require.Equal(t, 503, recorder.Code)
 }

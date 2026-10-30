@@ -160,7 +160,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	bindIntelligenceRouting(c, body)
+	if !bindIntelligenceRouting(c, body) {
+		return
+	}
 
 	setOpsRequestContext(c, "", false)
 
@@ -2101,7 +2103,9 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		return
 	}
 
-	bindIntelligenceRouting(c, body)
+	if !bindIntelligenceRouting(c, body) {
+		return
+	}
 
 	setOpsRequestContext(c, "", false)
 

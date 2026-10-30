@@ -69,7 +69,9 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		return
 	}
 
-	bindIntelligenceRouting(c, body)
+	if !bindIntelligenceRouting(c, body) {
+		return
+	}
 	bindIntelligenceRoutingPrompt(c, gjson.GetBytes(body, "query").String())
 
 	modelResult := gjson.GetBytes(body, "model")
