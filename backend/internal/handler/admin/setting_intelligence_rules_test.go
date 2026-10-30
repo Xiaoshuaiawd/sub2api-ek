@@ -53,6 +53,13 @@ func TestIntelligenceRulesHandler(t *testing.T) {
 	w = call(http.MethodPut, `{"rules":[{"name":"Pelican","type":"regex","pattern":"pelican.*bike","enabled":true}]}`)
 	require.Equal(t, 200, w.Code)
 	require.Contains(t, w.Body.String(), `"builtin_disabled_ids":["builtin.pelican_bicycle"]`)
+	w = call(http.MethodPut, `{"rules":[],"builtin_extensions":{"builtin.pelican_bicycle":[{"type":"contains","pattern":"骑滑板"}]}}`)
+	require.Equal(t, 200, w.Code)
+	require.Contains(t, w.Body.String(), `"pattern":"骑滑板"`)
+	w = call(http.MethodPut, `{"rules":[]}`)
+	require.Equal(t, 200, w.Code)
+	require.Contains(t, w.Body.String(), `"pattern":"骑滑板"`, "old clients must preserve extensions")
+	require.Contains(t, w.Body.String(), `"builtin_disabled_ids":["builtin.pelican_bicycle"]`)
 	before := repo.raw
 	w = call(http.MethodPut, `{"rules":[{"name":"bad","type":"regex","pattern":"[","enabled":true}]}`)
 	require.Equal(t, 400, w.Code)

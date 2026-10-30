@@ -159,3 +159,26 @@ func TestIntelligenceBuiltinDisabledPersistAndOldSettings(t *testing.T) {
 	require.Empty(t, loaded.MatchAll("鹈鹕骑自行车"))
 	require.True(t, IsIntelligenceTestRequest([]byte(`{"prompt":"鹈鹕骑自行车"}`)), "legacy detection retains old behavior")
 }
+
+func TestIntelligenceBuiltinExtensionsPreserveNativeAndTrackMatches(t *testing.T) {
+	s := &SettingService{settingRepo: &intelligenceRulesRepo{}}
+	input := IntelligenceRules{BuiltinExtensions: map[string][]IntelligenceBuiltinExtension{
+		"builtin.pelican_bicycle": {{Type: "contains", Pattern: "骑滑板的鹈鹕"}, {Type: "regex", Pattern: `pelican.*skateboard`}},
+	}}
+	_, err := s.SetIntelligenceRules(t.Context(), input)
+	require.NoError(t, err)
+	loaded, err := (&SettingService{settingRepo: s.settingRepo}).GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	require.NotEmpty(t, loaded.MatchAll("鹈鹕骑自行车"))
+	hits := loaded.MatchAll("请画骑滑板的鹈鹕")
+	require.Len(t, hits, 1)
+	require.Equal(t, "builtin.pelican_bicycle", hits[0].ID)
+	require.Equal(t, "骑滑板的鹈鹕", hits[0].Pattern)
+	require.NotEmpty(t, loaded.MatchAll("A pelican on a skateboard"))
+	loaded.BuiltinDisabledIDs = []string{"builtin.pelican_bicycle"}
+	require.Empty(t, loaded.MatchAll("请画骑滑板的鹈鹕"))
+	require.Empty(t, loaded.MatchAll("鹈鹕骑自行车"))
+	input.BuiltinExtensions["builtin.pelican_bicycle"][0] = IntelligenceBuiltinExtension{Type: "regex", Pattern: "["}
+	_, err = s.SetIntelligenceRules(t.Context(), input)
+	require.Error(t, err)
+}
