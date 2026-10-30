@@ -33,6 +33,7 @@ type IntelligenceRules struct {
 	Rules              []IntelligenceRule                        `json:"rules"`
 	BuiltinDisabledIDs []string                                  `json:"builtin_disabled_ids"`
 	BuiltinExtensions  map[string][]IntelligenceBuiltinExtension `json:"builtin_extensions,omitempty"`
+	BuiltinConditions  map[string]IntelligenceCondition          `json:"builtin_conditions,omitempty"`
 }
 
 type IntelligenceBuiltinExtension struct {
@@ -79,16 +80,28 @@ func (r IntelligenceRules) MatchBuiltinExtensions(text string) []IntelligenceRul
 // builtin_disabled_ids preserve the existing default of all enabled.
 func (r IntelligenceRules) MatchBuiltins(text string) []IntelligenceRuleMatch {
 	all := MatchIntelligenceBuiltins(text)
-	if len(r.BuiltinDisabledIDs) == 0 {
+	if len(r.BuiltinDisabledIDs) == 0 && len(r.BuiltinConditions) == 0 {
 		return all
 	}
 	disabled := make(map[string]bool, len(r.BuiltinDisabledIDs))
 	for _, id := range r.BuiltinDisabledIDs {
 		disabled[id] = true
 	}
-	var matches []IntelligenceRuleMatch
+	native := make(map[string]IntelligenceRuleMatch, len(all))
 	for _, match := range all {
-		if !disabled[match.ID] {
+		native[match.ID] = match
+	}
+	texts := &intelligenceConditionInput{input: text, plain: strings.ToLower(text)}
+	var matches []IntelligenceRuleMatch
+	for _, builtin := range IntelligenceBuiltinRules() {
+		if disabled[builtin.ID] {
+			continue
+		}
+		if condition, overridden := r.BuiltinConditions[builtin.ID]; overridden {
+			if matchIntelligenceConditionNode(condition, texts) {
+				matches = append(matches, IntelligenceRuleMatch{ID: builtin.ID, Name: builtin.Name, Type: "builtin"})
+			}
+		} else if match, ok := native[builtin.ID]; ok {
 			matches = append(matches, match)
 		}
 	}
@@ -164,6 +177,28 @@ func prepareIntelligenceRules(value IntelligenceRules) (IntelligenceRules, error
 		return value, fmt.Errorf("%w: too many disabled built-in rule IDs", ErrInvalidIntelligenceRules)
 	}
 	result := IntelligenceRules{Rules: make([]IntelligenceRule, len(value.Rules)), BuiltinDisabledIDs: append([]string{}, value.BuiltinDisabledIDs...)}
+	if len(value.BuiltinConditions) > maxIntelligenceRules {
+		return value, fmt.Errorf("%w: too many built-in conditions", ErrInvalidIntelligenceRules)
+	}
+	conditionsJSON, marshalErr := json.Marshal(value.BuiltinConditions)
+	if marshalErr != nil || len(conditionsJSON) > 1<<20 {
+		return value, fmt.Errorf("%w: built-in conditions are too large", ErrInvalidIntelligenceRules)
+	}
+	result.BuiltinConditions = make(map[string]IntelligenceCondition, len(value.BuiltinConditions))
+	for id, condition := range value.BuiltinConditions {
+		if strings.TrimSpace(id) == "" || len(id) > 256 {
+			return value, fmt.Errorf("%w: invalid built-in rule ID", ErrInvalidIntelligenceRules)
+		}
+		count := 0
+		prepared, err := prepareIntelligenceCondition(condition, 0, &count)
+		if err != nil {
+			return value, err
+		}
+		if matchIntelligenceCondition(prepared, "") {
+			return value, fmt.Errorf("%w: built-in condition cannot match empty input", ErrInvalidIntelligenceRules)
+		}
+		result.BuiltinConditions[id] = prepared
+	}
 	result.BuiltinExtensions = make(map[string][]IntelligenceBuiltinExtension, len(value.BuiltinExtensions))
 	extensionCount := 0
 	for id, entries := range value.BuiltinExtensions {
@@ -265,6 +300,13 @@ func (s *SettingService) SetIntelligenceRules(ctx context.Context, input Intelli
 func cloneIntelligenceRules(value IntelligenceRules) IntelligenceRules {
 	value.Rules = append([]IntelligenceRule{}, value.Rules...)
 	value.BuiltinDisabledIDs = append([]string{}, value.BuiltinDisabledIDs...)
+	if value.BuiltinConditions != nil {
+		conditions := make(map[string]IntelligenceCondition, len(value.BuiltinConditions))
+		for id, condition := range value.BuiltinConditions {
+			conditions[id] = cloneIntelligenceCondition(condition)
+		}
+		value.BuiltinConditions = conditions
+	}
 	if value.BuiltinExtensions != nil {
 		extensions := make(map[string][]IntelligenceBuiltinExtension, len(value.BuiltinExtensions))
 		for id, entries := range value.BuiltinExtensions {

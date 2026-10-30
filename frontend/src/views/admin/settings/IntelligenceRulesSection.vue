@@ -32,6 +32,16 @@
             <p v-if="(builtinExtensions[rule.id] || []).length" class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.settings.intelligenceRules.builtinExtensionCount', { count: (builtinExtensions[rule.id] || []).length }) }}</p>
             <button type="button" data-testid="builtin-rule-edit" class="btn btn-secondary btn-sm" :aria-expanded="editingBuiltins.has(rule.id)" :aria-label="`${t(editingBuiltins.has(rule.id) ? 'admin.settings.intelligenceRules.doneEditing' : 'admin.settings.intelligenceRules.edit')} ${rule.name}`" @click="toggleBuiltinEdit(rule.id)">{{ t(editingBuiltins.has(rule.id) ? 'admin.settings.intelligenceRules.doneEditing' : 'admin.settings.intelligenceRules.edit') }}</button>
             <div v-if="editingBuiltins.has(rule.id)" class="space-y-3 border-t border-gray-100 pt-3 dark:border-dark-700">
+              <div v-if="conditionFor(rule)" class="space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 class="font-medium text-gray-900 dark:text-white">{{ t('admin.settings.intelligenceRules.originalConditions') }}</h4>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.settings.intelligenceRules.originalConditionsHint') }}</p>
+                  </div>
+                  <button type="button" data-testid="builtin-condition-reset" class="btn btn-secondary btn-sm" :disabled="!rule.default_condition" @click="restoreBuiltinCondition(rule.id)">{{ t('admin.settings.intelligenceRules.restoreOriginal') }}</button>
+                </div>
+                <IntelligenceConditionEditor :model-value="conditionFor(rule)!" @update:model-value="updateBuiltinCondition(rule, $event)" />
+              </div>
               <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.settings.intelligenceRules.builtinExtensionHint') }}</p>
               <div v-for="(extension, index) in (builtinExtensions[rule.id] || [])" :key="index" data-testid="builtin-extension" class="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-dark-600">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -104,13 +114,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getRules, saveRules, type IntelligenceRule, type IntelligenceBuiltinRule, type IntelligenceBuiltinExtension } from '@/api/admin/intelligenceRules'
+import { getRules, saveRules, type IntelligenceRule, type IntelligenceBuiltinRule, type IntelligenceBuiltinExtension, type IntelligenceCondition } from '@/api/admin/intelligenceRules'
+import IntelligenceConditionEditor from './IntelligenceConditionEditor.vue'
 
 type EditableRule = IntelligenceRule & { id: number }
 const { t } = useI18n()
 const rules = ref<EditableRule[]>([])
 const builtins = ref<IntelligenceBuiltinRule[]>([])
 const builtinExtensions = ref<Record<string, IntelligenceBuiltinExtension[]>>({})
+const builtinConditions = ref<Record<string, IntelligenceCondition>>({})
+const conditionsSupported = ref(false)
 const editingBuiltins = ref(new Set<string>())
 const editingCustom = ref(new Set<number>())
 const previouslyDisabled = ref<string[]>([])
@@ -125,11 +138,12 @@ const editable = (values: IntelligenceRule[]) => values.map(rule => ({ ...rule, 
 const payload = () => {
   const builtinIds = new Set(builtins.value.map(rule => rule.id))
   const unknownDisabled = previouslyDisabled.value.filter(id => !builtinIds.has(id))
-  return {
+  const data = {
     rules: rules.value.map(({ name, type, pattern, enabled }) => ({ name, type, pattern, enabled })),
     builtin_disabled_ids: [...unknownDisabled, ...builtins.value.filter(rule => !rule.enabled).map(rule => rule.id)],
     builtin_extensions: Object.fromEntries(Object.entries(builtinExtensions.value).map(([id, extensions]) => [id, extensions.map(({ type, pattern }) => ({ type, pattern }))])),
   }
+  return conditionsSupported.value ? { ...data, builtin_conditions: builtinConditions.value } : data
 }
 const dirty = computed(() => JSON.stringify(payload()) !== savedSnapshot.value)
 const totalBuiltinExtensions = computed(() => Object.values(builtinExtensions.value).reduce((sum, extensions) => sum + extensions.length, 0))
@@ -168,6 +182,33 @@ function removeBuiltinExtension(id: string, index: number) {
   extensions.splice(index, 1)
   if (extensions.length === 0) delete builtinExtensions.value[id]
 }
+function conditionFor(rule: IntelligenceBuiltinRule): IntelligenceCondition | undefined {
+  return builtinConditions.value[rule.id] || rule.default_condition || rule.condition
+}
+function updateBuiltinCondition(rule: IntelligenceBuiltinRule, value: IntelligenceCondition) {
+  if (rule.default_condition && JSON.stringify(value) === JSON.stringify(rule.default_condition)) delete builtinConditions.value[rule.id]
+  else builtinConditions.value[rule.id] = value
+}
+function restoreBuiltinCondition(id: string) {
+  delete builtinConditions.value[id]
+}
+function validBuiltinCondition(root: IntelligenceCondition): boolean {
+  let count = 0
+  const validate = (node: IntelligenceCondition, depth: number): boolean => {
+    count++
+    if (depth > 16 || count > 256) return false
+    if (node.op === 'all' || node.op === 'any' || node.op === 'not') {
+      const children = node.children || []
+      return children.length > 0 && children.length <= 100 && (node.op !== 'not' || children.length === 1) && children.every(child => validate(child, depth + 1))
+    }
+    if (node.op === 'contains_any') {
+      const values = node.values || []
+      return values.length > 0 && values.length <= 200 && values.every(value => value !== '' && new TextEncoder().encode(value).length <= 4096)
+    }
+    return node.op === 'regex' && !!node.pattern && new TextEncoder().encode(node.pattern).length <= 4096
+  }
+  return validate(root, 0)
+}
 async function load() {
   loading.value = true
   error.value = ''
@@ -177,6 +218,8 @@ async function load() {
     builtins.value = result.builtins || []
     previouslyDisabled.value = result.builtin_disabled_ids || []
     builtinExtensions.value = result.builtin_extensions || {}
+    builtinConditions.value = result.builtin_conditions || {}
+    conditionsSupported.value = 'builtin_conditions' in result || (result.builtins || []).some(rule => !!rule.condition)
     editingBuiltins.value.clear()
     editingCustom.value.clear()
     savedSnapshot.value = JSON.stringify(payload())
@@ -185,6 +228,10 @@ async function load() {
   finally { loading.value = false }
 }
 async function save() {
+  if (Object.values(builtinConditions.value).some(condition => !validBuiltinCondition(condition))) {
+    error.value = t('admin.settings.intelligenceRules.conditionInvalid')
+    return
+  }
   if (rules.value.some(rule => !rule.name.trim() || !rule.pattern.trim())) {
     error.value = t('admin.settings.intelligenceRules.required')
     return
@@ -219,6 +266,8 @@ async function save() {
     builtins.value = result.builtins || []
     previouslyDisabled.value = result.builtin_disabled_ids || []
     builtinExtensions.value = result.builtin_extensions || {}
+    builtinConditions.value = result.builtin_conditions || {}
+    conditionsSupported.value = 'builtin_conditions' in result || (result.builtins || []).some(rule => !!rule.condition)
     editingBuiltins.value.clear()
     editingCustom.value.clear()
     savedSnapshot.value = JSON.stringify(payload())

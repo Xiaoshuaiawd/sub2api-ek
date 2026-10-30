@@ -9,6 +9,45 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 describe('IntelligenceRulesSection', () => {
   beforeEach(() => { getRules.mockReset(); saveRules.mockReset() })
 
+  it('shows and edits the original built-in conditions, then can restore defaults', async () => {
+    const original = { op: 'all', children: [
+      { op: 'contains_any', text: 'plain', values: ['鹈鹕', 'pelican'] },
+      { op: 'contains_any', text: 'plain', values: ['自行车', 'bike'] },
+    ] }
+    const builtin = { id: 'builtin.pelican_bicycle', name: '鹈鹕', description: '', enabled: true, condition: original, default_condition: original }
+    getRules.mockResolvedValue({ rules: [], builtins: [builtin], builtin_disabled_ids: [], builtin_extensions: {}, builtin_conditions: {} })
+    saveRules.mockImplementation(async value => ({ ...value, builtins: [builtin] }))
+    const wrapper = mount(IntelligenceRulesSection)
+    await flushPromises()
+    await wrapper.get('[data-testid="builtin-rule-edit"]').trigger('click')
+    const fields = wrapper.findAll('[data-testid="condition-values"]')
+    expect((fields[0].element as HTMLTextAreaElement).value).toBe('鹈鹕\npelican')
+    await fields[0].setValue('企鹅\npelican')
+    await wrapper.get('[data-testid="intelligence-save"]').trigger('click')
+    await flushPromises()
+    expect(saveRules).toHaveBeenCalledWith(expect.objectContaining({ builtin_conditions: {
+      'builtin.pelican_bicycle': { ...original, children: [{ ...original.children[0], values: ['企鹅', 'pelican'] }, original.children[1]] },
+    } }))
+    await wrapper.get('[data-testid="builtin-rule-edit"]').trigger('click')
+    await wrapper.get('[data-testid="builtin-condition-reset"]').trigger('click')
+    expect((wrapper.findAll('[data-testid="condition-values"]')[0].element as HTMLTextAreaElement).value).toBe('鹈鹕\npelican')
+    await wrapper.get('[data-testid="intelligence-save"]').trigger('click')
+    await flushPromises()
+    expect(saveRules).toHaveBeenLastCalledWith(expect.objectContaining({ builtin_conditions: {} }))
+  })
+
+  it('rejects blank keyword lines before saving original conditions', async () => {
+    const condition = { op: 'contains_any', text: 'plain', values: ['鹈鹕'] }
+    getRules.mockResolvedValue({ rules: [], builtins: [{ id: 'builtin.pelican_bicycle', name: '鹈鹕', description: '', enabled: true, condition, default_condition: condition }], builtin_conditions: {} })
+    const wrapper = mount(IntelligenceRulesSection)
+    await flushPromises()
+    await wrapper.get('[data-testid="builtin-rule-edit"]').trigger('click')
+    await wrapper.get('[data-testid="condition-values"]').setValue('鹈鹕\n')
+    await wrapper.get('[data-testid="intelligence-save"]').trigger('click')
+    expect(wrapper.text()).toContain('admin.settings.intelligenceRules.conditionInvalid')
+    expect(saveRules).not.toHaveBeenCalled()
+  })
+
   it('lets an administrator explicitly edit an existing custom rule and save it', async () => {
     getRules.mockResolvedValue({ rules: [{ name: '旧规则', type: 'contains', pattern: '旧问题', enabled: true }] })
     saveRules.mockImplementation(async value => value)

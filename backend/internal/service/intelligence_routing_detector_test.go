@@ -194,7 +194,20 @@ func TestIsIntelligenceTestRequest(t *testing.T) {
 			require.Equal(t, tt.want, IsIntelligenceTestRequest([]byte(tt.body)))
 			var request map[string]any
 			if json.Unmarshal([]byte(tt.body), &request) == nil {
-				require.Equal(t, tt.want, len((IntelligenceRules{}).MatchAll(intelligenceLatestUserText(request))) > 0, "default rules must match existing detection")
+				text := intelligenceLatestUserText(request)
+				require.Equal(t, tt.want, len((IntelligenceRules{}).MatchAll(text)) > 0, "default rules must match existing detection")
+				// Saving an untouched default tree must not change any individual
+				// predicate, including overlapping matches and exclusions.
+				trees, err := prepareIntelligenceRules(IntelligenceRules{BuiltinConditions: DefaultIntelligenceBuiltinConditions()})
+				require.NoError(t, err)
+				ids := func(matches []IntelligenceRuleMatch) []string {
+					var result []string
+					for _, match := range matches {
+						result = append(result, match.ID)
+					}
+					return result
+				}
+				require.ElementsMatch(t, ids(MatchIntelligenceBuiltins(text)), ids(trees.MatchBuiltins(text)), "editable defaults must exactly match native rules")
 			}
 		})
 	}
