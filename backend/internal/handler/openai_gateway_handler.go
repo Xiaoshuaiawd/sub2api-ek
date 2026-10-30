@@ -729,7 +729,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.gatewayService.IntelligenceRuleSettings()) {
 		return
 	}
 
@@ -1560,7 +1560,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.gatewayService.IntelligenceRuleSettings()) {
 		return
 	}
 
@@ -2943,7 +2943,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
 	}
-	firstNeedsIntelligence, ocrErr := service.IntelligenceRouteWithOCR(ctx, firstMessage)
+	firstRules, rulesErr := h.gatewayService.IntelligenceRuleSettings().RuntimeIntelligenceRules(ctx)
+	if rulesErr != nil {
+		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "intelligence routing rules unavailable; please retry")
+		return
+	}
+	firstNeedsIntelligence, ocrErr := service.IntelligenceRouteWithRules(ctx, firstMessage, firstRules)
 	if ocrErr != nil {
 		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "image text recognition failed; please retry")
 		return
@@ -3510,7 +3515,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				// Capture the current turn from the original client frame before the
 				// parser resolves the channel model or rewrites the payload.
 				if turn > 1 {
-					required, err := service.IntelligenceRouteWithOCR(ctx, raw)
+					rules, err := h.gatewayService.IntelligenceRuleSettings().RuntimeIntelligenceRules(ctx)
+					if err != nil {
+						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "intelligence routing rules unavailable; please retry", err)
+					}
+					required, err := service.IntelligenceRouteWithRules(ctx, raw, rules)
 					if err != nil {
 						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "image text recognition failed; please retry", err)
 					}

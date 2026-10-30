@@ -143,6 +143,9 @@ type SettingService struct {
 	astraRoutingOnSaved                func(config.AstraRoutingSettings)
 	astraRoutingCache                  *config.AstraRoutingSettings
 	astraRoutingExpires                time.Time
+	intelligenceRulesMu                sync.Mutex
+	intelligenceRulesCache             *IntelligenceRules
+	intelligenceRulesExpires           time.Time
 	settingRepo                        SettingRepository
 	defaultSubGroupReader              DefaultSubscriptionGroupReader
 	proxyRepo                          ProxyRepository // for resolving websearch provider proxy URLs

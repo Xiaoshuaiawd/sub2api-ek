@@ -60,7 +60,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.settingService) {
 		return
 	}
 

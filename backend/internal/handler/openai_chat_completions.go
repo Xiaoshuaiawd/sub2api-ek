@@ -64,7 +64,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.gatewayService.IntelligenceRuleSettings()) {
 		return
 	}
 

@@ -592,6 +592,7 @@ function mountView() {
         ProxySelector: true,
         ImageUpload: ImageUploadStub,
         BackupSettings: true,
+        IntelligenceRulesSection: true,
         EmailTemplateEditor: true,
       },
     },

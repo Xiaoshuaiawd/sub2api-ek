@@ -82,16 +82,17 @@ type BatchImageOwner struct {
 }
 
 type BatchImagePublicService struct {
-	Repo              BatchImageRepository
-	AccountRepo       BatchImageAccountSelectionRepository
-	GroupRepo         BatchImageGroupPricingRepository
-	UserGroupRateRepo BatchImageUserGroupRateRepository
-	Queue             BatchImageQueue
-	ProviderRegistry  *BatchImageProviderRegistry
-	Pricing           BatchImagePricingResolver
-	BillingRepo       UsageBillingRepository
-	AuthCache         APIKeyAuthCacheInvalidator
-	Config            *config.Config
+	Repo                 BatchImageRepository
+	AccountRepo          BatchImageAccountSelectionRepository
+	GroupRepo            BatchImageGroupPricingRepository
+	UserGroupRateRepo    BatchImageUserGroupRateRepository
+	Queue                BatchImageQueue
+	ProviderRegistry     *BatchImageProviderRegistry
+	Pricing              BatchImagePricingResolver
+	BillingRepo          UsageBillingRepository
+	AuthCache            APIKeyAuthCacheInvalidator
+	Config               *config.Config
+	IntelligenceSettings *SettingService
 }
 
 type BatchImagePricingSnapshot struct {
@@ -182,29 +183,30 @@ type BatchImageItemsQuery struct {
 	Cursor string
 }
 
-func NewBatchImagePublicService(repo BatchImageRepository, accountRepo AccountRepository, groupRepo GroupRepository, userGroupRateRepo UserGroupRateRepository, queue BatchImageQueue, pricing *BatchImageModelPricingResolver, billingRepo UsageBillingRepository, authCache APIKeyAuthCacheInvalidator, cfg *config.Config) *BatchImagePublicService {
+func NewBatchImagePublicService(repo BatchImageRepository, accountRepo AccountRepository, groupRepo GroupRepository, userGroupRateRepo UserGroupRateRepository, queue BatchImageQueue, pricing *BatchImageModelPricingResolver, billingRepo UsageBillingRepository, authCache APIKeyAuthCacheInvalidator, cfg *config.Config, settings *SettingService) *BatchImagePublicService {
 	return &BatchImagePublicService{
-		Repo:              repo,
-		AccountRepo:       accountRepo,
-		GroupRepo:         groupRepo,
-		UserGroupRateRepo: userGroupRateRepo,
-		Queue:             queue,
-		ProviderRegistry:  NewBatchImageProviderRegistryFromConfig(cfg),
-		Pricing:           pricing,
-		BillingRepo:       billingRepo,
-		AuthCache:         authCache,
-		Config:            cfg,
+		Repo:                 repo,
+		AccountRepo:          accountRepo,
+		GroupRepo:            groupRepo,
+		UserGroupRateRepo:    userGroupRateRepo,
+		Queue:                queue,
+		ProviderRegistry:     NewBatchImageProviderRegistryFromConfig(cfg),
+		Pricing:              pricing,
+		BillingRepo:          billingRepo,
+		AuthCache:            authCache,
+		Config:               cfg,
+		IntelligenceSettings: settings,
 	}
 }
 
 var ErrBatchImageMixedIntelligenceRouting = infraerrors.New(400, "BATCH_IMAGE_MIXED_ROUTING", "mixed intelligence test and ordinary prompts are not supported in one batch")
 var ErrBatchImageCancelIntelligenceAccount = infraerrors.New(503, "BATCH_IMAGE_CANCEL_ACCOUNT_UNAVAILABLE", "the account for this batch is unavailable for ordinary requests")
 
-func batchImageIntelligenceRouting(items []BatchImageSubmitItem) (bool, error) {
+func batchImageIntelligenceRouting(items []BatchImageSubmitItem, rules IntelligenceRules) (bool, error) {
 	var required bool
 	for i, item := range items {
 		body, _ := json.Marshal(map[string]string{"prompt": item.Prompt})
-		current := IsIntelligenceTestRequest(body)
+		current := IsIntelligenceTestRequest(body) || rules.Match(item.Prompt)
 		if i > 0 && current != required {
 			return false, ErrBatchImageMixedIntelligenceRouting
 		}
@@ -221,7 +223,11 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err != nil {
 		return nil, err
 	}
-	required, err := batchImageIntelligenceRouting(normalized.Items)
+	rules, err := s.IntelligenceSettings.RuntimeIntelligenceRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	required, err := batchImageIntelligenceRouting(normalized.Items, rules)
 	if err != nil {
 		return nil, err
 	}

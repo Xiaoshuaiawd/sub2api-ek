@@ -402,7 +402,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		return
 	}
 
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.settingService) {
 		return
 	}
 	cachePrefetch := h.prefetchGeminiCachedContentBinding(c, apiKey, body)

@@ -163,6 +163,7 @@
 
         <!-- Tab: Gateway -->
         <div v-show="activeTab === 'gateway'" class="space-y-6">
+          <IntelligenceRulesSection />
           <ServerlessSettings v-if="activeTab === 'gateway'" />
           <div class="card" data-testid="prism-browser-settings">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -9495,6 +9496,7 @@ import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import JuiceFixerSection from "@/views/admin/settings/JuiceFixerSection.vue";
+import IntelligenceRulesSection from "@/views/admin/settings/IntelligenceRulesSection.vue";
 import ServerlessSettings from "@/components/settings/ServerlessSettings.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";

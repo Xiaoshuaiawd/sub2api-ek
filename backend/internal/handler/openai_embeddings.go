@@ -65,7 +65,7 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		return
 	}
 
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.gatewayService.IntelligenceRuleSettings()) {
 		return
 	}
 

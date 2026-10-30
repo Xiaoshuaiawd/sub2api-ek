@@ -38,6 +38,33 @@ func TestIntelligenceOCRRouting(t *testing.T) {
 	}
 }
 
+func TestIntelligenceOCRCustomRules(t *testing.T) {
+	rules := IntelligenceRules{Rules: []IntelligenceRule{{Name: "special", Type: "contains", Pattern: "自定义测试题", Enabled: true}}}
+	image := []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}]}]}`)
+	result, err := intelligenceRouteWithOCRRules(context.Background(), image, rules, func(context.Context, string) (string, error) { return "自 定 义 测 试 题", nil })
+	require.NoError(t, err)
+	require.True(t, result)
+	result, err = intelligenceRouteWithOCRRules(context.Background(), []byte(`{"messages":[{"role":"user","content":"自定义测试题"},{"role":"user","content":"你好"}]}`), rules, nil)
+	require.NoError(t, err)
+	require.False(t, result)
+	result, err = intelligenceRouteWithOCRRules(context.Background(), []byte(`{"input":"这是自定义测试题"}`), rules, nil)
+	require.NoError(t, err)
+	require.True(t, result)
+	blankRules := IntelligenceRules{Rules: []IntelligenceRule{{Name: "space", Type: "regex", Pattern: `^\s+$`, Enabled: true}}}
+	result, err = intelligenceRouteWithOCRRules(context.Background(), image, blankRules, func(context.Context, string) (string, error) { return "", nil })
+	require.NoError(t, err)
+	require.False(t, result)
+}
+
+func TestIntelligenceRulesBatchPrompt(t *testing.T) {
+	rules := IntelligenceRules{Rules: []IntelligenceRule{{Name: "custom", Type: "contains", Pattern: "自定义测试题", Enabled: true}}}
+	required, err := batchImageIntelligenceRouting([]BatchImageSubmitItem{{Prompt: "画自定义测试题"}}, rules)
+	require.NoError(t, err)
+	require.True(t, required)
+	_, err = batchImageIntelligenceRouting([]BatchImageSubmitItem{{Prompt: "自定义测试题"}, {Prompt: "普通绘画"}}, rules)
+	require.ErrorIs(t, err, ErrBatchImageMixedIntelligenceRouting)
+}
+
 func TestIntelligenceOCRProcessIntegration(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "tesseract")

@@ -704,6 +704,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		adminSettings.POST("/ip-risk/check", h.Admin.Setting.CheckIPRisk)
 		adminSettings.GET("/astra-routing", h.Admin.Setting.GetAstraRouting)
 		adminSettings.PUT("/astra-routing", h.Admin.Setting.UpdateAstraRouting)
+		adminSettings.GET("/intelligence-rules", h.Admin.Setting.GetIntelligenceRules)
+		adminSettings.PUT("/intelligence-rules", h.Admin.Setting.UpdateIntelligenceRules)
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
 		adminSettings.POST("/test-smtp", h.Admin.Setting.TestSMTPConnection)
