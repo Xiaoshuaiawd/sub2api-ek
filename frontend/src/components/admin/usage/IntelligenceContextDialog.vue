@@ -14,7 +14,18 @@
           <ul v-if="context.matched_rules?.length" class="space-y-2">
             <li v-for="(rule, index) in context.matched_rules" :key="`${rule.id}-${index}`" class="rounded-md bg-primary-50 px-3 py-2 text-sm text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
               <span class="font-medium">{{ rule.name }}</span>
-              <pre v-if="rule.pattern" class="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{{ rule.pattern }}</pre>
+              <div v-if="rule.matched_keywords?.length" data-testid="matched-keywords" class="mt-2">
+                <span class="text-xs font-medium">{{ t('admin.usage.intelligenceContext.matchedKeywords') }}</span>
+                <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">{{ t('admin.usage.intelligenceContext.keywordsHint') }}</p>
+                <ul class="mt-1 flex flex-wrap gap-1.5">
+                  <li v-for="(keyword, keywordIndex) in rule.matched_keywords" :key="keywordIndex" class="max-w-full whitespace-pre-wrap break-all rounded bg-white/80 px-2 py-1 font-mono text-xs text-gray-800 dark:bg-dark-800 dark:text-gray-100">{{ keyword }}</li>
+                </ul>
+              </div>
+              <p v-else data-testid="matched-keywords-unavailable" class="mt-2 text-xs text-gray-600 dark:text-gray-300">{{ t('admin.usage.intelligenceContext.keywordsUnavailable') }}</p>
+              <div v-if="rule.pattern" class="mt-2">
+                <span class="text-xs font-medium">{{ t('admin.usage.intelligenceContext.rulePattern') }}</span>
+                <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-xs">{{ rule.pattern }}</pre>
+              </div>
             </li>
           </ul>
           <p v-else class="text-sm text-gray-500">{{ t('admin.usage.intelligenceContext.noRules') }}</p>

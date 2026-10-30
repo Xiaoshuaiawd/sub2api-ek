@@ -142,6 +142,33 @@ func TestIntelligenceRulesRejectInvalid(t *testing.T) {
 	}
 }
 
+func TestIntelligenceCustomRuleMatchedKeywords(t *testing.T) {
+	rules, err := prepareIntelligenceRules(IntelligenceRules{Rules: []IntelligenceRule{
+		{Name: "关键词", Type: "contains", Pattern: "青苹果", Enabled: true},
+		{Name: "正则", Type: "regex", Pattern: `糖果.{0,8}数量`, Enabled: true},
+	}})
+	require.NoError(t, err)
+	matches := rules.MatchAll("袋子里有青苹果味糖果，请计算数量")
+	byName := map[string]IntelligenceRuleMatch{}
+	for _, match := range matches {
+		byName[match.Name] = match
+	}
+	require.Contains(t, byName["关键词"].MatchedKeywords, "青苹果")
+	require.Contains(t, byName["正则"].MatchedKeywords, "糖果,请计算数量")
+	require.NotContains(t, byName["正则"].MatchedKeywords, `糖果.{0,8}数量`)
+}
+
+func TestIntelligenceBuiltinExtensionMatchedKeywords(t *testing.T) {
+	rules, err := prepareIntelligenceRules(IntelligenceRules{BuiltinExtensions: map[string][]IntelligenceBuiltinExtension{
+		"builtin.pelican_bicycle": {{Type: "regex", Pattern: `鸟.{0,5}单车`}},
+	}})
+	require.NoError(t, err)
+	matches := rules.MatchAll("那只鸟骑着单车")
+	require.Len(t, matches, 1)
+	require.Equal(t, "builtin.pelican_bicycle", matches[0].ID)
+	require.Contains(t, matches[0].MatchedKeywords, "鸟骑着单车")
+}
+
 func TestIntelligenceBuiltinDisabledPersistAndOldSettings(t *testing.T) {
 	repo := &intelligenceRulesRepo{value: `{"rules":[{"name":"custom","type":"contains","pattern":"自定义","enabled":true}]}`}
 	s := &SettingService{settingRepo: repo}

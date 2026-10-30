@@ -68,7 +68,7 @@ func (r IntelligenceRules) MatchBuiltinExtensions(text string) []IntelligenceRul
 		for _, extension := range r.BuiltinExtensions[builtin.ID] {
 			rule := IntelligenceRule{Type: extension.Type, Pattern: extension.Pattern, Enabled: true, compiled: extension.compiled, normalizedPattern: extension.normalizedPattern}
 			if intelligenceCustomRuleMatches(rule, text, lowerText) {
-				matches = append(matches, IntelligenceRuleMatch{ID: builtin.ID, Name: builtin.Name, Type: "builtin", Pattern: extension.Pattern})
+				matches = append(matches, IntelligenceRuleMatch{ID: builtin.ID, Name: builtin.Name, Type: "builtin", Pattern: extension.Pattern, MatchedKeywords: intelligenceCustomRuleEvidence(rule, text)})
 				break
 			}
 		}
@@ -98,8 +98,8 @@ func (r IntelligenceRules) MatchBuiltins(text string) []IntelligenceRuleMatch {
 			continue
 		}
 		if condition, overridden := r.BuiltinConditions[builtin.ID]; overridden {
-			if matchIntelligenceConditionNode(condition, texts) {
-				matches = append(matches, IntelligenceRuleMatch{ID: builtin.ID, Name: builtin.Name, Type: "builtin"})
+			if matched, keywords := matchIntelligenceConditionEvidenceWithTexts(condition, texts); matched {
+				matches = append(matches, IntelligenceRuleMatch{ID: builtin.ID, Name: builtin.Name, Type: "builtin", MatchedKeywords: keywords})
 			}
 		} else if match, ok := native[builtin.ID]; ok {
 			matches = append(matches, match)
@@ -123,10 +123,32 @@ func (r IntelligenceRules) Matches(text string) []IntelligenceRuleMatch {
 	var matches []IntelligenceRuleMatch
 	for i, rule := range r.Rules {
 		if intelligenceCustomRuleMatches(rule, text, lowerText) {
-			matches = append(matches, IntelligenceRuleMatch{ID: "custom:" + strconv.Itoa(i), Name: rule.Name, Type: rule.Type, Pattern: rule.Pattern})
+			matches = append(matches, IntelligenceRuleMatch{ID: "custom:" + strconv.Itoa(i), Name: rule.Name, Type: rule.Type, Pattern: rule.Pattern, MatchedKeywords: intelligenceCustomRuleEvidence(rule, text)})
 		}
 	}
 	return matches
+}
+
+func intelligenceCustomRuleEvidence(rule IntelligenceRule, normalizedText string) []string {
+	switch rule.Type {
+	case "contains":
+		// The configured literal is the matched keyword; using it avoids
+		// incorrect byte offsets when Unicode lowercasing changes byte length.
+		if keyword := NormalizeIntelligenceEvidence(norm.NFKC.String(rule.Pattern)); keyword != "" {
+			return []string{keyword}
+		}
+	case "regex":
+		compiled := rule.compiled
+		if compiled == nil {
+			compiled, _ = regexp.Compile("(?i)" + rule.Pattern)
+		}
+		if compiled != nil {
+			if keyword := NormalizeIntelligenceEvidence(compiled.FindString(normalizedText)); keyword != "" {
+				return []string{keyword}
+			}
+		}
+	}
+	return nil
 }
 
 // Match checks compiled rules. Text and contains patterns are normalized

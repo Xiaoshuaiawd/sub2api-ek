@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -9,6 +10,27 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIntelligenceContextPersistsMatchedKeywords(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	repo := NewIntelligenceContextRepository(db)
+	id := "00000000-0000-4000-8000-000000000001"
+	matched := []service.IntelligenceRuleMatch{{ID: "builtin.pelican_bicycle", Name: "鹈鹕骑自行车", Type: "builtin", MatchedKeywords: []string{"鹈鹕", "自行车"}}}
+	raw, err := json.Marshal(matched)
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	item := &service.IntelligenceRequestContext{ID: id, APIKeyID: 3, UserID: 7, Body: []byte("body"), MatchedRules: matched, CreatedAt: now}
+	mock.ExpectExec("INSERT INTO intelligence_request_contexts").WithArgs(id, int64(3), int64(7), string(raw), item.Body, "", "", now).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, repo.Create(context.Background(), item))
+	cols := []string{"id", "key", "user", "request", "rules", "body", "type", "encoding", "created", "usage"}
+	mock.ExpectQuery("SELECT .* FROM intelligence_request_contexts ic WHERE ic.id=").WithArgs(id).WillReturnRows(sqlmock.NewRows(cols).AddRow(id, 3, 7, nil, raw, item.Body, "", "", now, nil))
+	got, err := repo.FindByID(context.Background(), id)
+	require.NoError(t, err)
+	require.Equal(t, []string{"鹈鹕", "自行车"}, got.MatchedRules[0].MatchedKeywords)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestIntelligenceContextRepositoryPreservesBodyAndScopesLink(t *testing.T) {
 	db, mock, err := sqlmock.New()
