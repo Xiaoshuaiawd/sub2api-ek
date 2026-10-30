@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"go.uber.org/zap"
 )
 
@@ -30,7 +31,7 @@ func NewBatchImageHandler(service *service.BatchImagePublicService, download *se
 
 func (h *BatchImageHandler) Submit(c *gin.Context) {
 	var req service.BatchImageSubmitRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
 		batchImageError(c, service.ErrBatchImageInvalidItems)
 		return
 	}
@@ -41,6 +42,23 @@ func (h *BatchImageHandler) Submit(c *gin.Context) {
 	}
 	if !h.checkSecurityAuditBeforeSubmit(c, &req) {
 		return
+	}
+	matches, rules, err := h.service.IntelligenceMatches(c.Request.Context(), req)
+	if err != nil {
+		intelligenceRoutingError(c, "Intelligence routing rules unavailable; please retry")
+		return
+	}
+	c.Request = c.Request.WithContext(service.WithBatchImageIntelligenceRules(c.Request.Context(), rules))
+	if len(matches) > 0 {
+		raw, _ := c.Get(gin.BodyBytesKey)
+		body, _ := raw.([]byte)
+		key, _ := middleware.GetAPIKeyFromContext(c)
+		ctx, captureErr := service.CaptureIntelligenceRequest(c.Request.Context(), h.service.IntelligenceSettings, key, body, c.GetHeader("Content-Type"), matches)
+		if captureErr != nil {
+			intelligenceRoutingError(c, "Intelligence request capture unavailable; please retry")
+			return
+		}
+		c.Request = c.Request.WithContext(ctx)
 	}
 	if sessionID := service.ExtractClientSessionID(c); sessionID != "" {
 		req.SessionID = &sessionID

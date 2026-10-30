@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"net/http/httptest"
@@ -9,12 +11,27 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
 type intelligenceRulesRoutingRepo struct{ service.SettingRepository }
 
 type intelligenceRulesFailingRepo struct{ service.SettingRepository }
+
+type intelligenceCaptureRepo struct {
+	service.IntelligenceContextRepository
+	stored []*service.IntelligenceRequestContext
+	fail   bool
+}
+
+func (r *intelligenceCaptureRepo) Create(_ context.Context, item *service.IntelligenceRequestContext) error {
+	if r.fail {
+		return errors.New("database unavailable")
+	}
+	r.stored = append(r.stored, item)
+	return nil
+}
 
 func (intelligenceRulesFailingRepo) GetValue(context.Context, string) (string, error) {
 	return "", errors.New("settings unavailable")
@@ -88,4 +105,78 @@ func TestBindIntelligenceRoutingGeminiSettingsFailure(t *testing.T) {
 	require.False(t, bindIntelligenceRouting(c, []byte(`{"contents":[]}`), settings))
 	require.Equal(t, 503, w.Code)
 	require.Contains(t, w.Body.String(), `"status":"INTERNAL"`)
+}
+
+func TestBindIntelligenceRoutingCapturesOnlyMatches(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &intelligenceCaptureRepo{}
+	settings := service.NewSettingService(intelligenceRulesRoutingRepo{}, nil)
+	settings.SetIntelligenceContextRepository(store)
+	makeContext := func() (*gin.Context, *httptest.ResponseRecorder) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Set("api_key", &service.APIKey{ID: 7, UserID: 9})
+		return c, w
+	}
+	ordinary, _ := makeContext()
+	require.True(t, bindIntelligenceRouting(ordinary, []byte(`{"input":"你好"}`), settings))
+	require.Empty(t, store.stored)
+	matched, _ := makeContext()
+	body := []byte(`{"messages":[{"role":"user","content":"特殊样题"}]}`)
+	require.True(t, bindIntelligenceRouting(matched, body, settings))
+	require.Len(t, store.stored, 1)
+	require.Equal(t, body, store.stored[0].Body)
+	require.Equal(t, "test", store.stored[0].MatchedRules[0].Name)
+	require.Equal(t, store.stored[0].ID, service.IntelligenceContextID(matched.Request.Context()))
+	store.fail = true
+	failed, recorder := makeContext()
+	require.False(t, bindIntelligenceRouting(failed, body, settings))
+	require.Equal(t, 503, recorder.Code)
+}
+
+func TestBindIntelligenceRoutingPreservesCompressedOriginal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &intelligenceCaptureRepo{}
+	settings := service.NewSettingService(intelligenceRulesRoutingRepo{}, nil)
+	settings.SetIntelligenceContextRepository(store)
+	var compressed bytes.Buffer
+	w := gzip.NewWriter(&compressed)
+	_, err := w.Write([]byte(`{"input":"特殊样题"}`))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/responses", bytes.NewReader(compressed.Bytes()))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Content-Encoding", "gzip")
+	c.Set("api_key", &service.APIKey{ID: 7, UserID: 9})
+	decoded, err := pkghttputil.ReadLenientJSONRequestBodyWithPrealloc(c.Request, 1024)
+	require.NoError(t, err)
+	require.True(t, bindIntelligenceRouting(c, decoded, settings))
+	require.Len(t, store.stored, 1)
+	require.Equal(t, compressed.Bytes(), store.stored[0].Body)
+	require.Equal(t, "gzip", store.stored[0].ContentEncoding)
+	_, _, retained := pkghttputil.OriginalRequestBody(c.Request.Context())
+	require.False(t, retained)
+}
+
+func TestBindIntelligenceRoutingCombinesPromptMatches(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &intelligenceCaptureRepo{}
+	settings := service.NewSettingService(intelligenceRulesRoutingRepo{}, nil)
+	settings.SetIntelligenceContextRepository(store)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/alpha/search", nil)
+	c.Set("api_key", &service.APIKey{ID: 7, UserID: 9})
+	body := []byte(`{"input":"特殊样题","query":"糖果测试"}`)
+	require.True(t, bindIntelligenceRoutingWithExtraPrompt(c, body, "糖果测试", settings))
+	require.Len(t, store.stored, 1)
+	require.Equal(t, body, store.stored[0].Body)
+	var names []string
+	for _, match := range store.stored[0].MatchedRules {
+		names = append(names, match.Name)
+	}
+	require.Contains(t, names, "test")
+	require.Contains(t, names, "糖果测试名称")
 }

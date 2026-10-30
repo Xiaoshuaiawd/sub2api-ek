@@ -29,11 +29,59 @@ func TestIntelligenceRulesImagesBeforeValidation(t *testing.T) {
 	require.True(t, IsIntelligenceRouting(c.Request.Context()))
 }
 
+func TestIntelligenceRulesImagesFreezeAtFirstParse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	settings := &SettingService{settingRepo: &intelligenceRulesRepo{}}
+	body := []byte(`{"model":"gpt-image-2","prompt":"特殊样题"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+	svc := &OpenAIGatewayService{settingService: settings}
+	_, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	require.False(t, IsIntelligenceRouting(c.Request.Context()))
+	_, err = settings.SetIntelligenceRules(t.Context(), IntelligenceRules{Rules: []IntelligenceRule{{Name: "new", Type: "contains", Pattern: "特殊样题", Enabled: true}}})
+	require.NoError(t, err)
+	_, err = svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	require.False(t, IsIntelligenceRouting(c.Request.Context()))
+	fresh, _ := gin.CreateTestContext(httptest.NewRecorder())
+	fresh.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	fresh.Request.Header.Set("Content-Type", "application/json")
+	_, err = svc.ParseOpenAIImagesRequest(fresh, body)
+	require.NoError(t, err)
+	require.True(t, IsIntelligenceRouting(fresh.Request.Context()))
+}
+
 type intelligenceRulesRepo struct {
 	SettingRepository
 	mu    sync.Mutex
 	value string
 	fail  bool
+}
+
+type intelligenceLinkRepo struct {
+	IntelligenceContextRepository
+	linked []string
+}
+
+func (r *intelligenceLinkRepo) Link(_ context.Context, _ string, _ int64, requestID string) error {
+	r.linked = append(r.linked, requestID)
+	return nil
+}
+
+func TestIntelligenceContextLinksOnlyUniqueRequestIDs(t *testing.T) {
+	repo := &intelligenceLinkRepo{}
+	settings := &SettingService{intelligenceContexts: repo}
+	ctx := WithIntelligenceContextID(context.Background(), "capture")
+	linkIntelligenceUsage(ctx, settings, 7, "grok-video:shared")
+	linkIntelligenceUsage(ctx, settings, 7, "local:client-controlled")
+	linkIntelligenceUsage(ctx, settings, 7, "client:not-a-uuid")
+	require.Empty(t, repo.linked)
+	id := "client:00000000-0000-4000-8000-000000000001"
+	linkIntelligenceUsage(ctx, settings, 7, id)
+	require.Equal(t, []string{id}, repo.linked)
 }
 
 func (r *intelligenceRulesRepo) GetValue(context.Context, string) (string, error) {
@@ -92,4 +140,22 @@ func TestIntelligenceRulesRejectInvalid(t *testing.T) {
 		_, err := s.SetIntelligenceRules(t.Context(), IntelligenceRules{Rules: []IntelligenceRule{rule}})
 		require.Error(t, err)
 	}
+}
+
+func TestIntelligenceBuiltinDisabledPersistAndOldSettings(t *testing.T) {
+	repo := &intelligenceRulesRepo{value: `{"rules":[{"name":"custom","type":"contains","pattern":"自定义","enabled":true}]}`}
+	s := &SettingService{settingRepo: repo}
+	old, err := s.GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	require.Len(t, old.MatchBuiltins("鹈鹕骑自行车"), 1)
+	require.True(t, old.Match("自定义"))
+	old.BuiltinDisabledIDs = []string{"builtin.pelican_bicycle"}
+	_, err = s.SetIntelligenceRules(t.Context(), old)
+	require.NoError(t, err)
+	loaded, err := (&SettingService{settingRepo: repo}).GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, loaded.MatchBuiltins("鹈鹕骑自行车"))
+	require.True(t, loaded.Match("自定义"))
+	require.Empty(t, loaded.MatchAll("鹈鹕骑自行车"))
+	require.True(t, IsIntelligenceTestRequest([]byte(`{"prompt":"鹈鹕骑自行车"}`)), "legacy detection retains old behavior")
 }

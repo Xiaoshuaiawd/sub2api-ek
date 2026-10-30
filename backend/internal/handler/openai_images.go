@@ -74,7 +74,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	}
 	parsed, err := h.gatewayService.ParseOpenAIImagesRequest(c, body)
 	if err != nil {
-		if errors.Is(err, service.ErrImageModelAuthorizationUnavailable) || errors.Is(err, service.ErrIntelligenceRulesUnavailable) {
+		if errors.Is(err, service.ErrImageModelAuthorizationUnavailable) || errors.Is(err, service.ErrIntelligenceRulesUnavailable) || errors.Is(err, service.ErrIntelligenceContextUnavailable) {
 			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", err.Error())
 		} else {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())

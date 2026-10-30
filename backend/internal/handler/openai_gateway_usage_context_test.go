@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,6 +23,12 @@ func TestSubmitUsageRecordTaskCopiesRequestContext(t *testing.T) {
 
 	require.Equal(t, "client-request-123", gotClientRequestID)
 	require.Equal(t, "request-456", gotRequestID)
+}
+
+func TestUsageRecordContextPreservesIntelligenceContextID(t *testing.T) {
+	parent := service.WithIntelligenceContextID(context.Background(), "capture-id")
+	ctx := usageRecordContext(parent, context.Background())
+	require.Equal(t, "capture-id", service.IntelligenceContextID(ctx))
 }
 
 func TestOpenAISubmitUsageRecordTaskCopiesRequestContext(t *testing.T) {

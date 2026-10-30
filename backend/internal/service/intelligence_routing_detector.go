@@ -20,6 +20,64 @@ var intelligenceUIElementPattern = regexp.MustCompile(`\b(?:icons?|logos?|spinne
 var intelligenceNarrativePattern = regexp.MustCompile(`\b(?:cats?|dogs?|fox(?:es)?|pandas?|penguins?|flamingos?|horses?|robots?|astronauts?|animals?|characters?|people|person|emperor|dragons?|wizards?|beach|forest)\b`)
 var intelligenceVisualSceneTaskPattern = regexp.MustCompile(`(?:画|畫|绘|繪|制作|製作|生成|创作|創作|描绘|描繪|输出|輸出|\b(?:draw|illustrat(?:e|ing)|create|generate|render|make|return|output)\b).{0,80}(?:一只|一隻|一位|一名|一座|一辆|一輛|人物|角色|动物|動物|猫|貓|企鹅|企鵝|狐狸|熊猫|熊貓|机器人|機器人|宇航员|宇航員|\b(?:cats?|dogs?|fox(?:es)?|pandas?|penguins?|flamingos?|horses?|robots?|astronauts?|animals?|characters?|people|person|emperor|dragons?|wizards?|beach|forest|planets?)\b)`)
 
+type IntelligenceRuleMatch struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Pattern string `json:"pattern,omitempty"`
+}
+
+type IntelligenceBuiltinRule struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+var intelligenceBuiltinRules = []IntelligenceBuiltinRule{
+	{ID: "builtin.knowledge_iphone", Name: "知识截止与 iPhone 型号", Description: "同时询问知识截止日期和最新 iPhone 型号"},
+	{ID: "builtin.pelican_bicycle", Name: "鹈鹕骑自行车", Description: "包含鹈鹕和骑自行车的场景及语言变体"},
+	{ID: "builtin.qin_tank", Name: "秦始皇驾驶坦克", Description: "秦始皇或嬴政与坦克的绘制、动画或驾驶场景"},
+	{ID: "builtin.candy_named", Name: "糖果测试名称", Description: "明确提及糖果测试、糖果题或 candy benchmark"},
+	{ID: "builtin.candy_structure", Name: "糖果抽取题结构", Description: "同时包含糖果、形状和最少抽取或保证等条件"},
+	{ID: "builtin.modeltrace_named", Name: "ModelTrace 指纹名称", Description: "同时提及 ModelTrace 与指纹或测试"},
+	{ID: "builtin.modeltrace_structure", Name: "ModelTrace 随机整数题结构", Description: "满足数量、范围和不使用工具等条件的随机整数题"},
+	{ID: "builtin.svg_scene", Name: "SVG 视觉绘制题结构", Description: "SVG 及二维、三维、HTML、运动场景等绘制变体"},
+}
+
+func IntelligenceBuiltinRules() []IntelligenceBuiltinRule {
+	return append([]IntelligenceBuiltinRule(nil), intelligenceBuiltinRules...)
+}
+
+func MergeIntelligenceRuleMatches(groups ...[]IntelligenceRuleMatch) []IntelligenceRuleMatch {
+	var result []IntelligenceRuleMatch
+	seen := make(map[string]bool)
+	for _, group := range groups {
+		for _, match := range group {
+			key := match.Type + "\x00" + match.ID
+			if !seen[key] {
+				seen[key] = true
+				result = append(result, match)
+			}
+		}
+	}
+	return result
+}
+
+// MatchIntelligenceBuiltins reports all applicable built-in rules. Callers
+// decide which user message or OCR output to pass and whether rules are enabled.
+func MatchIntelligenceBuiltins(text string) []IntelligenceRuleMatch {
+	indexes := intelligencePromptMatchIndexes(strings.ToLower(text))
+	if matchesVisualIntelligencePrompt(text) {
+		indexes = append(indexes, 7)
+	}
+	var matches []IntelligenceRuleMatch
+	for _, index := range indexes {
+		rule := intelligenceBuiltinRules[index]
+		matches = append(matches, IntelligenceRuleMatch{ID: rule.ID, Name: rule.Name, Type: "builtin"})
+	}
+	return matches
+}
+
 // IsIntelligenceTestRequest classifies only the latest user message. History,
 // assistant/tool output and system/developer instructions never influence it.
 func IsIntelligenceTestRequest(body []byte) bool {
@@ -257,6 +315,11 @@ func intelligenceContainsAny(s string, terms ...string) bool {
 }
 
 func matchesIntelligencePrompt(s string) bool {
+	return len(intelligencePromptMatchIndexes(s)) > 0
+}
+
+func intelligencePromptMatchIndexes(s string) []int {
+	var matches []int
 	// Knowledge-cutoff probes often pair a cutoff question with the newest
 	// iPhone model, with or without explicit instructions not to browse.
 	knowledge := intelligenceContainsAny(s, "知识库", "知識庫", "知识截止", "知識截止", "知识更新", "知識更新", "训练数据", "訓練資料", "训练资料", "訓練數據", "knowledge cutoff", "knowledge cut-off", "knowledge cut off", "training data", "knowledge base")
@@ -264,10 +327,10 @@ func matchesIntelligencePrompt(s string) bool {
 	phone := intelligenceContainsAny(s, "iphone", "i phone", "苹果手机", "蘋果手機")
 	latest := intelligenceContainsAny(s, "最新", "新款", "最近", "出到", "第几代", "第幾代", "哪一代", "哪款", "什么型号", "什麼型號", "最新型号", "最新型號", "latest", "newest", "most recent", "current model", "current iphone", "which iphone", "what iphone")
 	if knowledge && cutoff && phone && latest {
-		return true
+		matches = append(matches, 0)
 	}
 	if intelligenceContainsAny(s, "鹈鹕", "鵜鶘", "pelican") && intelligenceContainsAny(s, "自行车", "單車", "单车", "骑车", "騎車", "骑行", "bicycle", "bike", "cycling") {
-		return true
+		matches = append(matches, 1)
 	}
 	// The Qin Shi Huang driving a tank animation is a related visual benchmark.
 	// Require the specific subject and vehicle plus a scene/creation signal, so
@@ -276,20 +339,23 @@ func matchesIntelligencePrompt(s string) bool {
 	if intelligenceContainsAny(qinName, "秦始皇", "嬴政", "qin shi huang", "qin shihuang", "ying zheng", "yingzheng", "first emperor of china", "first chinese emperor") &&
 		(intelligenceContainsAny(s, "坦克", "装甲车", "裝甲車", "装甲战车", "裝甲戰車") || intelligenceTankPattern.MatchString(s)) &&
 		intelligenceContainsAny(s, "svg", "canvas", "html", "2d", "二维", "二維", "动画", "動畫", "动态", "動態", "绘", "繪", "画", "畫", "驾驶", "駕駛", "开坦克", "開坦克", "开着", "開著", "乘坐", "坐在", "draw", "illustrat", "sketch", "animat", "driv", "ride", "riding", "piloting", "operating", "on a tank", "in a tank") {
-		return true
+		matches = append(matches, 2)
 	}
 	if intelligenceContainsAny(s, "糖果测试", "糖果測試", "糖果题", "糖果題", "candy test", "candy benchmark") {
-		return true
+		matches = append(matches, 3)
 	}
 	if intelligenceContainsAny(s, "糖果", "糖块", "糖塊", "candy", "candies", "sweets") &&
 		intelligenceContainsAny(s, "形状", "形狀", "圆形", "圓形", "五角星", "shape", "round", "star-shaped") &&
 		intelligenceContainsAny(s, "最少", "至少", "保证", "保證", "摸出", "抽取", "minimum", "least", "guarantee", "draw") {
-		return true
+		matches = append(matches, 4)
 	}
 	if strings.Contains(s, "modeltrace") && intelligenceContainsAny(s, "指纹", "指紋", "fingerprint", "测试", "測試", "test") {
-		return true
+		matches = append(matches, 5)
 	}
-	return intelligenceContainsAny(s, "到", "至", "之间", "之間", "范围", "範圍", "between", "range", " to ", "-") && intelligenceContainsAny(s, "整数", "整數", "integer", "numbers", "数字", "數字") &&
+	if intelligenceContainsAny(s, "到", "至", "之间", "之間", "范围", "範圍", "between", "range", " to ", "-") && intelligenceContainsAny(s, "整数", "整數", "integer", "numbers", "数字", "數字") &&
 		modelTraceCount.MatchString(s) && intelligenceContainsAny(s, "禁止", "不要", "不使用", "不借助", "without", "no tool", "do not", "don't", "不得") &&
-		intelligenceContainsAny(s, "工具", "代码", "代碼", "随机", "隨機", "tool", "code", "random")
+		intelligenceContainsAny(s, "工具", "代码", "代碼", "随机", "隨機", "tool", "code", "random") {
+		matches = append(matches, 6)
+	}
+	return matches
 }

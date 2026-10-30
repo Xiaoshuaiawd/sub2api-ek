@@ -381,6 +381,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			requestID = stable
 		}
 	}
+	if !result.OpenAIWSMode {
+		linkIntelligenceUsage(ctx, s.settingService, apiKey.ID, requestID)
+	}
 
 	// 确定 RequestedModel（渠道映射前的原始模型）
 	requestedModel := result.Model

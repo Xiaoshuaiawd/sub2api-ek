@@ -13,6 +13,20 @@
         <button type="button" class="btn btn-secondary btn-sm" @click="load">{{ t('admin.settings.intelligenceRules.retry') }}</button>
       </template>
       <template v-else>
+        <fieldset v-if="builtins.length" :disabled="saving" class="space-y-3">
+          <div>
+            <h3 class="font-medium text-gray-900 dark:text-white">{{ t('admin.settings.intelligenceRules.builtinTitle') }}</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.settings.intelligenceRules.builtinHint') }}</p>
+          </div>
+          <label v-for="rule in builtins" :key="rule.id" class="flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+            <span class="min-w-0">
+              <span class="block font-medium text-gray-900 dark:text-white">{{ rule.name }}</span>
+              <span class="mt-1 block text-sm text-gray-500 dark:text-gray-400">{{ rule.description }}</span>
+            </span>
+            <input v-model="rule.enabled" data-testid="builtin-rule-enabled" type="checkbox" class="mt-1 h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          </label>
+        </fieldset>
+        <h3 class="border-t border-gray-100 pt-4 font-medium text-gray-900 dark:border-dark-700 dark:text-white">{{ t('admin.settings.intelligenceRules.customTitle') }}</h3>
         <p v-if="rules.length === 0" class="rounded-lg border border-dashed border-gray-300 px-4 py-6 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400">{{ t('admin.settings.intelligenceRules.empty') }}</p>
         <fieldset :disabled="saving" class="space-y-3">
           <div v-for="(rule, index) in rules" :key="rule.id" data-testid="intelligence-rule" class="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-dark-600">
@@ -57,11 +71,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { getRules, saveRules, type IntelligenceRule } from '@/api/admin/intelligenceRules'
+import { getRules, saveRules, type IntelligenceRule, type IntelligenceBuiltinRule } from '@/api/admin/intelligenceRules'
 
 type EditableRule = IntelligenceRule & { id: number }
 const { t } = useI18n()
 const rules = ref<EditableRule[]>([])
+const builtins = ref<IntelligenceBuiltinRule[]>([])
+const previouslyDisabled = ref<string[]>([])
 const loading = ref(false)
 const loaded = ref(false)
 const saving = ref(false)
@@ -70,7 +86,14 @@ const success = ref('')
 const savedSnapshot = ref('')
 let nextId = 0
 const editable = (values: IntelligenceRule[]) => values.map(rule => ({ ...rule, id: nextId++ }))
-const payload = () => rules.value.map(({ name, type, pattern, enabled }) => ({ name, type, pattern, enabled }))
+const payload = () => {
+  const builtinIds = new Set(builtins.value.map(rule => rule.id))
+  const unknownDisabled = previouslyDisabled.value.filter(id => !builtinIds.has(id))
+  return {
+    rules: rules.value.map(({ name, type, pattern, enabled }) => ({ name, type, pattern, enabled })),
+    builtin_disabled_ids: [...unknownDisabled, ...builtins.value.filter(rule => !rule.enabled).map(rule => rule.id)],
+  }
+}
 const dirty = computed(() => JSON.stringify(payload()) !== savedSnapshot.value)
 const message = (value: unknown) => (value as { message?: string })?.message || t('admin.settings.intelligenceRules.error')
 
@@ -84,6 +107,8 @@ async function load() {
   try {
     const result = await getRules()
     rules.value = editable(result.rules || [])
+    builtins.value = result.builtins || []
+    previouslyDisabled.value = result.builtin_disabled_ids || []
     savedSnapshot.value = JSON.stringify(payload())
     loaded.value = true
   } catch (err) { error.value = message(err) }
@@ -106,8 +131,10 @@ async function save() {
   error.value = ''
   success.value = ''
   try {
-    const result = await saveRules({ rules: payload() })
+    const result = await saveRules(payload())
     rules.value = editable(result.rules || [])
+    builtins.value = result.builtins || []
+    previouslyDisabled.value = result.builtin_disabled_ids || []
     savedSnapshot.value = JSON.stringify(payload())
     success.value = t('admin.settings.intelligenceRules.saved')
   } catch (err) { error.value = message(err) }

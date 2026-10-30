@@ -69,10 +69,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		return
 	}
 
-	if !bindIntelligenceRouting(c, body, h.gatewayService.IntelligenceRuleSettings()) {
-		return
-	}
-	if !bindIntelligenceRoutingPrompt(c, gjson.GetBytes(body, "query").String(), h.gatewayService.IntelligenceRuleSettings()) {
+	if !bindIntelligenceRoutingWithExtraPrompt(c, body, gjson.GetBytes(body, "query").String(), h.gatewayService.IntelligenceRuleSettings()) {
 		return
 	}
 

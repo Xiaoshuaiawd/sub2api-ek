@@ -69,6 +69,12 @@ func IntelligenceRouteWithRules(ctx context.Context, body []byte, rules Intellig
 	return intelligenceRouteWithOCRRules(ctx, body, rules, recognizeIntelligenceImage)
 }
 
+// ClassifyIntelligenceRequest reports every matching rule, including rules
+// matched against text recognized in the latest user message's images.
+func ClassifyIntelligenceRequest(ctx context.Context, body []byte, rules IntelligenceRules) ([]IntelligenceRuleMatch, error) {
+	return intelligenceClassifyWithOCRRules(ctx, body, rules, recognizeIntelligenceImage)
+}
+
 func (s *OpenAIGatewayService) IntelligenceRuleSettings() *SettingService {
 	if s == nil {
 		return nil
@@ -77,14 +83,20 @@ func (s *OpenAIGatewayService) IntelligenceRuleSettings() *SettingService {
 }
 
 func intelligenceRouteWithOCRRules(ctx context.Context, body []byte, rules IntelligenceRules, recognize func(context.Context, string) (string, error)) (bool, error) {
+	matches, err := intelligenceClassifyWithOCRRules(ctx, body, rules, recognize)
+	return len(matches) > 0, err
+}
+
+func intelligenceClassifyWithOCRRules(ctx context.Context, body []byte, rules IntelligenceRules, recognize func(context.Context, string) (string, error)) ([]IntelligenceRuleMatch, error) {
+	var request map[string]any
+	_ = json.Unmarshal(body, &request)
+	text := intelligenceLatestUserText(request)
 	images, err := ExtractIntelligenceLatestImages(body)
 	if err != nil {
-		return false, ErrIntelligenceOCR
+		return rules.MatchAll(text), ErrIntelligenceOCR
 	}
 	if len(images) == 0 {
-		var request map[string]any
-		_ = json.Unmarshal(body, &request)
-		return IsIntelligenceTestRequest(body) || rules.Match(intelligenceLatestUserText(request)), nil
+		return rules.MatchAll(text), nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
@@ -92,21 +104,17 @@ func intelligenceRouteWithOCRRules(ctx context.Context, body []byte, rules Intel
 	case intelligenceOCRSlots <- struct{}{}:
 		defer func() { <-intelligenceOCRSlots }()
 	case <-ctx.Done():
-		return false, ErrIntelligenceOCR
+		return rules.MatchAll(text), ErrIntelligenceOCR
 	}
-	var request map[string]any
-	_ = json.Unmarshal(body, &request)
-	text := intelligenceLatestUserText(request)
 	for _, image := range images {
 		part, err := recognize(ctx, image)
 		if err != nil {
-			return false, ErrIntelligenceOCR
+			return MergeIntelligenceRuleMatches(rules.MatchAll(text), rules.MatchAll(strings.Join(strings.Fields(text), ""))), ErrIntelligenceOCR
 		}
 		text += " " + part
 	}
-	text = normalizeIntelligenceVisualText(text)
 	compact := strings.Join(strings.Fields(text), "")
-	return matchesIntelligencePrompt(text) || matchesVisualIntelligencePrompt(text) || matchesIntelligencePrompt(compact) || matchesVisualIntelligencePrompt(compact) || rules.Match(text) || rules.Match(compact), nil
+	return MergeIntelligenceRuleMatches(rules.MatchAll(text), rules.MatchAll(compact)), nil
 }
 
 var intelligenceImageClient = &http.Client{

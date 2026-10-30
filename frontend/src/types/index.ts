@@ -2057,6 +2057,7 @@ export interface UsageLogAccountSummary {
 }
 
 export interface AdminUsageLog extends UsageLog {
+  intelligence_context_available?: boolean
   upstream_model?: string | null
   upstream_reasoning_effort?: string | null
   upstream_response_model?: string | null

@@ -526,6 +526,9 @@ func usageRecordContext(parent context.Context, base context.Context) context.Co
 	if requestID, _ := parent.Value(ctxkey.RequestID).(string); strings.TrimSpace(requestID) != "" {
 		base = context.WithValue(base, ctxkey.RequestID, strings.TrimSpace(requestID))
 	}
+	if id := service.IntelligenceContextID(parent); id != "" {
+		base = service.WithIntelligenceContextID(base, id)
+	}
 	return requesttiming.With(base, requesttiming.From(parent))
 }
 
@@ -2948,14 +2951,20 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "intelligence routing rules unavailable; please retry")
 		return
 	}
-	firstNeedsIntelligence, ocrErr := service.IntelligenceRouteWithRules(ctx, firstMessage, firstRules)
+	firstMatches, ocrErr := service.ClassifyIntelligenceRequest(ctx, firstMessage, firstRules)
+	firstNeedsIntelligence := len(firstMatches) > 0
+	if firstNeedsIntelligence {
+		var captureErr error
+		ctx, captureErr = service.CaptureIntelligenceRequest(ctx, h.gatewayService.IntelligenceRuleSettings(), apiKey, firstMessage, "application/json", firstMatches)
+		if captureErr != nil {
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "intelligence request capture unavailable; please retry")
+			return
+		}
+		c.Request = c.Request.WithContext(ctx)
+	}
 	if ocrErr != nil {
 		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "image text recognition failed; please retry")
 		return
-	}
-	if firstNeedsIntelligence {
-		ctx = service.WithIntelligenceRouting(ctx)
-		c.Request = c.Request.WithContext(ctx)
 	}
 	if middleware2.CheckGroupSubagentFrame(c, firstMessage) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, middleware2.GroupSubagentsBlockedMessage)
@@ -3487,6 +3496,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		var turnPricing openAIWSTurnPricing
 		var turnNeedsIntelligence atomic.Bool
 		turnNeedsIntelligence.Store(firstNeedsIntelligence)
+		var intelligenceTurnContexts sync.Map
+		intelligenceTurnContexts.Store(1, service.IntelligenceContextID(ctx))
 		var turnBillingAPIKeys openAIWSTurnBillingAPIKeys
 		// turnQueuePermissions 由 BeforeRequest 按当前 turn 覆写，BeforeTurn 在
 		// 同一连接循环内读取并复制为不可变 ctx 值，等待 worker 不再读取它。
@@ -3519,11 +3530,24 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					if err != nil {
 						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "intelligence routing rules unavailable; please retry", err)
 					}
-					required, err := service.IntelligenceRouteWithRules(ctx, raw, rules)
+					matches, err := service.ClassifyIntelligenceRequest(ctx, raw, rules)
+					captureID := ""
+					if len(matches) > 0 {
+						base := service.WithIntelligenceContextID(ctx, "")
+						turnCtx, captureErr := service.CaptureIntelligenceRequest(base, h.gatewayService.IntelligenceRuleSettings(), apiKey, raw, "application/json", matches)
+						if captureErr != nil {
+							return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "intelligence request capture unavailable; please retry", captureErr)
+						}
+						captureID = service.IntelligenceContextID(turnCtx)
+					}
 					if err != nil {
 						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "image text recognition failed; please retry", err)
 					}
-					turnNeedsIntelligence.Store(required)
+					// A rejected overlapping frame may reuse the in-flight turn number.
+					// Keep its captured body separately, without replacing that turn's ID.
+					if _, alreadyPresent := intelligenceTurnContexts.LoadOrStore(turn, captureID); !alreadyPresent {
+						turnNeedsIntelligence.Store(len(matches) > 0)
+					}
 				}
 				if middleware2.CheckGroupSubagentFrame(c, raw) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, middleware2.GroupSubagentsBlockedMessage, nil)
@@ -3809,7 +3833,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				turnRecordPricingAt := turnPricing.currentOr(turnStart)
 				turnBillingAPIKey := turnBillingAPIKeys.forTurn(turn, apiKey)
 				cyberBlocked := service.GetOpsCyberPolicy(c) != nil
-				h.submitOpenAIUsageRecordTask(ctx, result, func(taskCtx context.Context) {
+				turnRecordCtx := service.WithIntelligenceContextID(ctx, "")
+				if value, ok := intelligenceTurnContexts.LoadAndDelete(turn); ok {
+					turnRecordCtx = service.WithIntelligenceContextID(turnRecordCtx, value.(string))
+				}
+				h.submitOpenAIUsageRecordTask(turnRecordCtx, result, func(taskCtx context.Context) {
 					if err := h.gatewayService.RecordUsage(taskCtx, &service.OpenAIRecordUsageInput{
 						Result:             result,
 						APIKey:             turnBillingAPIKey,

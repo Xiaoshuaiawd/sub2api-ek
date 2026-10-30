@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -197,6 +198,7 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 	if c == nil || c.Request == nil {
 		return nil, fmt.Errorf("missing request context")
 	}
+	defer httputil.ReleaseOriginalRequestBody(c.Request.Context())
 	endpoint := normalizeOpenAIImagesEndpointPath(c.Request.URL.Path)
 	if endpoint == "" {
 		return nil, fmt.Errorf("unsupported images endpoint")
@@ -234,16 +236,25 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 
 	// Classify the prompt before channel model validation: image requests can
 	// be multipart and the caller cannot inspect their prompt until parsing.
-	if req.Prompt != "" && !IsIntelligenceRouting(c.Request.Context()) {
-		promptBody, _ := json.Marshal(map[string]string{"prompt": req.Prompt})
+	if !IntelligenceClassificationFrozen(c.Request.Context()) && req.Prompt != "" && !IsIntelligenceRouting(c.Request.Context()) {
 		rules, err := s.settingService.RuntimeIntelligenceRules(c.Request.Context())
 		if err != nil {
 			return nil, ErrIntelligenceRulesUnavailable
 		}
-		if IsIntelligenceTestRequest(promptBody) || rules.Match(req.Prompt) {
-			c.Request = c.Request.WithContext(WithIntelligenceRouting(c.Request.Context()))
+		matches := rules.MatchAll(req.Prompt)
+		if len(matches) > 0 {
+			keyValue, _ := c.Get("api_key")
+			key, _ := keyValue.(*APIKey)
+			ctx, err := CaptureIntelligenceRequest(c.Request.Context(), s.settingService, key, body, contentType, matches)
+			if err != nil {
+				return nil, err
+			}
+			c.Request = c.Request.WithContext(ctx)
 		}
 	}
+	// Async image submission parses the same original request again in a worker.
+	// Keep its initial classification even if administrators change rules later.
+	c.Request = c.Request.WithContext(WithIntelligenceClassificationFrozen(c.Request.Context()))
 
 	applyOpenAIImagesDefaults(req)
 	req.clientModel = req.Model

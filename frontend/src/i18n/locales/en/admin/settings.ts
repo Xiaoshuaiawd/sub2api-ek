@@ -34,7 +34,10 @@ export default {
       intelligenceRules: {
         title: 'Intelligence test question library',
         description: 'Add questions to route to accounts marked as intelligence test qualified. Any enabled rule can trigger routing.',
-        hint: 'Only the latest user message and OCR text from its images are checked. Existing built-in rules remain active. Matching is case-insensitive by default; Go RE2 expressions cannot use lookaheads, backreferences, or match an empty string.',
+        hint: 'Only the latest user message and OCR text from its images are checked. Matching is case-insensitive by default; Go RE2 expressions cannot use lookaheads, backreferences, or match an empty string.',
+        builtinTitle: 'Default rules',
+        builtinHint: 'Enable or disable each rule. Multiple rules can match, so disabling one may still leave others active.',
+        customTitle: 'Custom rules',
         limits: 'Up to 200 rules. Each requires a name and pattern, limited to 256 and 4096 bytes respectively.',
         name: 'Rule name',
         namePlaceholder: 'e.g. custom candy question',
