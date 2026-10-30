@@ -69,10 +69,12 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		return
 	}
 
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.gatewayService.IntelligenceRuleSettings()) {
 		return
 	}
-	bindIntelligenceRoutingPrompt(c, gjson.GetBytes(body, "query").String())
+	if !bindIntelligenceRoutingPrompt(c, gjson.GetBytes(body, "query").String(), h.gatewayService.IntelligenceRuleSettings()) {
+		return
+	}
 
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || strings.TrimSpace(modelResult.String()) == "" {

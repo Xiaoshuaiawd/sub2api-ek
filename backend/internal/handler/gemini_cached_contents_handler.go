@@ -105,7 +105,7 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.settingService) {
 		return
 	}
 	req, err := service.ParseGeminiCachedContentCreateRequest(body, svc.Now(), svc.MaxTTL())

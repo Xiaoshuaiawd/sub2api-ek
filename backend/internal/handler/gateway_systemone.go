@@ -63,7 +63,7 @@ func (h *GatewayHandler) SystemOne(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
-	if !bindIntelligenceRouting(c, body) {
+	if !bindIntelligenceRouting(c, body, h.settingService) {
 		return
 	}
 	model, err := typesafe.ValidateSystemOneRequest(body)

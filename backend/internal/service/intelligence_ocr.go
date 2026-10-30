@@ -61,12 +61,30 @@ func IntelligenceRouteWithOCR(ctx context.Context, body []byte) (bool, error) {
 }
 
 func intelligenceRouteWithOCR(ctx context.Context, body []byte, recognize func(context.Context, string) (string, error)) (bool, error) {
+	return intelligenceRouteWithOCRRules(ctx, body, IntelligenceRules{}, recognize)
+}
+
+// IntelligenceRouteWithRules extends built-in detection with administrator rules.
+func IntelligenceRouteWithRules(ctx context.Context, body []byte, rules IntelligenceRules) (bool, error) {
+	return intelligenceRouteWithOCRRules(ctx, body, rules, recognizeIntelligenceImage)
+}
+
+func (s *OpenAIGatewayService) IntelligenceRuleSettings() *SettingService {
+	if s == nil {
+		return nil
+	}
+	return s.settingService
+}
+
+func intelligenceRouteWithOCRRules(ctx context.Context, body []byte, rules IntelligenceRules, recognize func(context.Context, string) (string, error)) (bool, error) {
 	images, err := ExtractIntelligenceLatestImages(body)
 	if err != nil {
 		return false, ErrIntelligenceOCR
 	}
 	if len(images) == 0 {
-		return IsIntelligenceTestRequest(body), nil
+		var request map[string]any
+		_ = json.Unmarshal(body, &request)
+		return IsIntelligenceTestRequest(body) || rules.Match(intelligenceLatestUserText(request)), nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
@@ -88,7 +106,7 @@ func intelligenceRouteWithOCR(ctx context.Context, body []byte, recognize func(c
 	}
 	text = normalizeIntelligenceVisualText(text)
 	compact := strings.Join(strings.Fields(text), "")
-	return matchesIntelligencePrompt(text) || matchesVisualIntelligencePrompt(text) || matchesIntelligencePrompt(compact) || matchesVisualIntelligencePrompt(compact), nil
+	return matchesIntelligencePrompt(text) || matchesVisualIntelligencePrompt(text) || matchesIntelligencePrompt(compact) || matchesVisualIntelligencePrompt(compact) || rules.Match(text) || rules.Match(compact), nil
 }
 
 var intelligenceImageClient = &http.Client{

@@ -332,7 +332,7 @@ func imageTaskJSONError(c *gin.Context, status int, code, message string) {
 
 // Authorization storage failure is temporary, not an invalid image request.
 func imageTaskValidationError(c *gin.Context, err error) {
-	if errors.Is(err, service.ErrImageModelAuthorizationUnavailable) {
+	if errors.Is(err, service.ErrImageModelAuthorizationUnavailable) || errors.Is(err, service.ErrIntelligenceRulesUnavailable) {
 		imageTaskJSONError(c, http.StatusServiceUnavailable, "api_error", err.Error())
 		return
 	}

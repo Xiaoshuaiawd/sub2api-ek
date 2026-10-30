@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http/httptest"
 	"testing"
 
@@ -9,6 +11,18 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
+
+type intelligenceRulesRoutingRepo struct{ service.SettingRepository }
+
+type intelligenceRulesFailingRepo struct{ service.SettingRepository }
+
+func (intelligenceRulesFailingRepo) GetValue(context.Context, string) (string, error) {
+	return "", errors.New("settings unavailable")
+}
+
+func (intelligenceRulesRoutingRepo) GetValue(context.Context, string) (string, error) {
+	return `{"rules":[{"name":"test","type":"contains","pattern":"特殊样题","enabled":true}]}`, nil
+}
 
 func TestBindIntelligenceRouting(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -51,4 +65,27 @@ func TestBindIntelligenceRoutingUnsupportedImage(t *testing.T) {
 	require.False(t, ok)
 	require.True(t, c.IsAborted())
 	require.Equal(t, 503, recorder.Code)
+}
+
+func TestBindIntelligenceRoutingCustomRules(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	settings := service.NewSettingService(intelligenceRulesRoutingRepo{}, nil)
+	require.True(t, bindIntelligenceRouting(c, []byte(`{"messages":[{"role":"user","content":"请回答特殊样题"}]}`), settings))
+	require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	require.True(t, bindIntelligenceRouting(c, []byte(`{"messages":[{"role":"user","content":"特殊样题"},{"role":"user","content":"你好"}]}`), settings))
+	require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
+}
+
+func TestBindIntelligenceRoutingGeminiSettingsFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/v1beta/models/model:generateContent", nil)
+	settings := service.NewSettingService(intelligenceRulesFailingRepo{}, nil)
+	require.False(t, bindIntelligenceRouting(c, []byte(`{"contents":[]}`), settings))
+	require.Equal(t, 503, w.Code)
+	require.Contains(t, w.Body.String(), `"status":"INTERNAL"`)
 }

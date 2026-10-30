@@ -236,7 +236,11 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 	// be multipart and the caller cannot inspect their prompt until parsing.
 	if req.Prompt != "" && !IsIntelligenceRouting(c.Request.Context()) {
 		promptBody, _ := json.Marshal(map[string]string{"prompt": req.Prompt})
-		if IsIntelligenceTestRequest(promptBody) {
+		rules, err := s.settingService.RuntimeIntelligenceRules(c.Request.Context())
+		if err != nil {
+			return nil, ErrIntelligenceRulesUnavailable
+		}
+		if IsIntelligenceTestRequest(promptBody) || rules.Match(req.Prompt) {
 			c.Request = c.Request.WithContext(WithIntelligenceRouting(c.Request.Context()))
 		}
 	}

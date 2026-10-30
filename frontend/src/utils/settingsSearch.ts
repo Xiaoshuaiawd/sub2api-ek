@@ -16,6 +16,7 @@ interface SettingsSection {
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   { tab: 'security', id: 'admin-api-key', titleKey: 'admin.settings.adminApiKey.title' },
   { tab: 'gateway', id: 'overload-cooldown', titleKey: 'admin.settings.overloadCooldown.title' },
+  { tab: 'gateway', id: 'intelligence-rules', titleKey: 'admin.settings.intelligenceRules.title' },
   { tab: 'gateway', id: 'rate-limit429cooldown', titleKey: 'admin.settings.rateLimit429Cooldown.title' },
   { tab: 'gateway', id: 'stream-timeout', titleKey: 'admin.settings.streamTimeout.title' },
   { tab: 'juice', id: 'juice-fixer', titleKey: 'admin.settings.juiceFixer.title' },
