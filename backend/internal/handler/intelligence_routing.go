@@ -36,7 +36,7 @@ func bindIntelligenceRoutingInternal(c *gin.Context, body, original []byte, extr
 			return false
 		}
 	}
-	matches, err := service.ClassifyIntelligenceRequest(c.Request.Context(), body, rules)
+	matches, _ := service.ClassifyIntelligenceRequest(c.Request.Context(), body, rules)
 	if extraPrompt != nil {
 		extraBody, _ := json.Marshal(map[string]string{"prompt": *extraPrompt})
 		extraMatches, _ := service.ClassifyIntelligenceRequest(c.Request.Context(), extraBody, rules)
@@ -54,10 +54,6 @@ func bindIntelligenceRoutingInternal(c *gin.Context, body, original []byte, extr
 			return false
 		}
 		c.Request = c.Request.WithContext(ctx)
-	}
-	if err != nil {
-		intelligenceRoutingError(c, "Image text recognition failed; please retry")
-		return false
 	}
 	return true
 }

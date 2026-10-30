@@ -73,15 +73,30 @@ func TestBindIntelligenceRouting(t *testing.T) {
 	require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
 }
 
-func TestBindIntelligenceRoutingUnsupportedImage(t *testing.T) {
+func TestBindIntelligenceRoutingImageOnlyDoesNotInvokeOCR(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
 	ok := bindIntelligenceRouting(c, []byte(`{"input":[{"role":"user","content":[{"type":"input_image","file_id":"unavailable"}]}]}`))
-	require.False(t, ok)
-	require.True(t, c.IsAborted())
-	require.Equal(t, 503, recorder.Code)
+	require.True(t, ok)
+	require.False(t, c.IsAborted())
+	require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
+}
+
+func TestBindIntelligenceRoutingTextWithImage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &intelligenceCaptureRepo{}
+	settings := service.NewSettingService(intelligenceRulesRoutingRepo{}, nil)
+	settings.SetIntelligenceContextRepository(store)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	c.Set("api_key", &service.APIKey{ID: 7, UserID: 9})
+	body := []byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"糖果测试"},{"type":"input_image","file_id":"unavailable"}]}]}`)
+	require.True(t, bindIntelligenceRouting(c, body, settings))
+	require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+	require.Len(t, store.stored, 1)
+	require.Equal(t, body, store.stored[0].Body)
 }
 
 func TestBindIntelligenceRoutingCustomRules(t *testing.T) {

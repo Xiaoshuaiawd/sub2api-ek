@@ -2951,7 +2951,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "intelligence routing rules unavailable; please retry")
 		return
 	}
-	firstMatches, ocrErr := service.ClassifyIntelligenceRequest(ctx, firstMessage, firstRules)
+	firstMatches, _ := service.ClassifyIntelligenceRequest(ctx, firstMessage, firstRules)
 	firstNeedsIntelligence := len(firstMatches) > 0
 	if firstNeedsIntelligence {
 		var captureErr error
@@ -2961,10 +2961,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return
 		}
 		c.Request = c.Request.WithContext(ctx)
-	}
-	if ocrErr != nil {
-		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "image text recognition failed; please retry")
-		return
 	}
 	if middleware2.CheckGroupSubagentFrame(c, firstMessage) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, middleware2.GroupSubagentsBlockedMessage)
@@ -3530,7 +3526,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					if err != nil {
 						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "intelligence routing rules unavailable; please retry", err)
 					}
-					matches, err := service.ClassifyIntelligenceRequest(ctx, raw, rules)
+					matches, _ := service.ClassifyIntelligenceRequest(ctx, raw, rules)
 					captureID := ""
 					if len(matches) > 0 {
 						base := service.WithIntelligenceContextID(ctx, "")
@@ -3539,9 +3535,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 							return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "intelligence request capture unavailable; please retry", captureErr)
 						}
 						captureID = service.IntelligenceContextID(turnCtx)
-					}
-					if err != nil {
-						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "image text recognition failed; please retry", err)
 					}
 					// A rejected overlapping frame may reuse the in-flight turn number.
 					// Keep its captured body separately, without replacing that turn's ID.
