@@ -12,10 +12,15 @@ export interface IntelligenceBuiltinRule {
   description: string
   enabled: boolean
 }
+export interface IntelligenceBuiltinExtension {
+  type: 'contains' | 'regex'
+  pattern: string
+}
 export interface IntelligenceRulesConfig {
   rules: IntelligenceRule[]
   builtin_disabled_ids?: string[]
   builtins?: IntelligenceBuiltinRule[]
+  builtin_extensions?: Record<string, IntelligenceBuiltinExtension[]>
 }
 
 export async function getRules(): Promise<IntelligenceRulesConfig> {
