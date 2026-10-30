@@ -396,8 +396,9 @@ type inflightEstimateDeps struct {
 	// accountMappedModels 返回调度器可选账号对 model 的账号级映射结果（去重，不含 model 本身）。
 	// 准入时账号尚未选定，计费侧 billableModelWithFallback 会回退到实际转发模型（UpstreamModel，
 	// 即账号映射后的模型），因此这里取所有候选映射模型的最高估算。
-	// 仅在首选/渠道候选均无法定价（或 composite 分组）时才调用；实现只读调度器快照，
-	// 不在请求路径上直接查库，也不按模型名缓存（内存不随请求模型名增长）。
+	// 通常仅在首选/渠道候选均无法定价或 composite 分组时调用；智商分流的
+	// upstream/response_model 计费也需检查实际输入的合格账号映射。实现复用
+	// 调度器快照，不在请求路径上直接查库，也不按模型名缓存（内存有界）。
 	accountMappedModels func(ctx context.Context, apiKey *APIKey, model string) []string
 }
 
@@ -422,6 +423,9 @@ func inflightAccountMappedModelsFromSnapshot(list inflightSnapshotLister, resolv
 		accounts, err := list(ctx, apiKey.GroupID, platform, forced)
 		if err != nil {
 			return nil
+		}
+		if IsIntelligenceRouting(ctx) {
+			accounts = filterIntelligenceRoutingAccounts(ctx, accounts)
 		}
 		return accountMappedModelsFrom(accounts, model)
 	}
@@ -469,24 +473,43 @@ func logInflightUnpriced(model string, groupID *int64) {
 //   - channel_mapped（默认）→ 映射后模型（同时估算请求模型，取较高者）；
 //   - requested → 请求模型；
 //   - upstream / response_model 在准入时未知 → 取请求模型与映射模型两者较高估算。
-func inflightBillingModelCandidates(ctx context.Context, deps inflightEstimateDeps, apiKey *APIKey, model string) (primary, fallbacks []string, upstreamInput string) {
+func inflightBillingModelCandidates(ctx context.Context, deps inflightEstimateDeps, apiKey *APIKey, model string) (primary, fallbacks []string, upstreamInput string, probeAccountMapping bool) {
 	upstreamInput = model
 	primary = []string{model}
 	if apiKey == nil || apiKey.GroupID == nil {
-		return primary, nil, upstreamInput
+		return primary, nil, upstreamInput, false
+	}
+	// Composite routes may translate the public alias independently of channel
+	// mapping. IQ requests still use that concrete route for account mappings
+	// and channel price lookup, even though the channel target is not forwarded.
+	channelInput := model
+	if IsIntelligenceRouting(ctx) && apiKey.Group != nil && apiKey.Group.Platform == PlatformComposite {
+		if resolved, ok := ResolvedUpstreamModelFromContext(ctx); ok {
+			channelInput = resolved
+			upstreamInput = resolved
+		}
 	}
 	if deps.resolveMapping != nil {
-		m := deps.resolveMapping(ctx, *apiKey.GroupID, model)
-		if mapped := m.MappedModel; mapped != "" && mapped != model {
-			upstreamInput = mapped
+		m := deps.resolveMapping(ctx, *apiKey.GroupID, channelInput)
+		probeAccountMapping = IsIntelligenceRouting(ctx) && (m.BillingModelSource == BillingModelSourceUpstream || m.BillingModelSource == BillingModelSourceResponse)
+		// Account mappings are resolved from the actual forwarded model. The
+		// configured channel target can still be the billing basis when this
+		// request deliberately bypasses channel forwarding.
+		if forwarded := m.MappedModel; forwarded != "" {
+			upstreamInput = forwarded
+		}
+		if pricingModel := m.pricingMappedModel(channelInput); pricingModel != "" && pricingModel != model {
 			if m.BillingModelSource == BillingModelSourceRequested {
-				fallbacks = append(fallbacks, mapped)
+				fallbacks = append(fallbacks, pricingModel)
 			} else {
-				primary = []string{mapped, model}
+				primary = []string{pricingModel, model}
 			}
 		}
 	}
-	return primary, fallbacks, upstreamInput
+	if channelInput != model {
+		fallbacks = append(fallbacks, channelInput)
+	}
+	return primary, fallbacks, upstreamInput, probeAccountMapping
 }
 
 func (d inflightEstimateDeps) rates(ctx context.Context, apiKey *APIKey) (text, image float64) {
@@ -653,7 +676,7 @@ func (d inflightEstimateDeps) estimate(ctx context.Context, apiKey *APIKey, req 
 		// 免费分组：不计费，也无需预留。
 		return 0, true
 	}
-	primary, fallbacks, upstreamInput := inflightBillingModelCandidates(ctx, d, apiKey, req.Model)
+	primary, fallbacks, upstreamInput, probeAccountMapping := inflightBillingModelCandidates(ctx, d, apiKey, req.Model)
 	bestOf := func(models []string) float64 {
 		best := 0.0
 		for _, m := range models {
@@ -672,11 +695,14 @@ func (d inflightEstimateDeps) estimate(ctx context.Context, apiKey *APIKey, req 
 		if c := bestOf(fallbacks); c > best {
 			best = c
 		}
-		// 账号级映射候选（读调度器快照）仅在仍无法定价或 composite 时才查，已定价模型不触发。
-		if (best <= 0 || composite) && d.accountMappedModels != nil {
-			if c := bestOf(d.accountMappedModels(ctx, apiKey, upstreamInput)); c > best {
-				best = c
-			}
+	}
+	// For intelligence requests billed by upstream/response model, the
+	// channel mapping is skipped and an eligible account may map the actual
+	// input to a more expensive model. Reuse the scheduler snapshot to reserve
+	// conservatively; ordinary and fixed-price requests keep their existing path.
+	if (best <= 0 || composite || probeAccountMapping) && d.accountMappedModels != nil {
+		if c := bestOf(d.accountMappedModels(ctx, apiKey, upstreamInput)); c > best {
+			best = c
 		}
 	}
 	if best <= 0 {
@@ -762,6 +788,13 @@ func (s *OpenAIGatewayService) inflightEstimateDeps() inflightEstimateDeps {
 			},
 			func(ctx context.Context, apiKey *APIKey, model string) (string, bool, bool) {
 				platform := PlatformOpenAI
+				if IsIntelligenceRouting(ctx) && apiKey.Group != nil && apiKey.Group.Platform == PlatformComposite {
+					resolved, ok := ResolvedTargetPlatformFromContext(ctx)
+					if !ok {
+						return "", false, false
+					}
+					return NormalizeOpenAICompatiblePlatform(resolved), false, true
+				}
 				if apiKey.Group != nil && apiKey.Group.Platform != "" && apiKey.Group.Platform != PlatformComposite {
 					platform = apiKey.Group.Platform
 				}

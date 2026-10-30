@@ -107,10 +107,36 @@ type channelCache struct {
 
 // ChannelMappingResult 渠道映射查找结果
 type ChannelMappingResult struct {
-	MappedModel        string // 映射后的模型名（无映射时等于原始模型名）
+	MappedModel        string // 实际转发使用的渠道模型（无映射时等于原始模型名）
 	ChannelID          int64  // 渠道 ID（0 = 无渠道关联）
-	Mapped             bool   // 是否发生了映射
+	Mapped             bool   // 是否向上游应用了渠道映射
 	BillingModelSource string // 计费模型来源（"requested" / "upstream" / "channel_mapped" / "response_model"）
+	// PricingMappedModel retains the configured channel target when forwarding
+	// intentionally skips a mapping. It preserves the existing pricing basis.
+	PricingMappedModel string
+}
+
+func (r ChannelMappingResult) pricingMappedModel(requestedModel string) string {
+	if r.PricingMappedModel != "" {
+		return r.PricingMappedModel
+	}
+	if r.Mapped {
+		return r.MappedModel
+	}
+	return requestedModel
+}
+
+// channelMappingForRequest preserves the channel metadata and configured
+// pricing target while keeping intelligence requests on their original model.
+// Dedicated-account scheduling guarantees that these requests only reach
+// accounts enabled for intelligence tests.
+func channelMappingForRequest(ctx context.Context, requestedModel string, result ChannelMappingResult) ChannelMappingResult {
+	if IsIntelligenceRouting(ctx) && result.Mapped {
+		result.PricingMappedModel = result.MappedModel
+		result.MappedModel = requestedModel
+		result.Mapped = false
+	}
+	return result
 }
 
 // BuildModelMappingChain 根据映射结果和上游实际模型构建映射链描述。
@@ -132,10 +158,7 @@ func (r ChannelMappingResult) BuildModelMappingChain(reqModel, upstreamModel str
 
 // ToUsageFields 将渠道映射结果转为使用记录字段
 func (r ChannelMappingResult) ToUsageFields(reqModel, upstreamModel string) ChannelUsageFields {
-	channelMappedModel := reqModel
-	if r.Mapped {
-		channelMappedModel = r.MappedModel
-	}
+	channelMappedModel := r.pricingMappedModel(reqModel)
 	return ChannelUsageFields{
 		ChannelID:          r.ChannelID,
 		OriginalModel:      reqModel,
@@ -573,7 +596,7 @@ func (s *ChannelService) ResolveChannelMapping(ctx context.Context, groupID int6
 	if lk == nil {
 		return ChannelMappingResult{MappedModel: model}
 	}
-	return resolveMapping(lk, groupID, model)
+	return channelMappingForRequest(ctx, model, resolveMapping(lk, groupID, model))
 }
 
 // IsModelRestricted 检查模型是否被渠道限制。
@@ -601,7 +624,7 @@ func (s *ChannelService) ResolveChannelMappingAndRestrict(ctx context.Context, g
 	if lk == nil {
 		return ChannelMappingResult{MappedModel: model}, false
 	}
-	return resolveMapping(lk, *groupID, model), false
+	return channelMappingForRequest(ctx, model, resolveMapping(lk, *groupID, model)), false
 }
 
 // resolveMapping 基于已查找的渠道信息解析模型映射。

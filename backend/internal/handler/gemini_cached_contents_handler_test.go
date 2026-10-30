@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,7 +21,9 @@ import (
 )
 
 type geminiCachedContentHandlerRepoStub struct {
-	records []*service.GeminiCachedContent
+	records     []*service.GeminiCachedContent
+	lookupErr   error
+	lookupCalls int
 }
 
 func (r *geminiCachedContentHandlerRepoStub) Create(_ context.Context, record *service.GeminiCachedContent) error {
@@ -30,6 +33,10 @@ func (r *geminiCachedContentHandlerRepoStub) Create(_ context.Context, record *s
 }
 
 func (r *geminiCachedContentHandlerRepoStub) GetForOwner(_ context.Context, apiKeyID int64, publicID string) (*service.GeminiCachedContent, error) {
+	r.lookupCalls++
+	if r.lookupErr != nil {
+		return nil, r.lookupErr
+	}
 	for _, record := range r.records {
 		if record.PublicID == publicID && record.APIKeyID == apiKeyID {
 			return record, nil
@@ -273,4 +280,100 @@ func TestGeminiIntelligenceCachedContentRestoresRoutingRequirement(t *testing.T)
 	_, _, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", []byte(`{"cachedContent":"cachedContents/intelligence","contents":[]}`))
 	require.True(t, ok)
 	require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+}
+
+func TestGeminiIntelligenceCachePreflightBeforeChannelMapping(t *testing.T) {
+	repo := &geminiCachedContentHandlerRepoStub{}
+	intelligence := seedGeminiCachedContent(repo, "iq", 7, time.Now().Add(time.Hour))
+	intelligence.IntelligenceRouting = true
+	ordinary := seedGeminiCachedContent(repo, "ordinary", 7, time.Now().Add(time.Hour))
+	ordinary.Model = "gemini-channel-target"
+	legacy := seedGeminiCachedContent(repo, "legacy", 7, time.Now().Add(time.Hour))
+	legacy.Model = "gemini-channel-target"
+	legacy.IntelligenceRouting = true
+	foreign := seedGeminiCachedContent(repo, "foreign-iq", 8, time.Now().Add(time.Hour))
+	foreign.IntelligenceRouting = true
+	h := newGeminiCachedContentHandlerForTest(repo)
+	key := geminiCachedContentTestAPIKey(service.PlatformGemini)
+
+	t.Run("authorized iq is available before mapping and keeps original model", func(t *testing.T) {
+		c, _ := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+		body := []byte(`{"cachedContent":"cachedContents/iq","contents":[]}`)
+		prefetched := h.prefetchGeminiCachedContentBinding(c, key, body)
+		require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+		record, out, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", body, prefetched)
+		require.True(t, ok)
+		require.Equal(t, intelligence, record)
+		require.JSONEq(t, `{"cachedContent":"cachedContents/upstreamiq","contents":[]}`, string(out))
+	})
+	t.Run("ordinary cache preserves mapped model", func(t *testing.T) {
+		c, _ := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+		body := []byte(`{"cachedContent":"cachedContents/ordinary","contents":[]}`)
+		prefetched := h.prefetchGeminiCachedContentBinding(c, key, body)
+		require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
+		record, _, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-channel-target", body, prefetched)
+		require.True(t, ok)
+		require.Equal(t, ordinary, record)
+	})
+	t.Run("foreign iq cannot set routing requirement", func(t *testing.T) {
+		c, rec := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+		body := []byte(`{"cachedContent":"cachedContents/foreign-iq","contents":[]}`)
+		prefetched := h.prefetchGeminiCachedContentBinding(c, key, body)
+		require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
+		_, _, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", body, prefetched)
+		require.False(t, ok)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+	})
+	t.Run("lookup failure is retained until after audit and cannot fall through to mapping", func(t *testing.T) {
+		failingRepo := &geminiCachedContentHandlerRepoStub{lookupErr: errors.New("temporary database error")}
+		seedGeminiCachedContent(failingRepo, "missing", 7, time.Now().Add(time.Hour)).IntelligenceRouting = true
+		failingHandler := newGeminiCachedContentHandlerForTest(failingRepo)
+		c, rec := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+		body := []byte(`{"cachedContent":"cachedContents/missing","contents":[]}`)
+		prefetched := failingHandler.prefetchGeminiCachedContentBinding(c, key, body)
+		require.False(t, c.Writer.Written(), "preflight must not answer before the audit")
+		require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
+		failingRepo.lookupErr = nil // a later retry must not turn this into a mapped IQ request
+		_, _, ok := failingHandler.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-channel-target", body, prefetched)
+		require.False(t, ok)
+		require.Equal(t, http.StatusInternalServerError, rec.Code)
+		require.Equal(t, 1, failingRepo.lookupCalls)
+	})
+	t.Run("expired after preflight is rejected after audit", func(t *testing.T) {
+		localRepo := &geminiCachedContentHandlerRepoStub{}
+		record := seedGeminiCachedContent(localRepo, "expire", 7, time.Now().Add(time.Hour))
+		record.IntelligenceRouting = true
+		localHandler := newGeminiCachedContentHandlerForTest(localRepo)
+		c, rec := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+		body := []byte(`{"cachedContent":"cachedContents/expire","contents":[]}`)
+		prefetched := localHandler.prefetchGeminiCachedContentBinding(c, key, body)
+		record.ExpireTime = time.Now().Add(-time.Second)
+		_, _, ok := localHandler.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", body, prefetched)
+		require.False(t, ok)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+	})
+	t.Run("routing classification changed after preflight fails closed", func(t *testing.T) {
+		localRepo := &geminiCachedContentHandlerRepoStub{}
+		record := seedGeminiCachedContent(localRepo, "changed", 7, time.Now().Add(time.Hour))
+		record.Model = "gemini-channel-target"
+		localHandler := newGeminiCachedContentHandlerForTest(localRepo)
+		c, rec := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+		body := []byte(`{"cachedContent":"cachedContents/changed","contents":[]}`)
+		prefetched := localHandler.prefetchGeminiCachedContentBinding(c, key, body)
+		require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
+		record.IntelligenceRouting = true
+		_, _, ok := localHandler.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-channel-target", body, prefetched)
+		require.False(t, ok)
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	})
+	t.Run("legacy iq mapped cache must be recreated", func(t *testing.T) {
+		c, rec := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+		body := []byte(`{"cachedContent":"cachedContents/legacy","contents":[]}`)
+		prefetched := h.prefetchGeminiCachedContentBinding(c, key, body)
+		require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+		_, _, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", body, prefetched)
+		require.False(t, ok)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Contains(t, rec.Body.String(), "recreate")
+	})
 }

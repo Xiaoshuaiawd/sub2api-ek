@@ -735,7 +735,7 @@ func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Contex
 		return false
 	}
 	mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
-	billingModel := billingModelForRestriction(mapping.BillingModelSource, requestedModel, mapping.MappedModel)
+	billingModel := billingModelForRestriction(mapping.BillingModelSource, requestedModel, mapping.pricingMappedModel(requestedModel))
 	if billingModel == "" {
 		return false
 	}

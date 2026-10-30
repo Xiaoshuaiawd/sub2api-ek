@@ -414,6 +414,9 @@ func openAIWSTurnBillingModel(result *service.OpenAIForwardResult, mapping servi
 		}
 	case service.BillingModelSourceChannelMapped:
 		mappedModel := strings.TrimSpace(mapping.MappedModel)
+		if pricingModel := strings.TrimSpace(mapping.PricingMappedModel); pricingModel != "" {
+			mappedModel = pricingModel
+		}
 		if mappedModel != "" && mappedModel != requestedModel {
 			billingModel = mappedModel
 		}

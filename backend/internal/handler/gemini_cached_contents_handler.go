@@ -582,45 +582,101 @@ func (h *GatewayHandler) resolveGeminiCachedContentOrWrite(c *gin.Context, reqLo
 	return record, true
 }
 
-// resolveGeminiCachedContentBinding 处理 generateContent / countTokens 请求对显式缓存的引用：
-// 校验归属与模型后把引用改写为上游资源名，返回绑定记录；请求未引用缓存时返回 nil。
-// 返回 false 表示已写出错误响应。
-func (h *GatewayHandler) resolveGeminiCachedContentBinding(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, modelName string, body []byte) (*service.GeminiCachedContent, []byte, bool) {
-	ref, err := service.FindGeminiCachedContentReference(body)
-	if err != nil {
-		googleError(c, http.StatusBadRequest, err.Error())
+// geminiCachedContentBindingPrefetch records the ownership-checked preflight.
+// A failed lookup is not retried after routing has been resolved: otherwise a
+// later successful IQ lookup could use an already-applied channel mapping.
+type geminiCachedContentBindingPrefetch struct {
+	ref         *service.GeminiCachedContentReference
+	record      *service.GeminiCachedContent
+	findErr     error
+	lookupErr   error
+	unsupported bool
+}
+
+// prefetchGeminiCachedContentBinding restores the IQ routing requirement before
+// channel mapping, without writing a response or skipping the security audit.
+func (h *GatewayHandler) prefetchGeminiCachedContentBinding(c *gin.Context, apiKey *service.APIKey, body []byte) *geminiCachedContentBindingPrefetch {
+	prefetched := &geminiCachedContentBindingPrefetch{}
+	prefetched.ref, prefetched.findErr = service.FindGeminiCachedContentReference(body)
+	if prefetched.findErr != nil || prefetched.ref == nil {
+		return prefetched
+	}
+	if middleware.HasForcePlatform(c) || h.geminiCachedContentService == nil || apiKey == nil ||
+		apiKey.Group == nil || apiKey.Group.Platform == service.PlatformComposite {
+		prefetched.unsupported = true
+		return prefetched
+	}
+	prefetched.record, prefetched.lookupErr = h.geminiCachedContentService.Resolve(c.Request.Context(), apiKey.ID, apiKey.GroupID, prefetched.ref.Name)
+	if prefetched.lookupErr == nil && prefetched.record != nil && prefetched.record.IntelligenceRouting {
+		c.Request = c.Request.WithContext(service.WithIntelligenceRouting(c.Request.Context()))
+	}
+	return prefetched
+}
+
+// resolveGeminiCachedContentBinding rechecks cache ownership and expiry after
+// audit, then validates the requested model and rewrites the reference.
+func (h *GatewayHandler) resolveGeminiCachedContentBinding(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, modelName string, body []byte, prefetch ...*geminiCachedContentBindingPrefetch) (*service.GeminiCachedContent, []byte, bool) {
+	var cached *geminiCachedContentBindingPrefetch
+	if len(prefetch) > 0 {
+		cached = prefetch[0]
+	}
+	if cached == nil {
+		cached = h.prefetchGeminiCachedContentBinding(c, apiKey, body)
+	}
+	if cached.findErr != nil {
+		googleError(c, http.StatusBadRequest, cached.findErr.Error())
 		return nil, nil, false
 	}
-	if ref == nil {
+	if cached.ref == nil {
 		return nil, body, true
 	}
-	if middleware.HasForcePlatform(c) || h.geminiCachedContentService == nil ||
-		apiKey.Group == nil || apiKey.Group.Platform == service.PlatformComposite {
+	if cached.unsupported {
 		googleError(c, http.StatusBadRequest, "cachedContent is not supported on this route")
 		return nil, nil, false
 	}
-	record, err := h.geminiCachedContentService.Resolve(c.Request.Context(), apiKey.ID, apiKey.GroupID, ref.Name)
-	if err != nil {
-		if errors.Is(err, service.ErrGeminiCachedContentNotFound) {
+	if cached.lookupErr != nil {
+		if errors.Is(cached.lookupErr, service.ErrGeminiCachedContentNotFound) {
 			googleError(c, http.StatusForbidden, service.GeminiCachedContentNotFoundMessage)
 			return nil, nil, false
 		}
-		reqLog.Error("gemini.cached_content.lookup_failed", zap.Error(err))
+		reqLog.Error("gemini.cached_content.lookup_failed", zap.Error(cached.lookupErr))
 		googleError(c, http.StatusInternalServerError, "Failed to load cached content")
 		return nil, nil, false
 	}
-	if record.Model != modelName {
-		googleError(c, http.StatusBadRequest, fmt.Sprintf(
-			"Model used by GenerateContent request (models/%s) and CachedContent (models/%s) has to be the same.", modelName, record.Model))
+	// The cache can be deleted or expire during security audit. Revalidate it
+	// before use, and fail closed if its IQ classification was not known when
+	// channel routing was resolved.
+	record, err := h.geminiCachedContentService.Resolve(c.Request.Context(), apiKey.ID, apiKey.GroupID, cached.ref.Name)
+	if err != nil {
+		if errors.Is(err, service.ErrGeminiCachedContentNotFound) {
+			googleError(c, http.StatusForbidden, service.GeminiCachedContentNotFoundMessage)
+		} else {
+			reqLog.Error("gemini.cached_content.lookup_failed", zap.Error(err))
+			googleError(c, http.StatusInternalServerError, "Failed to load cached content")
+		}
 		return nil, nil, false
 	}
-	rewritten, err := service.RewriteGeminiCachedContentReference(body, ref, record.UpstreamName)
+	if record == nil {
+		googleError(c, http.StatusInternalServerError, "Failed to load cached content")
+		return nil, nil, false
+	}
+	if record.IntelligenceRouting && !service.IsIntelligenceRouting(c.Request.Context()) {
+		googleError(c, http.StatusServiceUnavailable, "Cached content routing changed; retry the request")
+		return nil, nil, false
+	}
+	if record.Model != modelName {
+		if record.IntelligenceRouting {
+			googleError(c, http.StatusBadRequest, "Cached content was created for a different model; recreate it for the requested model")
+		} else {
+			googleError(c, http.StatusBadRequest, fmt.Sprintf(
+				"Model used by GenerateContent request (models/%s) and CachedContent (models/%s) has to be the same.", modelName, record.Model))
+		}
+		return nil, nil, false
+	}
+	rewritten, err := service.RewriteGeminiCachedContentReference(body, cached.ref, record.UpstreamName)
 	if err != nil {
 		googleError(c, http.StatusBadRequest, "Invalid cachedContent reference")
 		return nil, nil, false
-	}
-	if record.IntelligenceRouting {
-		c.Request = c.Request.WithContext(service.WithIntelligenceRouting(c.Request.Context()))
 	}
 	return record, rewritten, true
 }
