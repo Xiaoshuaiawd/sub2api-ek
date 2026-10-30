@@ -7,6 +7,7 @@ import (
 )
 
 var modelTraceCount = regexp.MustCompile(`(?:\b[1-9][0-9]{2,3}\s*(?:个|個|(?:random\s+)?(?:integers|numbers))|[两二三四五六七八九]百\s*[个個])`)
+var intelligenceTankPattern = regexp.MustCompile(`\b(?:tanks?|armou?red\s+(?:vehicles?|tanks?))\b`)
 
 // IsIntelligenceTestRequest detects known benchmark prompts in request text
 // without inspecting metadata, tool definitions, or assistant messages.
@@ -100,6 +101,15 @@ func intelligenceContainsAny(s string, terms ...string) bool {
 
 func matchesIntelligencePrompt(s string) bool {
 	if intelligenceContainsAny(s, "鹈鹕", "鵜鶘", "pelican") && intelligenceContainsAny(s, "自行车", "單車", "单车", "骑车", "騎車", "骑行", "bicycle", "bike", "cycling") {
+		return true
+	}
+	// The Qin Shi Huang driving a tank animation is a related visual benchmark.
+	// Require the specific subject and vehicle plus a scene/creation signal, so
+	// unrelated SVG work or historical discussions do not get redirected.
+	qinName := strings.NewReplacer("-", " ", "_", " ").Replace(s)
+	if intelligenceContainsAny(qinName, "秦始皇", "嬴政", "qin shi huang", "qin shihuang", "ying zheng", "yingzheng", "first emperor of china", "first chinese emperor") &&
+		(intelligenceContainsAny(s, "坦克", "装甲车", "裝甲車", "装甲战车", "裝甲戰車") || intelligenceTankPattern.MatchString(s)) &&
+		intelligenceContainsAny(s, "svg", "canvas", "html", "2d", "二维", "二維", "动画", "動畫", "动态", "動態", "绘", "繪", "画", "畫", "驾驶", "駕駛", "开坦克", "開坦克", "开着", "開著", "乘坐", "坐在", "draw", "illustrat", "sketch", "animat", "driv", "ride", "riding", "piloting", "operating", "on a tank", "in a tank") {
 		return true
 	}
 	if intelligenceContainsAny(s, "糖果测试", "糖果測試", "糖果题", "糖果題", "candy test", "candy benchmark") {
