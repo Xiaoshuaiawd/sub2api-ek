@@ -155,7 +155,7 @@ export default {
       notesPlaceholder: 'Enter notes',
       notesHint: 'Notes are optional',
       intelligenceRouting: 'Qualified for intelligence tests',
-      intelligenceRoutingHint: 'When enabled, this account only handles detected candy tests, pelican-on-a-bicycle tests, and ModelTrace fingerprint requests. Ordinary requests are not assigned to it.',
+      intelligenceRoutingHint: 'When enabled, this account only handles detected candy tests, pelican-on-a-bicycle and Qin Shi Huang driving a tank animations, and ModelTrace fingerprint requests. Ordinary requests are not assigned to it.',
       allPlatforms: 'All Platforms',
       allTypes: 'All Types',
       allStatus: 'All Status',
