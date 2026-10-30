@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,6 +27,56 @@ func (r *intelligenceRulesHandlerRepo) GetValue(context.Context, string) (string
 func (r *intelligenceRulesHandlerRepo) Set(_ context.Context, _, value string) error {
 	r.raw = value
 	return nil
+}
+
+func (r *intelligenceRulesHandlerRepo) CompareAndSetIntelligenceRules(_ context.Context, _, previous, next string, exists bool) (bool, error) {
+	if (r.raw != "") != exists || (exists && r.raw != previous) {
+		return false, nil
+	}
+	r.raw = next
+	return true, nil
+}
+
+func TestIntelligenceRulesPatchAPI(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &intelligenceRulesHandlerRepo{}
+	h := &SettingHandler{settingService: service.NewSettingService(repo, nil)}
+	r := gin.New()
+	r.GET("/rules", h.GetIntelligenceRules)
+	r.PATCH("/rules", h.PatchIntelligenceRules)
+	r.PUT("/rules", h.UpdateIntelligenceRules)
+	call := func(method, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/rules", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		return w
+	}
+	w := call(http.MethodGet, "")
+	var envelope struct {
+		Data struct {
+			Revision string `json:"revision"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+	require.Len(t, envelope.Data.Revision, 64)
+	patch, err := json.Marshal(service.IntelligenceRulePatch{Revision: envelope.Data.Revision, Operation: "add_rule", Rule: &service.IntelligenceRule{Name: "新题", Type: "contains", Pattern: "测试关键词", Enabled: true}})
+	require.NoError(t, err)
+	w = call(http.MethodPatch, string(patch))
+	require.Equal(t, 200, w.Code)
+	require.Contains(t, w.Body.String(), "测试关键词")
+	w = call(http.MethodPatch, string(patch))
+	require.Equal(t, 409, w.Code)
+	previous := repo.raw
+	w = call(http.MethodPut, `{"revision":"`+envelope.Data.Revision+`","rules":[]}`)
+	require.Equal(t, 409, w.Code, "stale admin form must not overwrite API changes")
+	require.Equal(t, previous, repo.raw)
+	w = call(http.MethodPatch, `{"operation":"add_rule","revision":"ignored","bad_field":true}`)
+	require.Equal(t, 400, w.Code)
+	require.Equal(t, previous, repo.raw)
+	w = call(http.MethodPatch, `{"revision":"`+envelope.Data.Revision+`","operation":"add_rule","rule":{"name":"test","type":"contains","pattern":"`+strings.Repeat("x", 4<<20)+`","enabled":true}}`)
+	require.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	require.Equal(t, previous, repo.raw)
 }
 
 func TestIntelligenceRulesHandler(t *testing.T) {

@@ -27,6 +27,7 @@ export interface IntelligenceBuiltinExtension {
 }
 export interface IntelligenceRulesConfig {
   rules: IntelligenceRule[]
+  revision?: string
   builtin_disabled_ids?: string[]
   builtins?: IntelligenceBuiltinRule[]
   builtin_extensions?: Record<string, IntelligenceBuiltinExtension[]>

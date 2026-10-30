@@ -23,6 +23,25 @@ func TestScopedAdminPolicyDefaultDeny(t *testing.T) {
 	}
 }
 
+func TestScopedIntelligenceRulesPermissionsAreIndependent(t *testing.T) {
+	path := "/api/v1/admin/settings/intelligence-rules"
+	read := Policy{GlobalPermissions: []string{"intelligence_rules.read"}}
+	write := Policy{GlobalPermissions: []string{"intelligence_rules.write"}}
+	require.NoError(t, ValidatePolicy(read))
+	require.NoError(t, ValidatePolicy(write))
+	require.True(t, RouteAllowed(read, "GET", path))
+	require.False(t, RouteAllowed(read, "PATCH", path))
+	require.True(t, RouteAllowed(write, "PATCH", path))
+	require.False(t, RouteAllowed(write, "GET", path))
+	for _, policy := range []Policy{{}, read, write} {
+		require.False(t, RouteAllowed(policy, "PUT", path))
+		require.False(t, RouteAllowed(policy, "DELETE", path))
+		require.False(t, RouteAllowed(policy, "GET", "/api/v1/admin/settings"))
+		require.False(t, RouteAllowed(policy, "PATCH", "/api/v1/admin/settings"))
+		require.False(t, RouteAllowed(policy, "GET", "/api/v1/admin/usage/intelligence-contexts"))
+	}
+}
+
 func TestScopedAdminModelPermissionsAreIndependent(t *testing.T) {
 	write := Policy{Rules: []Rule{{Permissions: []string{"accounts.models.write"}, GroupIDs: []int64{1}, AccountTypes: []string{"oauth"}}}}
 	read := Policy{GlobalPermissions: []string{"models.defaults.read"}}

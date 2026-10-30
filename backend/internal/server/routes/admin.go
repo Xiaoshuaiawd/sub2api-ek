@@ -705,6 +705,7 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		adminSettings.GET("/astra-routing", h.Admin.Setting.GetAstraRouting)
 		adminSettings.PUT("/astra-routing", h.Admin.Setting.UpdateAstraRouting)
 		adminSettings.GET("/intelligence-rules", h.Admin.Setting.GetIntelligenceRules)
+		adminSettings.PATCH("/intelligence-rules", h.Admin.Setting.PatchIntelligenceRules)
 		adminSettings.PUT("/intelligence-rules", h.Admin.Setting.UpdateIntelligenceRules)
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
