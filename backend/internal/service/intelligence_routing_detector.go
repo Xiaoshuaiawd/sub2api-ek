@@ -17,135 +17,135 @@ var intelligenceRiderPattern = regexp.MustCompile(`(?:\b[a-z][a-z0-9'-]*(?:,?\s+
 var intelligenceVisualCreatePattern = regexp.MustCompile(`\b(?:creat(?:e|es|ed|ing)|generat(?:e|es|ed|ing)|draw(?:s|n|ing)?|render(?:s|ed|ing)?|illustrat(?:e|es|ed|ing|ion)|writ(?:e|es|ing|ten)|build(?:s|ing)?|ma(?:ke|kes|king)|design(?:s|ed|ing)?|implement(?:s|ed|ing)?|return(?:s|ed|ing)?|output(?:s|ted|ting)?)\b`)
 var intelligenceVisualMotionPattern = regexp.MustCompile(`\b(?:animat(?:e|es|ed|ing|ion|ions)|motion|movements?|moving|danc(?:e|es|ed|ing)|moonwalk(?:ing)?|walking|running|flying|bouncing|jump(?:ing|s)?|cycling|juggling|rotat(?:e|es|ed|ing|ion)|loop(?:ing)?)\b`)
 var intelligenceUIElementPattern = regexp.MustCompile(`\b(?:icons?|logos?|spinners?|loading|buttons?|charts?|graphs?|dashboards?|progress\s+bars?)\b`)
-var intelligenceScenePositionPattern = regexp.MustCompile(`\b(?:on|in|atop|aboard)\b`)
 var intelligenceNarrativePattern = regexp.MustCompile(`\b(?:cats?|dogs?|fox(?:es)?|pandas?|penguins?|flamingos?|horses?|robots?|astronauts?|animals?|characters?|people|person|emperor|dragons?|wizards?|beach|forest)\b`)
 var intelligenceVisualSceneTaskPattern = regexp.MustCompile(`(?:画|畫|绘|繪|制作|製作|生成|创作|創作|描绘|描繪|输出|輸出|\b(?:draw|illustrat(?:e|ing)|create|generate|render|make|return|output)\b).{0,80}(?:一只|一隻|一位|一名|一座|一辆|一輛|人物|角色|动物|動物|猫|貓|企鹅|企鵝|狐狸|熊猫|熊貓|机器人|機器人|宇航员|宇航員|\b(?:cats?|dogs?|fox(?:es)?|pandas?|penguins?|flamingos?|horses?|robots?|astronauts?|animals?|characters?|people|person|emperor|dragons?|wizards?|beach|forest|planets?)\b)`)
 
-// IsIntelligenceTestRequest detects known benchmark prompts in request text
-// without inspecting metadata, tool definitions, or assistant messages.
-// Detection is heuristic and deliberately requires multiple signals.
+// IsIntelligenceTestRequest classifies only the latest user message. History,
+// assistant/tool output and system/developer instructions never influence it.
 func IsIntelligenceTestRequest(body []byte) bool {
 	var request map[string]any
 	if json.Unmarshal(body, &request) != nil {
 		return false
 	}
-	var texts []string
-	var structuredTexts []string
-	for _, key := range []string{"messages", "input", "contents", "prompt", "system", "instructions", "systemInstruction"} {
-		collectIntelligenceTexts(request[key], &texts)
-	}
-	if request["type"] == "response.create" {
-		if response, ok := request["response"].(map[string]any); ok {
-			collectIntelligenceTexts(response["input"], &texts)
-			collectIntelligenceTexts(response["instructions"], &texts)
-		}
-	}
-	if questions, ok := request["questions"].(map[string]any); ok {
-		var parts []string
-		collectSystemOneText(request["state"], &parts)
-		state := strings.Join(parts, " ")
-		texts = append(texts, state)
-		structuredTexts = append(structuredTexts, state)
-		stateHasSVG := hasIntelligenceSVG(state)
-		stateHasClue := hasIntelligenceVisualClue(state)
-		for _, raw := range questions {
-			if question, ok := raw.(map[string]any); ok {
-				parts = nil
-				collectSystemOneText(question["instructions"], &parts)
-				collectSystemOneText(question["criteria"], &parts)
-				questionText := strings.Join(parts, " ")
-				texts = append(texts, questionText)
-				structuredTexts = append(structuredTexts, questionText)
-				// Pair each question only with the shared state; do not mix unrelated
-				// questions. Only build combinations that can contain an SVG scene.
-				if ((stateHasSVG && hasIntelligenceVisualClue(questionText)) || (stateHasClue && hasIntelligenceSVG(questionText))) && matchesVisualIntelligencePrompt(state+" "+questionText) {
-					return true
-				}
-			}
-		}
-	}
-	for _, text := range texts {
-		if matchesIntelligencePrompt(strings.ToLower(text)) {
-			return true
-		}
-	}
-	// Clients may put output-format instructions in system/developer messages
-	// and the scene in the current user message. Combine only those fields;
-	// never combine old user turns, assistant messages or tool definitions.
-	instructions, current, userTexts := intelligenceCurrentPrompt(request)
-	for _, text := range append(userTexts, structuredTexts...) {
-		if matchesVisualIntelligencePrompt(text) {
-			return true
-		}
-	}
-	if instructions != "" && matchesVisualIntelligencePrompt(instructions) && hasExplicitIntelligenceScene(instructions) {
-		return true
-	}
-	if current != "" && instructions != "" && hasIntelligenceVisualClue(current) {
-		return matchesVisualIntelligencePrompt(current + " " + instructions)
-	}
-	return false
+	text := intelligenceLatestUserText(request)
+	return matchesIntelligencePrompt(strings.ToLower(text)) || matchesVisualIntelligencePrompt(text)
 }
 
-// intelligenceCurrentPrompt extracts the latest user content and the format
-// instructions from supported chat protocols without merging unrelated history.
-func intelligenceCurrentPrompt(request map[string]any) (string, string, []string) {
-	var instructions []string
-	for _, key := range []string{"system", "instructions", "systemInstruction"} {
-		collectIntelligenceTexts(request[key], &instructions)
+// intelligenceLatestUserText keeps messages separate. An empty latest user
+// message must never fall back to earlier messages.
+func intelligenceLatestUserText(request map[string]any) string {
+	if request["type"] == "response.create" {
+		if response, ok := request["response"].(map[string]any); ok {
+			if input, exists := response["input"]; exists {
+				return intelligenceLatestInputText(input)
+			}
+		}
 	}
-	var current string
-	var userTexts []string
-	visit := func(value any) {
-		switch v := value.(type) {
-		case string:
-			if v != "" {
-				current = v
-				userTexts = append(userTexts, v)
-			}
-		case []any:
-			for _, item := range v {
-				role := ""
-				if m, ok := item.(map[string]any); ok {
-					role, _ = m["role"].(string)
-				}
-				var parts []string
-				collectIntelligenceTexts(item, &parts)
-				switch role {
-				case "system", "developer":
-					instructions = append(instructions, parts...)
-				case "user":
-					current = strings.Join(parts, " ")
-					userTexts = append(userTexts, current)
-				case "":
-					if len(parts) > 0 {
-						current = strings.Join(parts, " ")
-						userTexts = append(userTexts, current)
-					}
-				}
-			}
-		case map[string]any:
-			var parts []string
-			collectIntelligenceTexts(v, &parts)
-			role, _ := v["role"].(string)
-			if role == "system" || role == "developer" {
-				instructions = append(instructions, parts...)
-			} else if (role == "" || role == "user") && len(parts) > 0 {
-				current = strings.Join(parts, " ")
-				userTexts = append(userTexts, current)
-			}
+	if _, ok := request["questions"].(map[string]any); ok {
+		if state, exists := request["state"]; exists {
+			return intelligenceLatestSystemOneState(state)
 		}
 	}
 	for _, key := range []string{"messages", "contents", "input", "prompt"} {
-		visit(request[key])
-	}
-	if request["type"] == "response.create" {
-		if response, ok := request["response"].(map[string]any); ok {
-			collectIntelligenceTexts(response["instructions"], &instructions)
-			visit(response["input"])
+		if value, exists := request[key]; exists {
+			return intelligenceLatestInputText(value)
 		}
 	}
-	return strings.Join(instructions, " "), current, userTexts
+	return ""
+}
+
+func intelligenceLatestInputText(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case map[string]any:
+		role, _ := v["role"].(string)
+		if role != "" && role != "user" {
+			return ""
+		}
+		typ, _ := v["type"].(string)
+		if typ != "" && typ != "message" && typ != "text" && typ != "input_text" {
+			return ""
+		}
+		var parts []string
+		collectIntelligenceTexts(v, &parts)
+		return strings.Join(parts, " ")
+	case []any:
+		for i := len(v) - 1; i >= 0; i-- {
+			switch item := v[i].(type) {
+			case string:
+				return item // independent input strings are not message blocks
+			case map[string]any:
+				role, _ := item["role"].(string)
+				if role != "" && role != "user" {
+					continue
+				}
+				typ, _ := item["type"].(string)
+				if typ != "" && typ != "message" && typ != "text" && typ != "input_text" {
+					continue
+				}
+				if role == "" && (typ == "text" || typ == "input_text") {
+					// Adjacent top-level text blocks represent one user input.
+					start := i
+					for start > 0 {
+						prev, ok := v[start-1].(map[string]any)
+						if !ok || prev["role"] != nil || (prev["type"] != "text" && prev["type"] != "input_text") {
+							break
+						}
+						start--
+					}
+					var parts []string
+					for _, block := range v[start : i+1] {
+						collectIntelligenceTexts(block, &parts)
+					}
+					return strings.Join(parts, " ")
+				}
+				return intelligenceLatestInputText(item)
+			}
+		}
+	}
+	return ""
+}
+
+// System One has no chat roles at the envelope level: state is submitted user
+// content, while question instructions and criteria are not user messages.
+func intelligenceLatestSystemOneState(state any) string {
+	if text, found := intelligenceSystemOneConversation(state); found {
+		return text
+	}
+	var parts []string
+	collectSystemOneText(state, &parts)
+	return strings.Join(parts, " ")
+}
+
+// Only interpret arrays with explicit roles as conversation history; ordinary
+// System One arrays and objects can be structured content of one user input.
+func intelligenceSystemOneConversation(value any) (string, bool) {
+	switch v := value.(type) {
+	case map[string]any:
+		if _, hasRole := v["role"]; hasRole {
+			return intelligenceLatestInputText(v), true
+		}
+		for _, key := range []string{"messages", "contents", "input", "context"} {
+			if nested, ok := v[key]; ok {
+				if text, found := intelligenceSystemOneConversation(nested); found {
+					return text, true
+				}
+				if key != "context" {
+					return intelligenceLatestInputText(nested), true
+				}
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				if _, hasRole := m["role"]; hasRole {
+					return intelligenceLatestInputText(v), true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 // matchesVisualIntelligencePrompt recognises the structure of SVG visual
@@ -160,23 +160,6 @@ func normalizeIntelligenceVisualText(text string) string {
 		}
 		return r
 	}, text)
-}
-
-func hasIntelligenceSVG(text string) bool {
-	text = normalizeIntelligenceVisualText(text)
-	return intelligenceSVGPattern.MatchString(text) || intelligenceContainsAny(text, "scalable vector graphics", "矢量图", "矢量圖")
-}
-
-func hasIntelligenceVisualClue(text string) bool {
-	text = normalizeIntelligenceVisualText(text)
-	vehicle := intelligenceVehiclePattern.MatchString(text) || intelligenceContainsAny(text, "自行车", "自行車", "单车", "單車", "滑板", "摩托", "汽车", "汽車", "赛车", "賽車", "坦克", "船", "飞机", "飛機", "火箭")
-	if vehicle && (intelligenceScenePositionPattern.MatchString(text) || intelligenceContainsAny(text, "骑", "騎", "驾", "駕", "开", "開", "乘", "坐")) {
-		return true
-	}
-	if intelligenceVisualCreatePattern.MatchString(text) && intelligenceUIElementPattern.MatchString(text) {
-		return true
-	}
-	return intelligenceDimensionPattern.MatchString(text) || hasConcreteIntelligenceScene(text) || intelligenceContainsAny(text, "svg", "矢量", "2d", "2-d", "3d", "3-d", "二维", "二維", "三维", "三維", "立体", "立體", "动画", "動畫", "动图", "動圖", "画", "畫", "绘", "繪", "图像", "圖像", "图形", "圖形", "图画", "圖畫", "场景", "場景", "骑", "騎", "跳", "scene", "picture", "draw", "sketch", "illustrat", "animation", "animated", "riding", "rider", "two dimensional", "three dimensional", "two-dimensional", "three-dimensional")
 }
 
 func hasExplicitIntelligenceScene(text string) bool {

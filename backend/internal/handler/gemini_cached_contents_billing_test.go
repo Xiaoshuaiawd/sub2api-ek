@@ -989,3 +989,32 @@ func TestGeminiCachedContentsManagementRejectsDedicatedAccounts(t *testing.T) {
 		}
 	}
 }
+
+func TestGeminiBoundCacheAccountRespectsCurrentMessageRouting(t *testing.T) {
+	env := newCachedBillingEnv(t, 500, 900, 901)
+	env.accounts[900].Extra = map[string]any{service.IntelligenceRoutingExtraKey: true}
+	groupID := env.group.ID
+	for _, tc := range []struct {
+		name    string
+		ctx     context.Context
+		allowed bool
+	}{
+		{name: "ordinary current message cannot use intelligence cache account", ctx: context.Background()},
+		{name: "intelligence current message can use intelligence cache account", ctx: service.WithIntelligenceRouting(context.Background()), allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			excluded, err := env.h.gatewayService.GeminiExplicitCacheExclusions(tc.ctx, &groupID, 900)
+			require.NoError(t, err)
+			selection, err := env.h.gatewayService.SelectAccountWithLoadAwareness(tc.ctx, &groupID, "", "gemini-2.5-pro", excluded, "", 0)
+			if !tc.allowed {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, int64(900), selection.Account.ID)
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+		})
+	}
+}

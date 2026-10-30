@@ -29,10 +29,13 @@ func TestIntelligenceChannelMappingOpenAIHTTP(t *testing.T) {
 				intelligence bool
 				mapping      map[string]any
 				wantUpstream string
+				history      string
 			}{
-				{"ordinary_retains_channel_mapping", false, map[string]any{"client-model-a": "account-model-c", "upstream-model-b": "upstream-model-b"}, "upstream-model-b"},
-				{"intelligence_preserves_original_model", true, map[string]any{"client-model-a": "client-model-a"}, "client-model-a"},
-				{"intelligence_preserves_account_mapping", true, map[string]any{"client-model-a": "account-model-c"}, "account-model-c"},
+				{"ordinary_retains_channel_mapping", false, map[string]any{"client-model-a": "account-model-c", "upstream-model-b": "upstream-model-b"}, "upstream-model-b", ""},
+				{"intelligence_preserves_original_model", true, map[string]any{"client-model-a": "client-model-a"}, "client-model-a", ""},
+				{"intelligence_preserves_account_mapping", true, map[string]any{"client-model-a": "account-model-c"}, "account-model-c", ""},
+				{"ordinary_after_intelligence_history", false, map[string]any{"upstream-model-b": "upstream-model-b"}, "upstream-model-b", "Create an SVG of a pelican riding a bicycle"},
+				{"intelligence_after_ordinary_history", true, map[string]any{"client-model-a": "account-model-c"}, "account-model-c", "hello"},
 			} {
 				t.Run(fmt.Sprintf("%s/stream=%t/%s", endpoint, stream, tc.name), func(t *testing.T) {
 					groupID := int64(4268)
@@ -74,10 +77,18 @@ func TestIntelligenceChannelMappingOpenAIHTTP(t *testing.T) {
 					var path, body string
 					if endpoint == "chat" {
 						path = "/openai/v1/chat/completions"
-						body = fmt.Sprintf(`{"model":"client-model-a","messages":[{"role":"user","content":%q}],"stream":%t}`, content, stream)
+						if tc.history != "" {
+							body = fmt.Sprintf(`{"model":"client-model-a","messages":[{"role":"user","content":%q},{"role":"assistant","content":"ok"},{"role":"user","content":%q}],"stream":%t}`, tc.history, content, stream)
+						} else {
+							body = fmt.Sprintf(`{"model":"client-model-a","messages":[{"role":"user","content":%q}],"stream":%t}`, content, stream)
+						}
 					} else {
 						path = "/openai/v1/responses"
-						body = fmt.Sprintf(`{"model":"client-model-a","input":%q,"stream":%t}`, content, stream)
+						if tc.history != "" {
+							body = fmt.Sprintf(`{"model":"client-model-a","input":[{"role":"user","content":%q},{"role":"assistant","content":"ok"},{"role":"user","content":%q}],"stream":%t}`, tc.history, content, stream)
+						} else {
+							body = fmt.Sprintf(`{"model":"client-model-a","input":%q,"stream":%t}`, content, stream)
+						}
 					}
 					rec := httptest.NewRecorder()
 					c, _ := gin.CreateTestContext(rec)

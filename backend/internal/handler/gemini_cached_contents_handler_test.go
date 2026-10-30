@@ -270,7 +270,7 @@ func TestWriteGeminiCachedContentUpstreamError_RateLimitMappedUnlessUpstreamGate
 	require.Contains(t, rec.Body.String(), "too small", "请求校验类错误仍原样回写")
 }
 
-func TestGeminiIntelligenceCachedContentRestoresRoutingRequirement(t *testing.T) {
+func TestGeminiIntelligenceCachedContentKeepsCurrentRoutingRequirement(t *testing.T) {
 	repo := &geminiCachedContentHandlerRepoStub{}
 	record := seedGeminiCachedContent(repo, "intelligence", 7, time.Now().Add(time.Hour))
 	record.IntelligenceRouting = true
@@ -279,7 +279,7 @@ func TestGeminiIntelligenceCachedContentRestoresRoutingRequirement(t *testing.T)
 	c, _ := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
 	_, _, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", []byte(`{"cachedContent":"cachedContents/intelligence","contents":[]}`))
 	require.True(t, ok)
-	require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+	require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
 }
 
 func TestGeminiIntelligenceCachePreflightBeforeChannelMapping(t *testing.T) {
@@ -296,11 +296,11 @@ func TestGeminiIntelligenceCachePreflightBeforeChannelMapping(t *testing.T) {
 	h := newGeminiCachedContentHandlerForTest(repo)
 	key := geminiCachedContentTestAPIKey(service.PlatformGemini)
 
-	t.Run("authorized iq is available before mapping and keeps original model", func(t *testing.T) {
+	t.Run("authorized iq cache does not classify current request", func(t *testing.T) {
 		c, _ := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
 		body := []byte(`{"cachedContent":"cachedContents/iq","contents":[]}`)
 		prefetched := h.prefetchGeminiCachedContentBinding(c, key, body)
-		require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+		require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
 		record, out, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", body, prefetched)
 		require.True(t, ok)
 		require.Equal(t, intelligence, record)
@@ -352,7 +352,7 @@ func TestGeminiIntelligenceCachePreflightBeforeChannelMapping(t *testing.T) {
 		require.False(t, ok)
 		require.Equal(t, http.StatusForbidden, rec.Code)
 	})
-	t.Run("routing classification changed after preflight fails closed", func(t *testing.T) {
+	t.Run("historical classification change does not change current request", func(t *testing.T) {
 		localRepo := &geminiCachedContentHandlerRepoStub{}
 		record := seedGeminiCachedContent(localRepo, "changed", 7, time.Now().Add(time.Hour))
 		record.Model = "gemini-channel-target"
@@ -363,17 +363,33 @@ func TestGeminiIntelligenceCachePreflightBeforeChannelMapping(t *testing.T) {
 		require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
 		record.IntelligenceRouting = true
 		_, _, ok := localHandler.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-channel-target", body, prefetched)
-		require.False(t, ok)
-		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		require.True(t, ok)
+		require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
+		require.False(t, rec.Code >= http.StatusBadRequest)
 	})
 	t.Run("legacy iq mapped cache must be recreated", func(t *testing.T) {
 		c, rec := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
 		body := []byte(`{"cachedContent":"cachedContents/legacy","contents":[]}`)
 		prefetched := h.prefetchGeminiCachedContentBinding(c, key, body)
-		require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
+		require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
 		_, _, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", body, prefetched)
 		require.False(t, ok)
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 		require.Contains(t, rec.Body.String(), "recreate")
 	})
+}
+
+func TestGeminiCacheDoesNotClassifyCurrentRequestFromHistory(t *testing.T) {
+	repo := &geminiCachedContentHandlerRepoStub{}
+	record := seedGeminiCachedContent(repo, "historicaliq", 7, time.Now().Add(time.Hour))
+	record.IntelligenceRouting = true
+	h := newGeminiCachedContentHandlerForTest(repo)
+	key := geminiCachedContentTestAPIKey(service.PlatformGemini)
+	c, _ := newGeminiCachedContentTestContext(http.MethodPost, "/", key)
+	body := []byte(`{"cachedContent":"cachedContents/historicaliq","contents":[{"role":"user","parts":[{"text":"你好"}]}]}`)
+	prefetched := h.prefetchGeminiCachedContentBinding(c, key, body)
+	require.False(t, service.IsIntelligenceRouting(c.Request.Context()), "historical cache must not classify current message")
+	_, _, ok := h.resolveGeminiCachedContentBinding(c, zap.NewNop(), key, "gemini-3.8-flash", body, prefetched)
+	require.True(t, ok, "cache account eligibility is enforced by the scheduler")
+	require.False(t, service.IsIntelligenceRouting(c.Request.Context()))
 }

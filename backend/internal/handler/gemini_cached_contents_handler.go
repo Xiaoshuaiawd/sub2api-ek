@@ -583,8 +583,7 @@ func (h *GatewayHandler) resolveGeminiCachedContentOrWrite(c *gin.Context, reqLo
 }
 
 // geminiCachedContentBindingPrefetch records the ownership-checked preflight.
-// A failed lookup is not retried after routing has been resolved: otherwise a
-// later successful IQ lookup could use an already-applied channel mapping.
+// A failed lookup is retained until after the security audit and is not retried.
 type geminiCachedContentBindingPrefetch struct {
 	ref         *service.GeminiCachedContentReference
 	record      *service.GeminiCachedContent
@@ -593,8 +592,8 @@ type geminiCachedContentBindingPrefetch struct {
 	unsupported bool
 }
 
-// prefetchGeminiCachedContentBinding restores the IQ routing requirement before
-// channel mapping, without writing a response or skipping the security audit.
+// prefetchGeminiCachedContentBinding checks cache ownership without writing a
+// response or changing the routing class selected from the current message.
 func (h *GatewayHandler) prefetchGeminiCachedContentBinding(c *gin.Context, apiKey *service.APIKey, body []byte) *geminiCachedContentBindingPrefetch {
 	prefetched := &geminiCachedContentBindingPrefetch{}
 	prefetched.ref, prefetched.findErr = service.FindGeminiCachedContentReference(body)
@@ -607,9 +606,6 @@ func (h *GatewayHandler) prefetchGeminiCachedContentBinding(c *gin.Context, apiK
 		return prefetched
 	}
 	prefetched.record, prefetched.lookupErr = h.geminiCachedContentService.Resolve(c.Request.Context(), apiKey.ID, apiKey.GroupID, prefetched.ref.Name)
-	if prefetched.lookupErr == nil && prefetched.record != nil && prefetched.record.IntelligenceRouting {
-		c.Request = c.Request.WithContext(service.WithIntelligenceRouting(c.Request.Context()))
-	}
 	return prefetched
 }
 
@@ -644,8 +640,7 @@ func (h *GatewayHandler) resolveGeminiCachedContentBinding(c *gin.Context, reqLo
 		return nil, nil, false
 	}
 	// The cache can be deleted or expire during security audit. Revalidate it
-	// before use, and fail closed if its IQ classification was not known when
-	// channel routing was resolved.
+	// before use. Account selection later enforces the current request class.
 	record, err := h.geminiCachedContentService.Resolve(c.Request.Context(), apiKey.ID, apiKey.GroupID, cached.ref.Name)
 	if err != nil {
 		if errors.Is(err, service.ErrGeminiCachedContentNotFound) {
@@ -658,10 +653,6 @@ func (h *GatewayHandler) resolveGeminiCachedContentBinding(c *gin.Context, reqLo
 	}
 	if record == nil {
 		googleError(c, http.StatusInternalServerError, "Failed to load cached content")
-		return nil, nil, false
-	}
-	if record.IntelligenceRouting && !service.IsIntelligenceRouting(c.Request.Context()) {
-		googleError(c, http.StatusServiceUnavailable, "Cached content routing changed; retry the request")
 		return nil, nil, false
 	}
 	if record.Model != modelName {
