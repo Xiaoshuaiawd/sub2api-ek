@@ -80,7 +80,7 @@ func MergeIntelligenceRuleMatches(groups ...[]IntelligenceRuleMatch) []Intellige
 }
 
 // MatchIntelligenceBuiltins reports all applicable built-in rules. Callers
-// decide which user message or OCR output to pass and whether rules are enabled.
+// decide which user message text to pass and whether rules are enabled.
 func MatchIntelligenceBuiltins(text string) []IntelligenceRuleMatch {
 	lowerText := strings.ToLower(text)
 	indexes := intelligencePromptMatchIndexes(lowerText)
@@ -299,7 +299,23 @@ func collectSystemOneText(value any, texts *[]string) {
 			collectSystemOneText(item, texts)
 		}
 	case map[string]any:
-		for _, item := range v {
+		// System One may embed protocol image blocks inside arbitrary state.
+		// Their URLs, IDs and encoded bytes are not user text.
+		typ, _ := v["type"].(string)
+		switch strings.ToLower(typ) {
+		case "image", "image_url", "input_image":
+			return
+		}
+		for _, key := range []string{"mimeType", "mime_type", "media_type"} {
+			if mime, ok := v[key].(string); ok && strings.HasPrefix(strings.ToLower(mime), "image/") {
+				return
+			}
+		}
+		for key, item := range v {
+			switch key {
+			case "image", "images", "image_url", "imageUrl", "photo_url", "picture_url", "inlineData", "inline_data", "fileData", "file_data":
+				continue
+			}
 			collectSystemOneText(item, texts)
 		}
 	}
