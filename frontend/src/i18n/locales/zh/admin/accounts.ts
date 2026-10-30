@@ -154,7 +154,7 @@ export default {
       notesPlaceholder: '请输入备注',
       notesHint: '备注可选',
       intelligenceRouting: '智商测试合格',
-      intelligenceRoutingHint: '开启后，此账号仅处理识别出的糖果测试、鹈鹕骑自行车、秦始皇开坦克动画和 ModelTrace 指纹请求，普通请求不会分配给此账号。',
+      intelligenceRoutingHint: '开启后，此账号仅处理识别出的糖果测试、SVG 二维／三维图像或动画及 ModelTrace 指纹请求。符合相同格式的普通创作请求也可能命中。',
       // Filter options
       allPlatforms: '全部平台',
       allTypes: '全部类型',
