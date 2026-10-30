@@ -140,6 +140,7 @@ var auditSensitiveReads = map[string]string{
 
 // auditActionOverrides 变更类请求的动作名精确映射（未命中时自动推导）。
 var auditActionOverrides = map[string]string{
+	"PATCH /api/v1/admin/settings/intelligence-rules":         "admin.intelligence_rules.update",
 	"PUT /api/v1/admin/risk-control/evidence/config":          "admin.cyber_evidence.config.update",
 	"DELETE /api/v1/admin/risk-control/logs/:id/evidence":     "admin.cyber_evidence.delete",
 	"POST /api/v1/auth/login":                                 service.AuditActionLogin,
@@ -167,6 +168,7 @@ var auditActionOverrides = map[string]string{
 // auditBodyOmittedRoutes 请求体几乎整体由凭证构成的路由（如整块粘贴 auth JSON 的导入接口）。
 // 这类 body 的凭证内嵌在普通字符串值里，键级脱敏无法覆盖，整体不入库。
 var auditBodyOmittedRoutes = map[string]struct{}{
+	"PATCH /api/v1/admin/settings/intelligence-rules":           {},
 	"POST /api/v1/admin/settings/ip-audit/release":              {},
 	"PUT /api/v1/admin/settings/ip-risk":                        {},
 	"POST /api/v1/admin/settings/ip-risk/anonymous-unban":       {},
@@ -295,7 +297,11 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 		}
 
 		// 请求头凭证掩码（仅保留首尾）。
-		entry.CredentialMasked = MaskedRequestCredential(c)
+		// Rule-management audit only needs the authenticated actor and action;
+		// do not persist even fragments of the automation key.
+		if routeKey != "PATCH /api/v1/admin/settings/intelligence-rules" {
+			entry.CredentialMasked = MaskedRequestCredential(c)
+		}
 
 		extra := map[string]any{}
 		if value, ok := c.Get(auditCtxKeyExtra); ok {

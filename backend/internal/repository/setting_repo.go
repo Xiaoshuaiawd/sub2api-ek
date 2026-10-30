@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -113,6 +114,31 @@ func (r *settingRepository) Set(ctx context.Context, key, value string) error {
 		OnConflictColumns(setting.FieldKey).
 		UpdateNewValues().
 		Exec(ctx)
+}
+
+// CompareAndSetIntelligenceRules updates only the exact value read by the
+// caller, or inserts only if the setting did not exist. Both operations are
+// atomic across all application instances.
+func (r *settingRepository) CompareAndSetIntelligenceRules(ctx context.Context, key, previous, next string, previousExists bool) (bool, error) {
+	if previousExists {
+		count, err := r.client.Setting.Update().
+			Where(setting.KeyEQ(key), setting.ValueEQ(previous)).
+			SetValue(next).SetUpdatedAt(time.Now()).Save(ctx)
+		if err != nil {
+			return false, err
+		}
+		return count == 1, nil
+	}
+	_, err := r.client.Setting.Create().
+		SetKey(key).SetValue(next).SetUpdatedAt(time.Now()).
+		OnConflictColumns(setting.FieldKey).DoNothing().ID(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ReplaceExistingAdminAPIKey 原子轮换仍存在的旧版管理员密钥。

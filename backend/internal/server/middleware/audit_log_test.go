@@ -175,6 +175,38 @@ func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing
 	}
 }
 
+func TestIntelligenceRulesPatchAuditOmitsBodyAndKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &auditCaptureRepository{}
+	audit := service.NewAuditLogService(repository, nil)
+	audit.Start()
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(audit)))
+	var received string
+	router.PATCH("/api/v1/admin/settings/intelligence-rules", func(c *gin.Context) {
+		body, err := c.GetRawData()
+		require.NoError(t, err)
+		received = string(body)
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/settings/intelligence-rules", strings.NewReader(`{"pattern":"private-rule-content"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-api-key", "adm_sc_rule-test-very-secret-key")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	audit.Stop()
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.Contains(t, received, "private-rule-content")
+	repository.mu.Lock()
+	logs := append([]*service.AuditLog(nil), repository.logs...)
+	repository.mu.Unlock()
+	require.Len(t, logs, 1)
+	require.Equal(t, "admin.intelligence_rules.update", logs[0].Action)
+	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
+	require.NotContains(t, logs[0].RequestBody, "private-rule-content")
+	require.Empty(t, logs[0].CredentialMasked, "rule-update audit must not retain any key fragments")
+}
+
 func TestPasskeyLoginAuditUsesCanonicalLoginActionAndOmitsCredentialBody(t *testing.T) {
 	route := "POST /api/v1/auth/passkey/login/finish"
 	require.Equal(t, service.AuditActionLogin, auditActionOverrides[route])

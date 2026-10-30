@@ -56,9 +56,10 @@ func TestIntelligenceRulesImagesFreezeAtFirstParse(t *testing.T) {
 
 type intelligenceRulesRepo struct {
 	SettingRepository
-	mu    sync.Mutex
-	value string
-	fail  bool
+	mu     sync.Mutex
+	value  string
+	exists bool
+	fail   bool
 }
 
 type intelligenceLinkRepo struct {
@@ -90,7 +91,7 @@ func (r *intelligenceRulesRepo) GetValue(context.Context, string) (string, error
 	if r.fail {
 		return "", errors.New("unavailable")
 	}
-	if r.value == "" {
+	if r.value == "" && !r.exists {
 		return "", ErrSettingNotFound
 	}
 	return r.value, nil
@@ -102,7 +103,141 @@ func (r *intelligenceRulesRepo) Set(_ context.Context, _, value string) error {
 		return errors.New("unavailable")
 	}
 	r.value = value
+	r.exists = true
 	return nil
+}
+
+func (r *intelligenceRulesRepo) CompareAndSetIntelligenceRules(_ context.Context, _, previous, next string, exists bool) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fail {
+		return false, errors.New("unavailable")
+	}
+	if (r.exists || r.value != "") != exists || (exists && r.value != previous) {
+		return false, nil
+	}
+	r.value = next
+	r.exists = true
+	return true, nil
+}
+
+func TestIntelligenceVersionedReplacementProtectsAPIUpdates(t *testing.T) {
+	repo := &intelligenceRulesRepo{exists: true}
+	first := &SettingService{settingRepo: repo}
+	second := &SettingService{settingRepo: repo}
+	initial, err := first.GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	revision := IntelligenceRulesRevision(initial)
+	updated, err := second.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: revision, Operation: "add_rule", Rule: &IntelligenceRule{Name: "接口添加", Type: "contains", Pattern: "特有内容", Enabled: true}})
+	require.NoError(t, err, "empty but existing settings row must update, not insert")
+	_, err = first.ReplaceIntelligenceRulesIfRevision(t.Context(), IntelligenceRulesReplacement{Revision: revision, Rules: []IntelligenceRule{}})
+	require.ErrorIs(t, err, ErrIntelligenceRulesConflict)
+	current, err := first.GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, updated.Rules[0].Name, current.Rules[0].Name)
+	disabled := []string{"builtin.pelican_bicycle"}
+	current, err = first.ReplaceIntelligenceRulesIfRevision(t.Context(), IntelligenceRulesReplacement{Revision: IntelligenceRulesRevision(current), Rules: current.Rules, BuiltinDisabledIDs: &disabled})
+	require.NoError(t, err)
+	current, err = first.ReplaceIntelligenceRulesIfRevision(t.Context(), IntelligenceRulesReplacement{Revision: IntelligenceRulesRevision(current), Rules: current.Rules})
+	require.NoError(t, err)
+	require.Contains(t, current.BuiltinDisabledIDs, "builtin.pelican_bicycle", "omitted fields are preserved")
+}
+
+func TestIntelligenceRulePatchRevisionAndPreservation(t *testing.T) {
+	repo := &intelligenceRulesRepo{}
+	s := &SettingService{settingRepo: repo}
+	old, err := s.GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	revision := IntelligenceRulesRevision(old)
+	result, err := s.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: revision, Operation: "add_rule", Rule: &IntelligenceRule{Name: "新题", Type: "contains", Pattern: "独特问题", Enabled: true}})
+	require.NoError(t, err)
+	require.True(t, result.Match("这是独特问题"))
+	_, err = s.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: revision, Operation: "add_rule", Rule: &IntelligenceRule{Name: "旧版本", Type: "contains", Pattern: "stale", Enabled: true}})
+	require.ErrorIs(t, err, ErrIntelligenceRulesConflict)
+	result, err = s.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: IntelligenceRulesRevision(result), Operation: "update_builtin", BuiltinID: "builtin.pelican_bicycle", Enabled: new(bool)})
+	require.NoError(t, err)
+	require.Empty(t, result.MatchBuiltins("鹈鹕骑自行车"))
+	require.True(t, result.Match("这是独特问题"))
+	index := 0
+	result, err = s.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: IntelligenceRulesRevision(result), Operation: "delete_rule", Index: &index})
+	require.NoError(t, err)
+	require.Empty(t, result.Rules)
+	result, err = s.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: IntelligenceRulesRevision(result), Operation: "add_builtin_extension", BuiltinID: "builtin.candy_named", Extension: &IntelligenceBuiltinExtension{Type: "contains", Pattern: "新糖果题"}})
+	require.NoError(t, err)
+	require.NotEmpty(t, result.MatchAll("新糖果题"))
+	require.True(t, result.Match("独特问题") == false)
+	_, err = s.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: IntelligenceRulesRevision(result), Operation: "update_builtin", BuiltinID: "missing", Enabled: new(bool)})
+	require.ErrorIs(t, err, ErrInvalidIntelligenceRules)
+}
+
+func TestIntelligenceRulePatchConcurrentInstances(t *testing.T) {
+	repo := &intelligenceRulesRepo{}
+	first := &SettingService{settingRepo: repo}
+	second := &SettingService{settingRepo: repo}
+	initial, err := first.GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	revision := IntelligenceRulesRevision(initial)
+	errs := make(chan error, 2)
+	for _, svc := range []*SettingService{first, second} {
+		go func(s *SettingService) {
+			_, err := s.PatchIntelligenceRules(context.Background(), IntelligenceRulePatch{Revision: revision, Operation: "add_rule", Rule: &IntelligenceRule{Name: "题目", Type: "contains", Pattern: "安全命中", Enabled: true}})
+			errs <- err
+		}(svc)
+	}
+	err1, err2 := <-errs, <-errs
+	require.True(t, (err1 == nil && errors.Is(err2, ErrIntelligenceRulesConflict)) || (err2 == nil && errors.Is(err1, ErrIntelligenceRulesConflict)))
+	final, err := first.GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	require.Len(t, final.Rules, 1)
+}
+
+func TestIntelligenceRulePatchBuiltinEditing(t *testing.T) {
+	repo := &intelligenceRulesRepo{}
+	s := &SettingService{settingRepo: repo}
+	current, err := s.GetIntelligenceRules(t.Context())
+	require.NoError(t, err)
+	patch := func(value IntelligenceRulePatch) {
+		value.Revision = IntelligenceRulesRevision(current)
+		current, err = s.PatchIntelligenceRules(t.Context(), value)
+		require.NoError(t, err)
+	}
+	id := "builtin.pelican_bicycle"
+	patch(IntelligenceRulePatch{Operation: "add_builtin_extension", BuiltinID: id, Extension: &IntelligenceBuiltinExtension{Type: "contains", Pattern: "海鸟滑板"}})
+	require.NotEmpty(t, current.MatchAll("海鸟滑板"))
+	index := 0
+	patch(IntelligenceRulePatch{Operation: "update_builtin_extension", BuiltinID: id, Index: &index, Extension: &IntelligenceBuiltinExtension{Type: "contains", Pattern: "海鸟滑雪"}})
+	require.Empty(t, current.MatchAll("海鸟滑板"))
+	require.NotEmpty(t, current.MatchAll("海鸟滑雪"))
+	patch(IntelligenceRulePatch{Operation: "delete_builtin_extension", BuiltinID: id, Index: &index})
+	require.Empty(t, current.MatchAll("海鸟滑雪"))
+	condition := IntelligenceCondition{Op: "contains_any", Text: "plain", Values: []string{"蓝色海鸟"}}
+	patch(IntelligenceRulePatch{Operation: "update_builtin", BuiltinID: id, Condition: &condition})
+	require.Empty(t, current.MatchAll("鹈鹕骑自行车"))
+	require.NotEmpty(t, current.MatchAll("蓝色海鸟"))
+	patch(IntelligenceRulePatch{Operation: "update_builtin", BuiltinID: id, ResetCondition: true})
+	require.NotEmpty(t, current.MatchAll("鹈鹕骑自行车"))
+	before := repo.value
+	_, err = s.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: IntelligenceRulesRevision(current), Operation: "add_rule", Rule: &IntelligenceRule{Name: "错误", Type: "regex", Pattern: "[", Enabled: true}})
+	require.ErrorIs(t, err, ErrInvalidIntelligenceRules)
+	require.Equal(t, before, repo.value)
+}
+
+func TestIntelligenceRulePatchKeepsOtherSettings(t *testing.T) {
+	s := &SettingService{settingRepo: &intelligenceRulesRepo{}}
+	base := IntelligenceRules{
+		Rules:              []IntelligenceRule{{Name: "已有", Type: "contains", Pattern: "自定义", Enabled: true}},
+		BuiltinDisabledIDs: []string{"builtin.svg_scene"},
+		BuiltinExtensions:  map[string][]IntelligenceBuiltinExtension{"builtin.candy_named": {{Type: "contains", Pattern: "已有糖果"}}},
+		BuiltinConditions:  map[string]IntelligenceCondition{"builtin.pelican_bicycle": {Op: "contains_any", Text: "plain", Values: []string{"海鸟"}}},
+	}
+	current, err := s.SetIntelligenceRules(t.Context(), base)
+	require.NoError(t, err)
+	updated, err := s.PatchIntelligenceRules(t.Context(), IntelligenceRulePatch{Revision: IntelligenceRulesRevision(current), Operation: "add_builtin_extension", BuiltinID: "builtin.candy_named", Extension: &IntelligenceBuiltinExtension{Type: "contains", Pattern: "新糖果"}})
+	require.NoError(t, err)
+	require.Len(t, updated.Rules, 1)
+	require.Contains(t, updated.BuiltinDisabledIDs, "builtin.svg_scene")
+	require.Len(t, updated.BuiltinExtensions["builtin.candy_named"], 2)
+	require.Equal(t, []string{"海鸟"}, updated.BuiltinConditions["builtin.pelican_bicycle"].Values)
 }
 
 func TestIntelligenceRulesPersistMatchAndCache(t *testing.T) {

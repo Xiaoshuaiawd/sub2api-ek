@@ -101,13 +101,15 @@
           <button type="button" data-testid="intelligence-add" class="btn btn-secondary btn-sm" :disabled="rules.length >= 200" @click="add">{{ t('admin.settings.intelligenceRules.add') }}</button>
         </fieldset>
         <p v-if="error" class="text-sm text-red-600 dark:text-red-400" role="alert">{{ error }}</p>
+        <button v-if="revisionConflict" type="button" data-testid="intelligence-reload" class="btn btn-secondary btn-sm" :disabled="loading || saving" @click="confirmReload = true">{{ t('admin.settings.intelligenceRules.reloadLatest') }}</button>
         <p v-if="success && !dirty" class="text-sm text-green-700 dark:text-green-400" role="status">{{ success }}</p>
         <p v-if="dirty" class="text-sm text-amber-700 dark:text-amber-400">{{ t('admin.settings.intelligenceRules.unsaved') }}</p>
         <div class="border-t border-gray-100 pt-4 dark:border-dark-700">
-          <button type="button" data-testid="intelligence-save" class="btn btn-primary" :disabled="saving" @click="save">{{ saving ? t('admin.settings.intelligenceRules.saving') : t('admin.settings.intelligenceRules.save') }}</button>
+          <button type="button" data-testid="intelligence-save" class="btn btn-primary" :disabled="saving || revisionConflict" @click="save">{{ saving ? t('admin.settings.intelligenceRules.saving') : t('admin.settings.intelligenceRules.save') }}</button>
         </div>
       </template>
     </div>
+    <ConfirmDialog :show="confirmReload" :title="t('admin.settings.intelligenceRules.reloadLatest')" :message="t('admin.settings.intelligenceRules.reloadConfirm')" :confirm-text="t('admin.settings.intelligenceRules.reloadLatest')" danger @cancel="confirmReload = false" @confirm="reloadAfterConfirm" />
   </section>
 </template>
 
@@ -116,6 +118,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getRules, saveRules, type IntelligenceRule, type IntelligenceBuiltinRule, type IntelligenceBuiltinExtension, type IntelligenceCondition } from '@/api/admin/intelligenceRules'
 import IntelligenceConditionEditor from './IntelligenceConditionEditor.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 type EditableRule = IntelligenceRule & { id: number }
 const { t } = useI18n()
@@ -133,6 +136,9 @@ const saving = ref(false)
 const error = ref('')
 const success = ref('')
 const savedSnapshot = ref('')
+const revision = ref<string | null>(null)
+const revisionConflict = ref(false)
+const confirmReload = ref(false)
 let nextId = 0
 const editable = (values: IntelligenceRule[]) => values.map(rule => ({ ...rule, id: nextId++ }))
 const payload = () => {
@@ -219,6 +225,8 @@ async function load() {
     previouslyDisabled.value = result.builtin_disabled_ids || []
     builtinExtensions.value = result.builtin_extensions || {}
     builtinConditions.value = result.builtin_conditions || {}
+    revision.value = typeof result.revision === 'string' && result.revision ? result.revision : null
+    revisionConflict.value = false
     conditionsSupported.value = 'builtin_conditions' in result || (result.builtins || []).some(rule => !!rule.condition)
     editingBuiltins.value.clear()
     editingCustom.value.clear()
@@ -226,6 +234,10 @@ async function load() {
     loaded.value = true
   } catch (err) { error.value = message(err) }
   finally { loading.value = false }
+}
+function reloadAfterConfirm() {
+  confirmReload.value = false
+  void load()
 }
 async function save() {
   if (Object.values(builtinConditions.value).some(condition => !validBuiltinCondition(condition))) {
@@ -261,18 +273,26 @@ async function save() {
   error.value = ''
   success.value = ''
   try {
-    const result = await saveRules(payload())
+    const request = payload()
+    const result = await saveRules(revision.value ? { ...request, revision: revision.value } : request)
     rules.value = editable(result.rules || [])
     builtins.value = result.builtins || []
     previouslyDisabled.value = result.builtin_disabled_ids || []
     builtinExtensions.value = result.builtin_extensions || {}
     builtinConditions.value = result.builtin_conditions || {}
+    revision.value = typeof result.revision === 'string' && result.revision ? result.revision : null
+    revisionConflict.value = false
     conditionsSupported.value = 'builtin_conditions' in result || (result.builtins || []).some(rule => !!rule.condition)
     editingBuiltins.value.clear()
     editingCustom.value.clear()
     savedSnapshot.value = JSON.stringify(payload())
     success.value = t('admin.settings.intelligenceRules.saved')
-  } catch (err) { error.value = message(err) }
+  } catch (err) {
+    if ((err as { status?: number })?.status === 409) {
+      revisionConflict.value = true
+      error.value = t('admin.settings.intelligenceRules.revisionConflict')
+    } else error.value = message(err)
+  }
   finally { saving.value = false }
 }
 onMounted(load)
