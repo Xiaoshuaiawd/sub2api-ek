@@ -26,10 +26,11 @@ var intelligenceSixtySevenOhms = regexp.MustCompile(`(?:^|[^0-9.])(?:67(?:\.0+)?
 var intelligenceResistorGet = regexp.MustCompile(`\bget\b`)
 
 type IntelligenceRuleMatch struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Pattern string `json:"pattern,omitempty"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	Type            string   `json:"type"`
+	Pattern         string   `json:"pattern,omitempty"`
+	MatchedKeywords []string `json:"matched_keywords,omitempty"`
 }
 
 type IntelligenceBuiltinRule struct {
@@ -57,12 +58,20 @@ func IntelligenceBuiltinRules() []IntelligenceBuiltinRule {
 
 func MergeIntelligenceRuleMatches(groups ...[]IntelligenceRuleMatch) []IntelligenceRuleMatch {
 	var result []IntelligenceRuleMatch
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	for _, group := range groups {
 		for _, match := range group {
 			key := match.Type + "\x00" + match.ID
-			if !seen[key] {
-				seen[key] = true
+			if index, ok := seen[key]; ok {
+				if len(result[index].MatchedKeywords) > 0 && len(match.MatchedKeywords) > 0 && result[index].Pattern != match.Pattern {
+					// Different expressions contributed evidence; showing only
+					// one would misrepresent the combined result.
+					result[index].Pattern = ""
+				}
+				result[index].MatchedKeywords = MergeIntelligenceEvidence(result[index].MatchedKeywords, match.MatchedKeywords)
+			} else {
+				seen[key] = len(result)
+				match.MatchedKeywords = MergeIntelligenceEvidence(match.MatchedKeywords)
 				result = append(result, match)
 			}
 		}
@@ -73,14 +82,25 @@ func MergeIntelligenceRuleMatches(groups ...[]IntelligenceRuleMatch) []Intellige
 // MatchIntelligenceBuiltins reports all applicable built-in rules. Callers
 // decide which user message or OCR output to pass and whether rules are enabled.
 func MatchIntelligenceBuiltins(text string) []IntelligenceRuleMatch {
-	indexes := intelligencePromptMatchIndexes(strings.ToLower(text))
+	lowerText := strings.ToLower(text)
+	indexes := intelligencePromptMatchIndexes(lowerText)
 	if matchesVisualIntelligencePrompt(text) {
 		indexes = append(indexes, 7)
 	}
+	if len(indexes) == 0 {
+		return nil
+	}
+	texts := &intelligenceConditionInput{input: text, plain: lowerText}
 	var matches []IntelligenceRuleMatch
 	for _, index := range indexes {
 		rule := intelligenceBuiltinRules[index]
-		matches = append(matches, IntelligenceRuleMatch{ID: rule.ID, Name: rule.Name, Type: "builtin"})
+		var keywords []string
+		if condition, ok := builtinEvidenceConditions()[rule.ID]; ok {
+			if found, evidence := matchIntelligenceConditionEvidenceWithTexts(condition, texts); found {
+				keywords = evidence
+			}
+		}
+		matches = append(matches, IntelligenceRuleMatch{ID: rule.ID, Name: rule.Name, Type: "builtin", MatchedKeywords: keywords})
 	}
 	return matches
 }

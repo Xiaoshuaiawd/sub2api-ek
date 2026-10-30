@@ -6,6 +6,7 @@ export interface IntelligenceContextRule {
   name: string
   type: string
   pattern?: string
+  matched_keywords?: string[]
 }
 
 export interface IntelligenceContext {

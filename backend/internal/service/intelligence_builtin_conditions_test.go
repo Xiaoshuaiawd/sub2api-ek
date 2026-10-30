@@ -2,6 +2,7 @@ package service
 
 import (
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,4 +84,61 @@ func TestBuiltinConditionPersistsAndRestores(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, restored.MatchAll("糖果测试"))
 	require.Empty(t, restored.MatchAll("新的测试题"))
+}
+
+func TestIntelligenceConditionEvidenceReportsMatchedBranches(t *testing.T) {
+	condition := condAll(
+		condTerms("plain", "糖果", "点心"),
+		condAny(condTerms("plain", "圆形"), condTerms("plain", "星形")),
+		condNot(condTerms("plain", "剧透")),
+		IntelligenceCondition{Op: "regex", Text: "plain", Pattern: `\b[0-9]+\b`},
+	)
+	matched, words := MatchIntelligenceConditionEvidence(condition, "请问糖果圆形有 12 个？")
+	require.True(t, matched)
+	require.Equal(t, []string{"糖果", "圆形", "12"}, words)
+	matched, words = MatchIntelligenceConditionEvidence(condition, "糖果圆形 12 个 剧透")
+	require.False(t, matched)
+	require.Empty(t, words)
+	matched, words = MatchIntelligenceConditionEvidence(condTerms("plain", "糖", "糖果"), "糖果题")
+	require.True(t, matched)
+	require.Equal(t, []string{"糖"}, words, "show the first matching term of an any-of group")
+}
+
+func TestIntelligenceBuiltinEvidencePreservesActualMatch(t *testing.T) {
+	matches := MatchIntelligenceBuiltins("画一只鹈鹕骑自行车")
+	require.NotEmpty(t, matches)
+	for _, match := range matches {
+		if match.ID == "builtin.pelican_bicycle" {
+			require.Contains(t, match.MatchedKeywords, "鹈鹕")
+			require.Contains(t, match.MatchedKeywords, "自行车")
+			return
+		}
+	}
+	t.Fatal("pelican rule not found")
+}
+
+func TestIntelligenceEvidenceLimitAndDedup(t *testing.T) {
+	long := strings.Repeat("糖", 200)
+	trimmed := NormalizeIntelligenceEvidence(long)
+	require.True(t, strings.HasSuffix(trimmed, "…"))
+	require.Less(t, len(trimmed), len(long))
+	require.Equal(t, []string{"糖果", "圆形"}, MergeIntelligenceEvidence([]string{"糖果", "圆形"}, []string{"糖果", ""}))
+	merged := MergeIntelligenceRuleMatches(
+		[]IntelligenceRuleMatch{{ID: "a", Name: "题目", Type: "builtin", MatchedKeywords: []string{"糖果"}}},
+		[]IntelligenceRuleMatch{{ID: "a", Name: "题目", Type: "builtin", MatchedKeywords: []string{"圆形", "糖果"}}},
+	)
+	require.Len(t, merged, 1)
+	require.Equal(t, []string{"糖果", "圆形"}, merged[0].MatchedKeywords)
+	multiplePatterns := MergeIntelligenceRuleMatches(
+		[]IntelligenceRuleMatch{{ID: "a", Type: "builtin", Pattern: "糖果", MatchedKeywords: []string{"糖果"}}},
+		[]IntelligenceRuleMatch{{ID: "a", Type: "builtin", Pattern: "圆形", MatchedKeywords: []string{"圆形"}}},
+	)
+	require.Empty(t, multiplePatterns[0].Pattern)
+	require.Equal(t, []string{"糖果", "圆形"}, multiplePatterns[0].MatchedKeywords)
+	nativeAndExtension := MergeIntelligenceRuleMatches(
+		[]IntelligenceRuleMatch{{ID: "a", Type: "builtin", Pattern: "糖果", MatchedKeywords: []string{"糖果"}}},
+		[]IntelligenceRuleMatch{{ID: "a", Type: "builtin", MatchedKeywords: []string{"圆形"}}},
+	)
+	require.Empty(t, nativeAndExtension[0].Pattern)
+	require.Equal(t, []string{"糖果", "圆形"}, nativeAndExtension[0].MatchedKeywords)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // IntelligenceCondition is a bounded boolean tree. Leaf text specifies the
@@ -241,3 +242,133 @@ func matchIntelligenceConditionNode(condition IntelligenceCondition, texts *inte
 	}
 	return compiled != nil && compiled.MatchString(text)
 }
+
+const maxIntelligenceEvidenceItems = 32
+const maxIntelligenceEvidenceRunes = 160
+
+// NormalizeIntelligenceEvidence bounds stored matches and detaches them from
+// the full input buffer. Truncation never splits a UTF-8 character.
+func NormalizeIntelligenceEvidence(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	count := 0
+	for index := range value {
+		if count == maxIntelligenceEvidenceRunes {
+			return strings.Clone(value[:index]) + "…"
+		}
+		count++
+	}
+	return strings.Clone(value)
+}
+
+// MergeIntelligenceEvidence keeps the first occurrence of each matched piece.
+func MergeIntelligenceEvidence(groups ...[]string) []string {
+	var result []string
+	seen := make(map[string]bool)
+	for _, group := range groups {
+		for _, value := range group {
+			value = NormalizeIntelligenceEvidence(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			seen[value] = true
+			result = append(result, value)
+			if len(result) >= maxIntelligenceEvidenceItems {
+				return result
+			}
+		}
+	}
+	return result
+}
+
+// MatchIntelligenceConditionEvidence uses the same predicate as routing and
+// reports only positive branches that actually match the normalized input.
+func MatchIntelligenceConditionEvidence(condition IntelligenceCondition, input string) (bool, []string) {
+	texts := &intelligenceConditionInput{input: input, plain: strings.ToLower(input)}
+	return matchIntelligenceConditionEvidenceWithTexts(condition, texts)
+}
+
+func matchIntelligenceConditionEvidenceWithTexts(condition IntelligenceCondition, texts *intelligenceConditionInput) (bool, []string) {
+	if !matchIntelligenceConditionNode(condition, texts) {
+		return false, nil
+	}
+	return true, conditionMatchedEvidence(condition, texts)
+}
+
+func conditionMatchedEvidence(condition IntelligenceCondition, texts *intelligenceConditionInput) []string {
+	switch condition.Op {
+	case "all", "any":
+		var result []string
+		for _, child := range condition.Children {
+			if matchIntelligenceConditionNode(child, texts) {
+				result = MergeIntelligenceEvidence(result, conditionMatchedEvidence(child, texts))
+				if len(result) >= maxIntelligenceEvidenceItems {
+					return result
+				}
+			}
+		}
+		return result
+	case "not":
+		return nil // A successful exclusion has no matching positive keyword.
+	}
+	text := texts.plain
+	switch condition.Text {
+	case "qin":
+		if !texts.qinReady {
+			texts.qin = strings.NewReplacer("-", " ", "_", " ").Replace(texts.plain)
+			texts.qinReady = true
+		}
+		text = texts.qin
+	case "visual":
+		if !texts.visualReady {
+			texts.visual = normalizeIntelligenceVisualText(texts.input)
+			texts.visualReady = true
+		}
+		text = texts.visual
+	}
+	if condition.Op == "contains_any" {
+		values := condition.normalizedValues
+		if len(values) != len(condition.Values) {
+			values = make([]string, len(condition.Values))
+			for i, value := range condition.Values {
+				values[i] = normalizeIntelligenceConditionText(condition.Text, value)
+			}
+		}
+		var result []string
+		for _, value := range values {
+			if value == "" {
+				continue
+			}
+			if index := strings.Index(text, value); index >= 0 {
+				result = MergeIntelligenceEvidence(result, []string{text[index : index+len(value)]})
+				// One hit explains this any-of group without scanning the
+				// remainder of a potentially large request repeatedly.
+				break
+			}
+		}
+		return result
+	}
+	if condition.Op == "regex" {
+		compiled := condition.compiled
+		if compiled == nil {
+			compiled, _ = regexp.Compile(condition.Pattern)
+		}
+		if compiled != nil {
+			return MergeIntelligenceEvidence([]string{compiled.FindString(text)})
+		}
+	}
+	return nil
+}
+
+var builtinEvidenceConditions = sync.OnceValue(func() map[string]IntelligenceCondition {
+	conditions := DefaultIntelligenceBuiltinConditions()
+	for id, condition := range conditions {
+		count := 0
+		if prepared, err := prepareIntelligenceCondition(condition, 0, &count); err == nil {
+			conditions[id] = prepared
+		}
+	}
+	return conditions
+})

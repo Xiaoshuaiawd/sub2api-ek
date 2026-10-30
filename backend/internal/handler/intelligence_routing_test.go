@@ -152,6 +152,7 @@ func TestBindIntelligenceRoutingNewBenchmarksCapture(t *testing.T) {
 		require.True(t, service.IsIntelligenceRouting(c.Request.Context()))
 		require.Equal(t, tc.body, string(store.stored[len(store.stored)-1].Body))
 		require.Equal(t, tc.id, store.stored[len(store.stored)-1].MatchedRules[0].ID)
+		require.NotEmpty(t, store.stored[len(store.stored)-1].MatchedRules[0].MatchedKeywords, "captured rule must include matched terms")
 	}
 }
 
