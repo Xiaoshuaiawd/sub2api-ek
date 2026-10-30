@@ -1686,6 +1686,13 @@ func TestOpenAIWSTurnBillingModelPreservesImagePricingModel(t *testing.T) {
 			wantBillingModel: "priced-channel-model",
 		},
 		{
+			name:             "intelligence turn preserves configured channel pricing",
+			mapping:          service.ChannelMappingResult{MappedModel: "public-alias", PricingMappedModel: "priced-channel-model", BillingModelSource: service.BillingModelSourceChannelMapped},
+			requestedModel:   "public-alias",
+			upstreamModel:    "account-model",
+			wantBillingModel: "priced-channel-model",
+		},
+		{
 			name:             "text turn falls back to upstream model",
 			mapping:          service.ChannelMappingResult{BillingModelSource: service.BillingModelSourceUpstream},
 			requestedModel:   "public-alias",
@@ -1952,6 +1959,7 @@ type openAIResponsesWSUsageLogCase struct {
 	simpleModeRejectAtRead int64
 	compositeResolver      *service.CompositeRouteResolver
 	accountPlatform        string
+	intelligenceAccount    bool
 	closeReason            string
 	firstPayload           string
 	// midPayload 在首个 turn 完成后发送 session.update；上游确认 session.updated，
@@ -3023,6 +3031,9 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	}
 	if tc.accountPlatform != "" {
 		account.Platform = tc.accountPlatform
+	}
+	if tc.intelligenceAccount {
+		account.Extra[service.IntelligenceRoutingExtraKey] = true
 	}
 	account.RateMultiplier = tc.accountRateMultiplier
 	if strings.TrimSpace(tc.ingressMode) != "" {

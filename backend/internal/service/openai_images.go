@@ -232,6 +232,15 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 		}
 	}
 
+	// Classify the prompt before channel model validation: image requests can
+	// be multipart and the caller cannot inspect their prompt until parsing.
+	if req.Prompt != "" && !IsIntelligenceRouting(c.Request.Context()) {
+		promptBody, _ := json.Marshal(map[string]string{"prompt": req.Prompt})
+		if IsIntelligenceTestRequest(promptBody) {
+			c.Request = c.Request.WithContext(WithIntelligenceRouting(c.Request.Context()))
+		}
+	}
+
 	applyOpenAIImagesDefaults(req)
 	req.clientModel = req.Model
 	if publicModel, ok := RequestedPublicModelFromContext(c.Request.Context()); ok {

@@ -942,7 +942,7 @@ func (s *GatewayService) checkChannelPricingRestriction(ctx context.Context, gro
 		return false
 	}
 	mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
-	billingModel := billingModelForRestriction(mapping.BillingModelSource, requestedModel, mapping.MappedModel)
+	billingModel := billingModelForRestriction(mapping.BillingModelSource, requestedModel, mapping.pricingMappedModel(requestedModel))
 	if billingModel == "" {
 		return false
 	}
