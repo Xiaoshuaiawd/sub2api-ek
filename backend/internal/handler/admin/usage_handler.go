@@ -28,6 +28,15 @@ type UsageHandler struct {
 	apiKeyService             *service.APIKeyService
 	adminService              service.AdminService
 	cleanupService            *service.UsageCleanupService
+	intelligenceSettings      *service.SettingService
+}
+
+// ProvideUsageHandler wires the shared intelligence context store without
+// exposing sensitive payloads to the ordinary usage service.
+func ProvideUsageHandler(usageService *service.UsageService, apiKeyService *service.APIKeyService, adminService service.AdminService, cleanupService *service.UsageCleanupService, settings *service.SettingService) *UsageHandler {
+	h := NewUsageHandler(usageService, apiKeyService, adminService, cleanupService)
+	h.intelligenceSettings = settings
+	return h
 }
 
 // NewUsageHandler creates a new admin usage handler
@@ -219,7 +228,26 @@ func (h *UsageHandler) List(c *gin.Context) {
 		return
 	}
 
-	response.Paginated(c, adminUsageLogResponses(c, records), result.Total, page, pageSize)
+	responses := adminUsageLogResponses(c, records)
+	if isIntelligenceContextAdmin(c) {
+		ids := make([]int64, len(records))
+		for i := range records {
+			ids[i] = records[i].ID
+		}
+		if available, err := h.intelligenceSettings.IntelligenceContextAvailable(c.Request.Context(), ids); err == nil {
+			if rows, ok := responses.([]dto.AdminUsageLog); ok {
+				annotated := make([]any, 0, len(rows))
+				for i, row := range rows {
+					annotated = append(annotated, struct {
+						dto.AdminUsageLog
+						IntelligenceContextAvailable bool `json:"intelligence_context_available"`
+					}{row, available[records[i].ID]})
+				}
+				responses = annotated
+			}
+		}
+	}
+	response.Paginated(c, responses, result.Total, page, pageSize)
 }
 
 // Stats handles getting usage statistics with filters

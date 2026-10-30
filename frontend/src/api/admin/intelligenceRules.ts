@@ -6,7 +6,17 @@ export interface IntelligenceRule {
   pattern: string
   enabled: boolean
 }
-export interface IntelligenceRulesConfig { rules: IntelligenceRule[] }
+export interface IntelligenceBuiltinRule {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+}
+export interface IntelligenceRulesConfig {
+  rules: IntelligenceRule[]
+  builtin_disabled_ids?: string[]
+  builtins?: IntelligenceBuiltinRule[]
+}
 
 export async function getRules(): Promise<IntelligenceRulesConfig> {
   return (await apiClient.get<IntelligenceRulesConfig>('/admin/settings/intelligence-rules')).data

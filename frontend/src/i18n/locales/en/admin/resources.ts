@@ -527,6 +527,26 @@ export default {
 
     // Usage Records
     usage: {
+      intelligenceContext: {
+        column: 'Test context',
+        view: 'View context',
+        title: 'Intelligence test request context',
+        contentType: 'Content type',
+        contentEncoding: 'Content encoding',
+        encodingHint: 'The download retains its original encoding; decoded text is shown below when available.',
+        matchedRules: 'Matched rules',
+        noRules: 'No rule information is available',
+        requestBody: 'Original request body',
+        notFound: 'No intelligence context is available for this usage record.',
+        loadError: 'Could not load the context. Please retry.',
+        listDescription: 'View all requests that matched intelligence tests, including requests without usage records.',
+        usageLog: 'Usage record',
+        noUsageLog: 'No usage record',
+        empty: 'No intelligence test contexts found.',
+        refresh: 'Refresh',
+        download: 'Download original request body',
+        binaryBody: 'This request contains binary data. Download the original body to inspect it.',
+      },
       title: 'Usage Records',
       description: 'View and manage all user usage records',
       userFilter: 'User',

@@ -524,6 +524,26 @@ export default {
 
     // Usage Records
     usage: {
+      intelligenceContext: {
+        column: '智商上下文',
+        view: '查看上下文',
+        title: '智商测试请求上下文',
+        contentType: '内容类型',
+        contentEncoding: '内容编码',
+        encodingHint: '下载文件保留原始编码；可解压为文本时，下方展示解压后的内容。',
+        matchedRules: '命中规则',
+        noRules: '没有可用的规则信息',
+        requestBody: '原始请求体',
+        notFound: '该使用记录没有可用的智商上下文。',
+        loadError: '上下文加载失败，请重试。',
+        listDescription: '查看所有命中智商测试的请求，包括未生成使用记录的请求。',
+        usageLog: '使用记录',
+        noUsageLog: '未生成使用记录',
+        empty: '暂无智商测试上下文。',
+        refresh: '刷新',
+        download: '下载原始请求体',
+        binaryBody: '请求体包含二进制数据，请下载原始请求体查看。',
+      },
       title: '使用记录',
       description: '查看和管理所有用户的使用记录',
       userFilter: '用户',

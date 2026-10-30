@@ -22,7 +22,7 @@ describe('IntelligenceRulesSection', () => {
     await rows[1].get('[data-testid="rule-pattern"]').setValue('糖果.*抽取')
     await wrapper.get('[data-testid="intelligence-save"]').trigger('click')
     await flushPromises()
-    expect(saveRules).toHaveBeenCalledWith({ rules: [
+    expect(saveRules).toHaveBeenCalledWith({ builtin_disabled_ids: [], rules: [
       { name: '现有', type: 'contains', pattern: '测试题', enabled: true },
       { name: '新题', type: 'regex', pattern: '糖果.*抽取', enabled: true },
     ] })
@@ -69,6 +69,19 @@ describe('IntelligenceRulesSection', () => {
     await rows[1].get('[data-testid="rule-remove"]').trigger('click')
     await wrapper.get('[data-testid="intelligence-save"]').trigger('click')
     await flushPromises()
-    expect(saveRules).toHaveBeenCalledWith({ rules: [{ name: '保留', type: 'contains', pattern: '测试', enabled: false }] })
+    expect(saveRules).toHaveBeenCalledWith({ builtin_disabled_ids: [], rules: [{ name: '保留', type: 'contains', pattern: '测试', enabled: false }] })
+  })
+
+  it('shows built-in rules and persists their enabled state alongside custom rules', async () => {
+    getRules.mockResolvedValue({ rules: [{ name: '自定义', type: 'contains', pattern: 'abc', enabled: true }], builtin_disabled_ids: [], builtins: [{ id: 'builtin.pelican_bicycle', name: '鹈鹕骑自行车', description: '鹈鹕和自行车', enabled: true }] })
+    saveRules.mockImplementation(async value => ({ ...value, builtins: [{ id: 'builtin.pelican_bicycle', name: '鹈鹕骑自行车', description: '鹈鹕和自行车', enabled: false }] }))
+    const wrapper = mount(IntelligenceRulesSection)
+    await flushPromises()
+    expect(wrapper.text()).toContain('鹈鹕骑自行车')
+    await wrapper.get('[data-testid="builtin-rule-enabled"]').setValue(false)
+    expect(wrapper.text()).toContain('admin.settings.intelligenceRules.unsaved')
+    await wrapper.get('[data-testid="intelligence-save"]').trigger('click')
+    await flushPromises()
+    expect(saveRules).toHaveBeenCalledWith({ rules: [{ name: '自定义', type: 'contains', pattern: 'abc', enabled: true }], builtin_disabled_ids: ['builtin.pelican_bicycle'] })
   })
 })

@@ -137,7 +137,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			return
 		}
 	}
-	if !bindIntelligenceRoutingPrompt(c, requestInfo.Prompt, h.gatewayService.IntelligenceRuleSettings()) {
+	if !bindIntelligenceRoutingPrompt(c, requestInfo.Prompt, body, h.gatewayService.IntelligenceRuleSettings()) {
 		return
 	}
 	requestModel := requestInfo.Model

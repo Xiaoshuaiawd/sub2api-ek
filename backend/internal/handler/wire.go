@@ -309,7 +309,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewOpsHandler,
 	ProvideSystemHandler,
 	admin.NewSubscriptionHandler,
-	admin.NewUsageHandler,
+	admin.ProvideUsageHandler,
 	admin.NewUserAttributeHandler,
 	admin.NewErrorPassthroughHandler,
 	admin.NewTLSFingerprintProfileHandler,

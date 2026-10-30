@@ -205,14 +205,32 @@ var ErrBatchImageCancelIntelligenceAccount = infraerrors.New(503, "BATCH_IMAGE_C
 func batchImageIntelligenceRouting(items []BatchImageSubmitItem, rules IntelligenceRules) (bool, error) {
 	var required bool
 	for i, item := range items {
-		body, _ := json.Marshal(map[string]string{"prompt": item.Prompt})
-		current := IsIntelligenceTestRequest(body) || rules.Match(item.Prompt)
+		current := len(rules.MatchAll(item.Prompt)) > 0
 		if i > 0 && current != required {
 			return false, ErrBatchImageMixedIntelligenceRouting
 		}
 		required = current
 	}
 	return required, nil
+}
+
+type batchImageIntelligenceRulesKey struct{}
+
+func WithBatchImageIntelligenceRules(ctx context.Context, rules IntelligenceRules) context.Context {
+	return context.WithValue(ctx, batchImageIntelligenceRulesKey{}, rules)
+}
+
+func (s *BatchImagePublicService) IntelligenceMatches(ctx context.Context, req BatchImageSubmitRequest) ([]IntelligenceRuleMatch, IntelligenceRules, error) {
+	rules, err := s.IntelligenceSettings.RuntimeIntelligenceRules(ctx)
+	if err != nil {
+		return nil, IntelligenceRules{}, err
+	}
+	var matches []IntelligenceRuleMatch
+	for _, item := range req.Items {
+		// validateSubmitRequest uses the trimmed prompt for scheduling.
+		matches = MergeIntelligenceRuleMatches(matches, rules.MatchAll(strings.TrimSpace(item.Prompt)))
+	}
+	return matches, rules, nil
 }
 
 func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOwner, req BatchImageSubmitRequest, idempotencyKey string) (*BatchImagePublicBatch, error) {
@@ -223,9 +241,12 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err != nil {
 		return nil, err
 	}
-	rules, err := s.IntelligenceSettings.RuntimeIntelligenceRules(ctx)
-	if err != nil {
-		return nil, err
+	rules, ok := ctx.Value(batchImageIntelligenceRulesKey{}).(IntelligenceRules)
+	if !ok {
+		rules, err = s.IntelligenceSettings.RuntimeIntelligenceRules(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	required, err := batchImageIntelligenceRouting(normalized.Items, rules)
 	if err != nil {
@@ -314,6 +335,9 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err != nil {
 		return nil, err
 	}
+	// This point is reached only for a newly created job. Idempotent replays
+	// return earlier and must not be attached to the original job's usage.
+	linkUniqueIntelligenceUsage(ctx, s.IntelligenceSettings, owner.APIKeyID, BatchImageCaptureRequestID(job.BatchID))
 	if err := reserveBatchImageBalanceHold(ctx, s.BillingRepo, job, requestHash); err != nil {
 		code := "BILLING_HOLD_FAILED"
 		if errors.Is(err, ErrBatchImageInsufficientBalance) {

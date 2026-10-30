@@ -4,15 +4,67 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"context"
 	"errors"
 	"fmt"
 	"github.com/Wei-Shaw/sub2api/internal/requestcapture"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
+
+type originalRequestBodyKey struct{}
+
+// OriginalRequestBody retains the bytes and encoding received before decoding
+// or lenient JSON normalization. The slice remains request-scoped and is not
+// persisted unless a caller explicitly records it.
+func OriginalRequestBody(ctx context.Context) ([]byte, string, bool) {
+	if ctx == nil {
+		return nil, "", false
+	}
+	value, ok := ctx.Value(originalRequestBodyKey{}).(*originalRequestBody)
+	if !ok || value == nil {
+		return nil, "", false
+	}
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	if value.released {
+		return nil, "", false
+	}
+	return value.body, value.encoding, true
+}
+
+type originalRequestBody struct {
+	mu       sync.Mutex
+	body     []byte
+	encoding string
+	released bool
+}
+
+func rememberOriginalRequestBody(req *http.Request, body []byte, encoding string) {
+	if req.Context().Value(originalRequestBodyKey{}) != nil {
+		return
+	}
+	*req = *req.WithContext(context.WithValue(req.Context(), originalRequestBodyKey{}, &originalRequestBody{body: body, encoding: encoding}))
+}
+
+// ReleaseOriginalRequestBody drops the temporary wire bytes once classification
+// has finished. Ordinary streaming requests must not retain a second body.
+func ReleaseOriginalRequestBody(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	value, ok := ctx.Value(originalRequestBodyKey{}).(*originalRequestBody)
+	if !ok || value == nil {
+		return
+	}
+	value.mu.Lock()
+	value.body, value.encoding, value.released = nil, "", true
+	value.mu.Unlock()
+}
 
 const (
 	requestBodyReadInitCap    = 512
@@ -85,6 +137,7 @@ func readRequestBodyWithPrealloc(req *http.Request, maxDecodedBytes int64, stric
 		return nil, nil
 	}
 	if preread, ok := req.Body.(*PrereadBody); ok {
+		rememberOriginalRequestBody(req, preread.Bytes(), req.Header.Get("Content-Encoding"))
 		return preread.Bytes(), nil
 	}
 
@@ -106,6 +159,7 @@ func readRequestBodyWithPrealloc(req *http.Request, maxDecodedBytes int64, stric
 	}
 
 	enc := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
+	rememberOriginalRequestBody(req, raw, req.Header.Get("Content-Encoding"))
 	if enc == "" || enc == "identity" {
 		return raw, nil
 	}

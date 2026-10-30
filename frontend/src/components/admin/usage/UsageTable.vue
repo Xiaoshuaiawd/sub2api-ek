@@ -26,6 +26,12 @@
         :default-sort-order="defaultSortOrder"
         @sort="(key, order) => $emit('sort', key, order)"
       >
+        <template #cell-intelligence_context="{ row }">
+          <button v-if="!observerMode && row.intelligence_context_available === true" type="button" data-testid="view-intelligence-context" class="text-sm font-medium text-primary-600 hover:underline dark:text-primary-400" @click="$emit('intelligenceContext', row.id)">
+            {{ t('admin.usage.intelligenceContext.view') }}
+          </button>
+          <span v-else class="text-sm text-gray-400">-</span>
+        </template>
         <template #cell-user="{ row }">
           <div class="text-sm">
             <span v-if="observerMode" class="font-medium text-gray-900 dark:text-white">{{ row.user?.email || "-" }}</span>
@@ -637,6 +643,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 const emit = defineEmits<{
   userClick: [userID: number, email?: string]
+  intelligenceContext: [usageId: number]
   sort: [key: string, order: 'asc' | 'desc']
   ipGeoBatchFailed: []
 }>()

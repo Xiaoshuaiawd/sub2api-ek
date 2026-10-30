@@ -17,6 +17,7 @@ import (
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
@@ -30,7 +31,7 @@ const (
 func (h *GatewayHandler) WebSearch(c *gin.Context) {
 	isXSearch := c.GetBool("grok_x_search_endpoint")
 	var req grokStandaloneSearchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
 			"type":    "invalid_request_error",
 			"message": err.Error(),
@@ -108,7 +109,9 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 			"role": "user", "content": req.Query,
 		}},
 	})
-	if !bindIntelligenceRouting(c, auditBody, h.settingService) {
+	original, _ := c.Get(gin.BodyBytesKey)
+	originalBody, _ := original.([]byte)
+	if !bindIntelligenceRoutingWithBody(c, auditBody, originalBody, h.settingService) {
 		return
 	}
 	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIChat, searchModel, auditBody); decision != nil && !decision.AllowNextStage {

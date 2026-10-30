@@ -922,8 +922,9 @@ func ProvideOpsIngressRejectAggregator(opsRepo OpsRepository, opsService *OpsSer
 }
 
 // ProvideSettingService wires SettingService with group reader and proxy repo.
-func ProvideSettingService(scopedKeys ScopedAdminKeyRepository, settingRepo SettingRepository, groupRepo GroupRepository, proxyRepo ProxyRepository, cfg *config.Config) *SettingService {
+func ProvideSettingService(scopedKeys ScopedAdminKeyRepository, settingRepo SettingRepository, groupRepo GroupRepository, proxyRepo ProxyRepository, cfg *config.Config, intelligenceContexts IntelligenceContextRepository) *SettingService {
 	svc := NewSettingService(settingRepo, cfg)
+	svc.SetIntelligenceContextRepository(intelligenceContexts)
 	svc.scopedAdminKeyRepo = scopedKeys
 	svc.SetDefaultSubscriptionGroupReader(groupRepo)
 	svc.SetProxyRepository(proxyRepo)

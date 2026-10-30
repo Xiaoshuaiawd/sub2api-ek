@@ -8,6 +8,69 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIntelligenceBuiltinMatches(t *testing.T) {
+	definitions := IntelligenceBuiltinRules()
+	require.Len(t, definitions, 8)
+	ids := map[string]bool{}
+	for _, def := range definitions {
+		require.NotEmpty(t, def.ID)
+		require.NotEmpty(t, def.Name)
+		require.NotEmpty(t, def.Description)
+		require.False(t, ids[def.ID])
+		ids[def.ID] = true
+	}
+	matches := MatchIntelligenceBuiltins("请用 SVG 制作秦始皇开坦克的 2D 动画")
+	got := map[string]bool{}
+	for _, item := range matches {
+		got[item.ID] = true
+		require.NotEmpty(t, item.Name)
+	}
+	require.True(t, got["builtin.qin_tank"])
+	require.True(t, got["builtin.svg_scene"])
+	require.Empty(t, MatchIntelligenceBuiltins("今天的天气不错"))
+	require.Len(t, MergeIntelligenceRuleMatches(matches, matches), len(matches))
+	filtered := IntelligenceRules{BuiltinDisabledIDs: []string{"builtin.qin_tank"}}.MatchAll("请用 SVG 制作秦始皇开坦克的 2D 动画")
+	require.Len(t, filtered, 1)
+	require.Equal(t, "builtin.svg_scene", filtered[0].ID)
+}
+
+func TestIntelligenceBuiltinMatchAttribution(t *testing.T) {
+	for _, tc := range []struct{ text, id string }{
+		{"你的知识库截止日期是什么？最新 iPhone 型号是什么？", "builtin.knowledge_iphone"},
+		{"画鹈鹕骑自行车", "builtin.pelican_bicycle"},
+		{"画秦始皇开坦克", "builtin.qin_tank"},
+		{"糖果测试", "builtin.candy_named"},
+		{"圆形糖果最少抽取多少", "builtin.candy_structure"},
+		{"ModelTrace 指纹", "builtin.modeltrace_named"},
+		{"不要用工具，在 1 到 1000 之间生成 300 个整数", "builtin.modeltrace_structure"},
+		{"用 SVG 绘制三维海底城市", "builtin.svg_scene"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			matches := MatchIntelligenceBuiltins(tc.text)
+			ids := make([]string, 0, len(matches))
+			for _, match := range matches {
+				ids = append(ids, match.ID)
+			}
+			require.Contains(t, ids, tc.id)
+		})
+	}
+}
+
+func TestIntelligenceCustomMatches(t *testing.T) {
+	rules := IntelligenceRules{Rules: []IntelligenceRule{
+		{Name: "甜食", Type: "contains", Pattern: "糖果", Enabled: true},
+		{Name: "数量", Type: "regex", Pattern: `糖果.*数量`, Enabled: true},
+		{Name: "关闭", Type: "contains", Pattern: "糖果", Enabled: false},
+	}}
+	matches := rules.Matches("请计算糖果数量")
+	require.Len(t, matches, 2)
+	require.Equal(t, "甜食", matches[0].Name)
+	require.Equal(t, "数量", matches[1].Name)
+	require.NotEqual(t, matches[0].ID, matches[1].ID)
+	require.True(t, rules.Match("请计算糖果数量"))
+	require.Empty(t, rules.Matches("普通消息"))
+}
+
 func TestIsIntelligenceTestRequest(t *testing.T) {
 	tests := []struct {
 		name string
@@ -127,7 +190,13 @@ func TestIsIntelligenceTestRequest(t *testing.T) {
 		{"malformed", `{`, false},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) { require.Equal(t, tt.want, IsIntelligenceTestRequest([]byte(tt.body))) })
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, IsIntelligenceTestRequest([]byte(tt.body)))
+			var request map[string]any
+			if json.Unmarshal([]byte(tt.body), &request) == nil {
+				require.Equal(t, tt.want, len((IntelligenceRules{}).MatchAll(intelligenceLatestUserText(request))) > 0, "default rules must match existing detection")
+			}
+		})
 	}
 }
 

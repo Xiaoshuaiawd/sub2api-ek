@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +30,54 @@ type IntelligenceRule struct {
 }
 
 type IntelligenceRules struct {
-	Rules []IntelligenceRule `json:"rules"`
+	Rules              []IntelligenceRule `json:"rules"`
+	BuiltinDisabledIDs []string           `json:"builtin_disabled_ids"`
+}
+
+// MatchAll reports every enabled built-in and custom rule hit.
+func (r IntelligenceRules) MatchAll(text string) []IntelligenceRuleMatch {
+	return MergeIntelligenceRuleMatches(r.MatchBuiltins(text), r.Matches(text))
+}
+
+// MatchBuiltins returns enabled built-in matches; older settings that lack
+// builtin_disabled_ids preserve the existing default of all enabled.
+func (r IntelligenceRules) MatchBuiltins(text string) []IntelligenceRuleMatch {
+	all := MatchIntelligenceBuiltins(text)
+	if len(r.BuiltinDisabledIDs) == 0 {
+		return all
+	}
+	disabled := make(map[string]bool, len(r.BuiltinDisabledIDs))
+	for _, id := range r.BuiltinDisabledIDs {
+		disabled[id] = true
+	}
+	var matches []IntelligenceRuleMatch
+	for _, match := range all {
+		if !disabled[match.ID] {
+			matches = append(matches, match)
+		}
+	}
+	return matches
+}
+
+// Matches captures each matching configured rule for historical attribution.
+// The custom ID identifies its position in this snapshot; callers must persist
+// the matched name/type so later edits do not rewrite historical attribution.
+func (r IntelligenceRules) Matches(text string) []IntelligenceRuleMatch {
+	if len(r.Rules) == 0 {
+		return nil
+	}
+	text = norm.NFKC.String(text)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	lowerText := strings.ToLower(text)
+	var matches []IntelligenceRuleMatch
+	for i, rule := range r.Rules {
+		if intelligenceCustomRuleMatches(rule, text, lowerText) {
+			matches = append(matches, IntelligenceRuleMatch{ID: "custom:" + strconv.Itoa(i), Name: rule.Name, Type: rule.Type, Pattern: rule.Pattern})
+		}
+	}
+	return matches
 }
 
 // Match checks compiled rules. Text and contains patterns are normalized
@@ -44,27 +92,30 @@ func (r IntelligenceRules) Match(text string) bool {
 	}
 	lowerText := strings.ToLower(text)
 	for _, rule := range r.Rules {
-		if !rule.Enabled || strings.TrimSpace(rule.Pattern) == "" {
-			continue
+		if intelligenceCustomRuleMatches(rule, text, lowerText) {
+			return true
 		}
-		switch rule.Type {
-		case "contains":
-			pattern := rule.normalizedPattern
-			if pattern == "" {
-				pattern = strings.ToLower(norm.NFKC.String(rule.Pattern))
-			}
-			if strings.Contains(lowerText, pattern) {
-				return true
-			}
-		case "regex":
-			compiled := rule.compiled
-			if compiled == nil {
-				compiled, _ = regexp.Compile("(?i)" + rule.Pattern)
-			}
-			if compiled != nil && !compiled.MatchString("") && compiled.MatchString(text) {
-				return true
-			}
+	}
+	return false
+}
+
+func intelligenceCustomRuleMatches(rule IntelligenceRule, text, lowerText string) bool {
+	if !rule.Enabled || strings.TrimSpace(rule.Pattern) == "" {
+		return false
+	}
+	switch rule.Type {
+	case "contains":
+		pattern := rule.normalizedPattern
+		if pattern == "" {
+			pattern = strings.ToLower(norm.NFKC.String(rule.Pattern))
 		}
+		return strings.Contains(lowerText, pattern)
+	case "regex":
+		compiled := rule.compiled
+		if compiled == nil {
+			compiled, _ = regexp.Compile("(?i)" + rule.Pattern)
+		}
+		return compiled != nil && !compiled.MatchString("") && compiled.MatchString(text)
 	}
 	return false
 }
@@ -73,7 +124,15 @@ func prepareIntelligenceRules(value IntelligenceRules) (IntelligenceRules, error
 	if len(value.Rules) > maxIntelligenceRules {
 		return value, fmt.Errorf("%w: at most %d rules", ErrInvalidIntelligenceRules, maxIntelligenceRules)
 	}
-	result := IntelligenceRules{Rules: make([]IntelligenceRule, len(value.Rules))}
+	if len(value.BuiltinDisabledIDs) > maxIntelligenceRules {
+		return value, fmt.Errorf("%w: too many disabled built-in rule IDs", ErrInvalidIntelligenceRules)
+	}
+	result := IntelligenceRules{Rules: make([]IntelligenceRule, len(value.Rules)), BuiltinDisabledIDs: append([]string{}, value.BuiltinDisabledIDs...)}
+	for _, id := range result.BuiltinDisabledIDs {
+		if strings.TrimSpace(id) == "" || len(id) > 256 {
+			return value, fmt.Errorf("%w: invalid built-in rule ID", ErrInvalidIntelligenceRules)
+		}
+	}
 	for i, rule := range value.Rules {
 		rule.Name = strings.TrimSpace(rule.Name)
 		if rule.Name == "" || len(rule.Name) > 256 || strings.TrimSpace(rule.Pattern) == "" || len(rule.Pattern) > maxIntelligenceRulePattern {
@@ -138,6 +197,7 @@ func (s *SettingService) SetIntelligenceRules(ctx context.Context, input Intelli
 
 func cloneIntelligenceRules(value IntelligenceRules) IntelligenceRules {
 	value.Rules = append([]IntelligenceRule{}, value.Rules...)
+	value.BuiltinDisabledIDs = append([]string{}, value.BuiltinDisabledIDs...)
 	return value
 }
 

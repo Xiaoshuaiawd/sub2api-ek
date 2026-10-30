@@ -56,6 +56,26 @@ func TestIntelligenceOCRCustomRules(t *testing.T) {
 	require.False(t, result)
 }
 
+func TestIntelligenceClassificationReportsMatches(t *testing.T) {
+	rules := IntelligenceRules{Rules: []IntelligenceRule{{Name: "我的题目", Type: "contains", Pattern: "特殊样题", Enabled: true}}}
+	image := []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}]}]}`)
+	matches, err := intelligenceClassifyWithOCRRules(context.Background(), image, rules, func(context.Context, string) (string, error) { return "特殊 样题 糖果测试", nil })
+	require.NoError(t, err)
+	var names []string
+	for _, match := range matches {
+		names = append(names, match.Name)
+	}
+	require.Contains(t, names, "我的题目")
+	require.GreaterOrEqual(t, len(matches), 2)
+	result, err := intelligenceClassifyWithOCRRules(context.Background(), []byte(`{"messages":[{"role":"user","content":"糖果测试"},{"role":"user","content":"普通请求"}]}`), IntelligenceRules{}, nil)
+	require.NoError(t, err)
+	require.Empty(t, result)
+	failed := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"糖果测试"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}]}]}`)
+	result, err = intelligenceClassifyWithOCRRules(context.Background(), failed, IntelligenceRules{}, func(context.Context, string) (string, error) { return "", errors.New("ocr failed") })
+	require.ErrorIs(t, err, ErrIntelligenceOCR)
+	require.NotEmpty(t, result)
+}
+
 func TestIntelligenceRulesBatchPrompt(t *testing.T) {
 	rules := IntelligenceRules{Rules: []IntelligenceRule{{Name: "custom", Type: "contains", Pattern: "自定义测试题", Enabled: true}}}
 	required, err := batchImageIntelligenceRouting([]BatchImageSubmitItem{{Prompt: "画自定义测试题"}}, rules)
@@ -63,6 +83,19 @@ func TestIntelligenceRulesBatchPrompt(t *testing.T) {
 	require.True(t, required)
 	_, err = batchImageIntelligenceRouting([]BatchImageSubmitItem{{Prompt: "自定义测试题"}, {Prompt: "普通绘画"}}, rules)
 	require.ErrorIs(t, err, ErrBatchImageMixedIntelligenceRouting)
+}
+
+func TestIntelligenceRulesBatchUsesNormalizedPrompt(t *testing.T) {
+	settings := &SettingService{settingRepo: &intelligenceRulesRepo{}}
+	_, err := settings.SetIntelligenceRules(t.Context(), IntelligenceRules{Rules: []IntelligenceRule{{Name: "exact", Type: "regex", Pattern: "^foo$", Enabled: true}}})
+	require.NoError(t, err)
+	svc := &BatchImagePublicService{IntelligenceSettings: settings}
+	matches, rules, err := svc.IntelligenceMatches(t.Context(), BatchImageSubmitRequest{Items: []BatchImageSubmitItem{{Prompt: " foo "}}})
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	required, err := batchImageIntelligenceRouting([]BatchImageSubmitItem{{Prompt: "foo"}}, rules)
+	require.NoError(t, err)
+	require.True(t, required)
 }
 
 func TestIntelligenceOCRProcessIntegration(t *testing.T) {

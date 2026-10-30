@@ -1,9 +1,9 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <UsageStatsCards v-if="activeTab !== 'traffic'" :stats="usageStats" />
+      <UsageStatsCards v-if="activeTab !== 'traffic' && activeTab !== 'intelligence_contexts'" :stats="usageStats" />
       <!-- Charts Section -->
-      <div v-if="activeTab !== 'traffic'" class="space-y-4">
+      <div v-if="activeTab !== 'traffic' && activeTab !== 'intelligence_contexts'" class="space-y-4">
         <div class="card p-4">
           <div class="flex flex-wrap items-center gap-4">
             <div class="flex items-center gap-2">
@@ -87,7 +87,7 @@
           </button>
         </div>
 
-        <UsageFilters v-if="activeTab !== 'traffic'" v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" class="border-b border-gray-100 dark:border-dark-700/50" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
+        <UsageFilters v-if="activeTab !== 'traffic' && activeTab !== 'intelligence_contexts'" v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" class="border-b border-gray-100 dark:border-dark-700/50" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
           <template #after-reset>
             <div v-if="activeTab === 'usage' || activeTab === 'errors'" class="relative" ref="columnDropdownRef">
               <button
@@ -139,6 +139,7 @@
             :cache-rate-audience="props.observerMode ? 'user' : 'admin'"
             @sort="handleSort"
             @userClick="handleUserClick"
+            @intelligenceContext="openIntelligenceContext"
             @ipGeoBatchFailed="handleIpGeoBatchFailed"
           />
           <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
@@ -162,6 +163,7 @@
           :filters="connectionFilters"
           :refresh-key="connectionRefreshKey"
         />
+        <IntelligenceContextList v-if="!props.observerMode && activeTab === 'intelligence_contexts'" @open="openIntelligenceContextById" />
         <TrafficPanel v-if="!props.observerMode && activeTab === 'traffic'" admin />
         <!-- 懒挂载：首次切到该 tab 才请求排行数据，之后随筛选自动刷新 -->
         <div v-if="!props.observerMode && rankingMounted" v-show="activeTab === 'ranking'" class="overflow-hidden rounded-b-2xl">
@@ -176,6 +178,7 @@
         </div>
       </div>
       <OpsErrorDetailModal v-model:show="showErrorModal" :error-id="selectedErrorId" :error-type="'request'" />
+      <IntelligenceContextDialog v-if="!props.observerMode" :usage-id="intelligenceContextUsageId" :context-id="intelligenceContextId" @close="closeIntelligenceContext" />
     </div>
   </AppLayout>
   <UsageExportProgress :show="exportProgress.show" :progress="exportProgress.progress" :current="exportProgress.current" :total="exportProgress.total" :estimated-time="exportProgress.estimatedTime" @cancel="cancelExport" />
@@ -216,6 +219,8 @@ import UsageConnections from '@/components/admin/usage/UsageConnections.vue'
 import TrafficPanel from '@/components/usage/TrafficPanel.vue'
 import UserTokenRanking from '@/components/admin/usage/UserTokenRanking.vue'
 import UsageCleanupDialog from '@/components/admin/usage/UsageCleanupDialog.vue'
+import IntelligenceContextDialog from '@/components/admin/usage/IntelligenceContextDialog.vue'
+import IntelligenceContextList from '@/components/admin/usage/IntelligenceContextList.vue'
 import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryModal.vue'
 import OpsErrorLogTable from '@/views/admin/ops/components/OpsErrorLogTable.vue'
 import OpsErrorDetailModal from '@/views/admin/ops/components/OpsErrorDetailModal.vue'
@@ -227,6 +232,11 @@ import Icon from '@/components/icons/Icon.vue'
 import type { AdminUsageLog, TrendDataPoint, ModelStat, GroupStat, EndpointStat, AdminUser } from '@/types'; import type { AdminUsageStatsResponse, AdminUsageQueryParams } from '@/api/admin/usage'
 
 const props = withDefaults(defineProps<{ observerMode?: boolean }>(), { observerMode: false })
+const intelligenceContextUsageId = ref<number | null>(null)
+const intelligenceContextId = ref<string | null>(null)
+const openIntelligenceContext = (id: number) => { if (!props.observerMode) { intelligenceContextId.value = null; intelligenceContextUsageId.value = id } }
+const openIntelligenceContextById = (id: string) => { if (!props.observerMode) { intelligenceContextUsageId.value = null; intelligenceContextId.value = id } }
+const closeIntelligenceContext = () => { intelligenceContextUsageId.value = null; intelligenceContextId.value = null }
 provide(observerUsageContext, props.observerMode)
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -710,6 +720,7 @@ const allColumns = computed(() => [
   { key: 'tokens', label: t('usage.tokens'), sortable: false },
   { key: 'cost', label: t('usage.cost'), sortable: false },
   { key: 'latency', label: t('usage.latency'), sortable: false },
+  ...(!props.observerMode ? [{ key: 'intelligence_context', label: t('admin.usage.intelligenceContext.column'), sortable: false }] : []),
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },
   { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },
@@ -843,7 +854,7 @@ const loadSavedColumns = () => {
 }
 
 // Detail tabs
-type DetailTab = 'usage' | 'errors' | 'connections' | 'ranking' | 'traffic'
+type DetailTab = 'usage' | 'errors' | 'connections' | 'ranking' | 'traffic' | 'intelligence_contexts'
 const activeTab = ref<DetailTab>('usage')
 const canViewErrors = computed(() => !props.observerMode || !!appStore.cachedPublicSettings?.allow_user_view_error_requests)
 const detailTabs = computed(() => [
@@ -852,6 +863,7 @@ const detailTabs = computed(() => [
   ...(!props.observerMode ? [{ key: 'connections' as const, label: t('connections.title'), icon: 'clock' as const }] : []),
   ...(!props.observerMode ? [{ key: 'ranking' as const, label: t('usage.tabs.ranking'), icon: 'chart' as const }] : []),
   ...(!props.observerMode ? [{ key: 'traffic' as const, label: t('traffic.title'), icon: 'chart' as const }] : []),
+  ...(!props.observerMode ? [{ key: 'intelligence_contexts' as const, label: t('admin.usage.intelligenceContext.column'), icon: 'document' as const }] : []),
 ])
 const usageFiltersRef = ref<InstanceType<typeof UsageFilters> | null>(null)
 const connectionRefreshKey = ref(0)
