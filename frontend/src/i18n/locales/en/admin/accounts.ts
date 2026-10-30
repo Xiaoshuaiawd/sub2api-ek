@@ -155,7 +155,7 @@ export default {
       notesPlaceholder: 'Enter notes',
       notesHint: 'Notes are optional',
       intelligenceRouting: 'Qualified for intelligence tests',
-      intelligenceRoutingHint: 'When enabled, only the latest user message is checked for candy tests, 2D/3D SVG images or animations, and ModelTrace fingerprint requests. Ordinary creative requests with the same format may also match.',
+      intelligenceRoutingHint: 'When enabled, only the latest user message is checked for candy tests, 2D/3D SVG images or animations, knowledge cutoff and iPhone model tests, and ModelTrace fingerprint requests. Ordinary creative requests with the same format may also match.',
       allPlatforms: 'All Platforms',
       allTypes: 'All Types',
       allStatus: 'All Status',

@@ -81,15 +81,16 @@ func intelligenceLatestInputText(value any) string {
 					continue
 				}
 				typ, _ := item["type"].(string)
-				if typ != "" && typ != "message" && typ != "text" && typ != "input_text" {
+				if typ != "" && typ != "message" && !intelligenceInputBlockType(typ) {
 					continue
 				}
-				if role == "" && (typ == "text" || typ == "input_text") {
-					// Adjacent top-level text blocks represent one user input.
+				if role == "" && intelligenceInputBlockType(typ) {
+					// Adjacent top-level text and image blocks form one user input.
 					start := i
 					for start > 0 {
 						prev, ok := v[start-1].(map[string]any)
-						if !ok || prev["role"] != nil || (prev["type"] != "text" && prev["type"] != "input_text") {
+						prevType, _ := prev["type"].(string)
+						if !ok || prev["role"] != nil || !intelligenceInputBlockType(prevType) {
 							break
 						}
 						start--
@@ -105,6 +106,10 @@ func intelligenceLatestInputText(value any) string {
 		}
 	}
 	return ""
+}
+
+func intelligenceInputBlockType(typ string) bool {
+	return typ == "text" || typ == "input_text" || typ == "input_image" || typ == "image_url"
 }
 
 // System One has no chat roles at the envelope level: state is submitted user
@@ -252,6 +257,15 @@ func intelligenceContainsAny(s string, terms ...string) bool {
 }
 
 func matchesIntelligencePrompt(s string) bool {
+	// Knowledge-cutoff probes often pair a cutoff question with the newest
+	// iPhone model, with or without explicit instructions not to browse.
+	knowledge := intelligenceContainsAny(s, "知识库", "知識庫", "知识截止", "知識截止", "知识更新", "知識更新", "训练数据", "訓練資料", "训练资料", "訓練數據", "knowledge cutoff", "knowledge cut-off", "knowledge cut off", "training data", "knowledge base")
+	cutoff := intelligenceContainsAny(s, "截止", "截至", "更新到", "更新至", "到哪年", "到哪一年", "到什么时间", "到什麼時間", "截止日期", "cutoff", "cut-off", "cut off", "up to", "updated through", "updated until", "through what date")
+	phone := intelligenceContainsAny(s, "iphone", "i phone", "苹果手机", "蘋果手機")
+	latest := intelligenceContainsAny(s, "最新", "新款", "最近", "出到", "第几代", "第幾代", "哪一代", "哪款", "什么型号", "什麼型號", "最新型号", "最新型號", "latest", "newest", "most recent", "current model", "current iphone", "which iphone", "what iphone")
+	if knowledge && cutoff && phone && latest {
+		return true
+	}
 	if intelligenceContainsAny(s, "鹈鹕", "鵜鶘", "pelican") && intelligenceContainsAny(s, "自行车", "單車", "单车", "骑车", "騎車", "骑行", "bicycle", "bike", "cycling") {
 		return true
 	}

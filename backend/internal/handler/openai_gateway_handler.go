@@ -729,7 +729,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	bindIntelligenceRouting(c, body)
+	if !bindIntelligenceRouting(c, body) {
+		return
+	}
 
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body
@@ -1558,7 +1560,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	bindIntelligenceRouting(c, body)
+	if !bindIntelligenceRouting(c, body) {
+		return
+	}
 
 	if !gjson.ValidBytes(body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
@@ -2939,7 +2943,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
 	}
-	if service.IsIntelligenceTestRequest(firstMessage) {
+	firstNeedsIntelligence, ocrErr := service.IntelligenceRouteWithOCR(ctx, firstMessage)
+	if ocrErr != nil {
+		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "image text recognition failed; please retry")
+		return
+	}
+	if firstNeedsIntelligence {
 		ctx = service.WithIntelligenceRouting(ctx)
 		c.Request = c.Request.WithContext(ctx)
 	}
@@ -3472,7 +3481,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// BeforeTurn 重新冻结 pricingAt 并按最新门复核当前账号。
 		var turnPricing openAIWSTurnPricing
 		var turnNeedsIntelligence atomic.Bool
-		turnNeedsIntelligence.Store(service.IsIntelligenceTestRequest(firstMessage))
+		turnNeedsIntelligence.Store(firstNeedsIntelligence)
 		var turnBillingAPIKeys openAIWSTurnBillingAPIKeys
 		// turnQueuePermissions 由 BeforeRequest 按当前 turn 覆写，BeforeTurn 在
 		// 同一连接循环内读取并复制为不可变 ctx 值，等待 worker 不再读取它。
@@ -3500,7 +3509,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			BeforePayloadParse: func(turn int, raw []byte, effectiveModel string) error {
 				// Capture the current turn from the original client frame before the
 				// parser resolves the channel model or rewrites the payload.
-				turnNeedsIntelligence.Store(service.IsIntelligenceTestRequest(raw))
+				if turn > 1 {
+					required, err := service.IntelligenceRouteWithOCR(ctx, raw)
+					if err != nil {
+						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "image text recognition failed; please retry", err)
+					}
+					turnNeedsIntelligence.Store(required)
+				}
 				if middleware2.CheckGroupSubagentFrame(c, raw) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, middleware2.GroupSubagentsBlockedMessage, nil)
 				}
