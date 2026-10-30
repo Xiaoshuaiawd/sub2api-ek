@@ -68,7 +68,7 @@ func intelligenceRulesResponse(value service.IntelligenceRules) gin.H {
 	for _, id := range value.BuiltinDisabledIDs {
 		disabled[id] = true
 	}
-	builtins := make([]gin.H, 0, 8)
+	builtins := make([]gin.H, 0, len(service.IntelligenceBuiltinRules()))
 	defaults := service.DefaultIntelligenceBuiltinConditions()
 	for _, rule := range service.IntelligenceBuiltinRules() {
 		condition := defaults[rule.ID]

@@ -46,6 +46,8 @@ func TestIntelligenceRulesHandler(t *testing.T) {
 	require.Equal(t, 200, w.Code)
 	require.Contains(t, w.Body.String(), `"rules":[]`)
 	require.Contains(t, w.Body.String(), `"id":"builtin.pelican_bicycle"`)
+	require.Contains(t, w.Body.String(), `"id":"builtin.thibault_sottiaux"`)
+	require.Contains(t, w.Body.String(), `"id":"builtin.resistor_100_to_67"`)
 	w = call(http.MethodPut, `{"rules":[{"name":"Pelican","type":"regex","pattern":"pelican.*bike","enabled":true}]}`)
 	require.Equal(t, 200, w.Code)
 	w = call(http.MethodPut, `{"rules":[{"name":"Pelican","type":"regex","pattern":"pelican.*bike","enabled":true}],"builtin_disabled_ids":["builtin.pelican_bicycle"]}`)
