@@ -1412,7 +1412,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				_ = resp.Body.Close()
 			}
 			headerGuard.close()
-			if account.Platform == PlatformOpenAI {
+			if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 				// Before response headers, a stalled shared WARP connection and
 				// a stalled upstream cannot be safely distinguished. Do not
 				// quarantine or rotate otherwise healthy accounts.

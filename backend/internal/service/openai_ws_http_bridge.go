@@ -1034,7 +1034,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			return resultWithUsage(), context.Cause(upstreamCtx)
 		}
 		if turn == 1 && !clientDisconnected && !wroteDownstream {
-			if account.Platform == PlatformOpenAI {
+			if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 				streamErr = &runtimeProxyEgressError{error: streamErr, target: runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"}}
 			}
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, streamErr, true)
@@ -1046,7 +1046,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		terminalErr = errors.New("upstream http bridge stream sent [DONE] before terminal event")
 	}
 	if turn == 1 && !clientDisconnected && !wroteDownstream {
-		if account.Platform == PlatformOpenAI {
+		if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 			terminalErr = &runtimeProxyEgressError{error: terminalErr, target: runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"}}
 		}
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, terminalErr, true)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base32"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -140,15 +141,16 @@ func (s *OpenAIOAuthReauthService) CreateTOTPRotation(ctx context.Context, id in
 }
 
 type OpenAITOTPRotationClaim struct {
-	Operation  string `json:"operation"`
-	TaskID     int64  `json:"task_id"`
-	AccountID  int64  `json:"account_id"`
-	Action     string `json:"action"`
-	LoginEmail string `json:"login_email"`
-	Password   string `json:"password"`
-	TOTPSecret string `json:"totp_secret"`
-	Candidate  string `json:"candidate_secret,omitempty"`
-	ProxyURL   string `json:"proxy_url,omitempty"`
+	WarpRequired bool   `json:"warp_required"`
+	Operation    string `json:"operation"`
+	TaskID       int64  `json:"task_id"`
+	AccountID    int64  `json:"account_id"`
+	Action       string `json:"action"`
+	LoginEmail   string `json:"login_email"`
+	Password     string `json:"password"`
+	TOTPSecret   string `json:"totp_secret"`
+	Candidate    string `json:"candidate_secret,omitempty"`
+	ProxyURL     string `json:"proxy_url,omitempty"`
 }
 
 func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker string) (*OpenAITOTPRotationClaim, error) {
@@ -169,11 +171,11 @@ func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker
 		return nil, nil
 	}
 	s.releaseMihomoLease(-record.TaskID)
-	_, cfg, err := s.rotationConfig(ctx, record.AccountID)
+	account, cfg, err := s.rotationConfig(ctx, record.AccountID)
 	if err == nil && !record.ConfigUpdatedAt.Equal(cfg.UpdatedAt) {
 		err = errors.New("configuration changed")
 	}
-	claim := &OpenAITOTPRotationClaim{Operation: "totp_rotation", TaskID: record.TaskID, AccountID: record.AccountID, Action: record.Action}
+	claim := &OpenAITOTPRotationClaim{Operation: "totp_rotation", TaskID: record.TaskID, AccountID: record.AccountID, Action: record.Action, WarpRequired: OpenAIWarpEnabled()}
 	if err == nil {
 		claim.LoginEmail = cfg.LoginEmail
 		claim.Password, err = s.decryptReauthSecret(cfg.PasswordCiphertext, "Password cannot be decrypted")
@@ -185,7 +187,34 @@ func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker
 		claim.Candidate, err = s.decryptReauthSecret(record.CandidateCiphertext, "Candidate TOTP cannot be decrypted")
 	}
 	if err == nil {
-		claim.ProxyURL = OpenAIWarpWorkerProxyURL()
+		if OpenAIWarpEnabled() {
+			claim.ProxyURL = OpenAIWarpWorkerProxyURL()
+		} else {
+			var source string
+			source, err = normalizeReauthProxySource(cfg.ProxySource, cfg.ProxyID)
+			if err == nil {
+				switch source {
+				case OpenAIOAuthReauthProxySourceAccount:
+					claim.ProxyURL, err = s.reauthProxyURL(ctx, account.ProxyID)
+				case OpenAIOAuthReauthProxySourceManagedProxy:
+					claim.ProxyURL, err = s.reauthProxyURL(ctx, cfg.ProxyID)
+				case OpenAIOAuthReauthProxySourceMihomo:
+					if s.acquireMihomoProxy == nil {
+						err = errors.New("proxy unavailable")
+					} else {
+						var release func()
+						claim.ProxyURL, release, err = s.acquireMihomoProxy(ctx, fmt.Sprintf("openai-totp-task:%d", record.TaskID))
+						if release != nil {
+							if err != nil {
+								release()
+							} else {
+								s.replaceMihomoLease(-record.TaskID, release)
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 	if err != nil {
 		_ = repo.FinishTOTPRotation(ctx, record.TaskID, worker, false, "configuration_unavailable")

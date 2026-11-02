@@ -2447,7 +2447,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	if account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 		proxyURL = OpenAIWarpProxyURL()
 	}
 	req = req.WithContext(WithUpstreamAccountPlatform(req.Context(), account.Platform))
@@ -3430,7 +3430,7 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	if account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 		proxyURL = OpenAIWarpProxyURL()
 	}
 	req = req.WithContext(WithUpstreamAccountPlatform(req.Context(), account.Platform))

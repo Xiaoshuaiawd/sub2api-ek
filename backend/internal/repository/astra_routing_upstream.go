@@ -59,13 +59,19 @@ func (s *astraRoutingUpstream) current(ctx context.Context) *codexGatewayPinUpst
 	// Legacy Astra sources are OpenAI OAuth accounts. Their actual exit is now
 	// the node's single WARP proxy, so selecting or leasing an old Mihomo node
 	// would record a route different from the one that sent the request.
-	settings.CookiePool.RotateNodes = false
-	settings.CookiePool.IPAffinity = true
+	if service.OpenAIWarpEnabled() {
+		settings.CookiePool.RotateNodes = false
+		settings.CookiePool.IPAffinity = true
+	}
 	poolSettings := settings
 	poolSettings.AccountScheduling = false // Scheduling does not invalidate verified routes.
 	poolSettings.SchedulingMode = ""
 	poolSettings.SchedulingGroupIDs = nil
 	encoded, _ := json.Marshal(poolSettings)
+	revision := string(encoded)
+	if service.OpenAIWarpEnabled() {
+		revision += "|warp"
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !settings.CookiePool.Enabled {
@@ -73,8 +79,8 @@ func (s *astraRoutingUpstream) current(ctx context.Context) *codexGatewayPinUpst
 		s.revision = ""
 		return nil
 	}
-	if s.pool == nil || s.revision != string(encoded) {
-		s.revision = string(encoded)
+	if s.pool == nil || s.revision != revision {
+		s.revision = revision
 		s.pool = &codexGatewayPinUpstream{rotationCache: &s.rotationCache, delegate: s.delegate, config: settings.CookiePool, historyRecorder: s.historyRecorder}
 	}
 	return s.pool

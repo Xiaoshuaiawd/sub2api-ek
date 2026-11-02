@@ -9,6 +9,11 @@ class WarpWorkerTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict('os.environ', {'OPENAI_WARP_WORKER_NETWORK_ISOLATED': 'true'}))
 
+    def test_disabled_warp_restores_legacy_direct_or_account_proxy(self):
+        with patch.dict('os.environ', {'OPENAI_WARP_WORKER_NETWORK_ISOLATED': 'false'}):
+            worker.require_warp_worker_egress({'warp_required': False, 'proxy_url': ''})
+            worker.require_warp_worker_egress({'warp_required': False, 'proxy_url': 'http://account-proxy:8080'})
+
     def test_unconfirmed_isolation_blocks_oauth_before_protocol_or_subprocess(self):
         claim = {'credential_mode': 'password_totp', 'proxy_url': 'socks5h://warp:1080'}
         with patch.dict('os.environ', {'OPENAI_WARP_WORKER_NETWORK_ISOLATED': 'false'}), \

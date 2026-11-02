@@ -223,7 +223,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if pinErr != nil {
 		return nil, wrapOpenAIWSFallback("codex_ticket_unavailable", pinErr)
 	}
-	if account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 		proxyURL = OpenAIWarpProxyURL()
 	}
 	defer releaseHarvest()

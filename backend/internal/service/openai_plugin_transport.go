@@ -17,7 +17,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	if account != nil {
 		request = request.WithContext(WithUpstreamAccountPlatform(request.Context(), account.Platform))
 	}
-	if account != nil && account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
 		if HTTPUpstreamProfileFromContext(request.Context()) == HTTPUpstreamProfileDefault {
 			request = request.WithContext(WithHTTPUpstreamProfile(request.Context(), HTTPUpstreamProfileOpenAI))
 		}
@@ -54,7 +54,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		}
 		observeAttempt := s.observePriorityAttempt(request, account)
 		resp, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
-		if err != nil && account.Platform == PlatformOpenAI {
+		if err != nil && OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 			err = &runtimeProxyEgressError{error: err, target: runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"}}
 		}
 		observeAttempt(resp, err)
@@ -80,7 +80,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		releaseChat()
 		return nil, err
 	}
-	if account != nil && account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
 		proxyURL = OpenAIWarpProxyURL()
 	}
 	defer func() {
@@ -136,7 +136,7 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	if account != nil {
 		request = request.WithContext(WithUpstreamAccountPlatform(request.Context(), account.Platform))
 	}
-	if account != nil && account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
 		if HTTPUpstreamProfileFromContext(request.Context()) == HTTPUpstreamProfileDefault {
 			request = request.WithContext(WithHTTPUpstreamProfile(request.Context(), HTTPUpstreamProfileOpenAI))
 		}

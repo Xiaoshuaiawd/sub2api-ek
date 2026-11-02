@@ -764,7 +764,9 @@ func BuildCodexHarvestFlow(ctx context.Context, cfg *config.Config, settings *Se
 		}
 	}
 	// The configured legacy harvest proxy is overridden by mandatory WARP.
-	harvestProxy = OpenAIWarpProxyURL()
+	if OpenAIWarpEnabled() {
+		harvestProxy = OpenAIWarpProxyURL()
+	}
 	policy := CodexHarvestControls{Transport: "sse", TargetGateway: "unified-88"}
 	var runtime *CodexHarvestRuntime
 	if len(controls) > 0 && controls[0] != nil {

@@ -425,10 +425,10 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	if account.Proxy != nil {
 		attachmentProxy = account.Proxy.URL()
 	}
-	if account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 		attachmentProxy = OpenAIWarpProxyURL()
 	}
-	if images != nil && images.HasImages() && account.Platform != PlatformOpenAI && account.IsExcelBPSMihomoEnabled() {
+	if images != nil && images.HasImages() && (!OpenAIWarpEnabled() || account.Platform != PlatformOpenAI) && account.IsExcelBPSMihomoEnabled() {
 		var lease excelBPSLease
 		// Pin the attachment upload and the Responses request to the same exit,
 		// whichever pool the account chose.

@@ -114,7 +114,12 @@ func (s *OpenAIGatewayService) FetchExcelBPSModelsList(ctx context.Context, acco
 	request.Header.Set("Accept", "application/json")
 	request.URL.Path = "/basispoints/api/responses/access"
 	request.URL.RawQuery = "include_models=true"
-	identity := openAIModelsRequest{url: request.URL.String(), headers: request.Header, proxyURL: OpenAIWarpProxyURL(), accountID: account.ID, credentialAccountID: account.ID, standardModelsList: true}
+	proxy := upstreamModelsProxyURL(account)
+	proxyIdentity := OpenAIWarpProxyURL()
+	if !OpenAIWarpEnabled() {
+		proxyIdentity = fmt.Sprintf("%s|bps_pool:%s|managed:%t", proxy, account.ExcelBPSProxySource(), account.IsExcelBPSMihomoEnabled())
+	}
+	identity := openAIModelsRequest{url: request.URL.String(), headers: request.Header, proxyURL: proxyIdentity, accountID: account.ID, credentialAccountID: account.ID, standardModelsList: true}
 	key := buildOpenAIModelsCacheKey(identity)
 	if cached, state := s.excelBPSModelsCache.get(key, time.Now()); state == openAIModelsCacheFresh {
 		return openAIModelsResponseForClient(cached, ""), nil
@@ -125,8 +130,17 @@ func (s *OpenAIGatewayService) FetchExcelBPSModelsList(ctx context.Context, acco
 		}
 		fetchCtx, cancel := context.WithTimeout(fetchCtx, 5*time.Second)
 		defer cancel()
+		if !OpenAIWarpEnabled() && account.IsExcelBPSMihomoEnabled() {
+			var lease excelBPSLease
+			var err error
+			proxy, lease, err = s.excelBPSAcquireFor(account)(fetchCtx, fmt.Sprintf("transient:bps-models:%d", account.ID))
+			if err != nil {
+				return nil, fmt.Errorf("excel BPS discovery proxy is unavailable")
+			}
+			defer lease.Release()
+		}
 		req := request.Clone(WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamProfile(fetchCtx, HTTPUpstreamProfileExcelBPS)))
-		response, err := s.httpUpstream.Do(req, OpenAIWarpProxyURL(), account.ID, account.Concurrency)
+		response, err := s.httpUpstream.Do(req, openAIWarpOrProxyURL(proxy), account.ID, account.Concurrency)
 		if err != nil {
 			if response != nil && response.Body != nil {
 				_ = response.Body.Close()

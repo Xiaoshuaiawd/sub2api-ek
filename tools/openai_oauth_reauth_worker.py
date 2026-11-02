@@ -983,6 +983,8 @@ def warp_network_isolated() -> bool:
 
 
 def require_warp_worker_egress(claim: dict[str, Any]) -> None:
+    if claim.get("warp_required") is False:
+        return
     if not str(claim.get("proxy_url") or "").strip():
         raise WorkerError("proxy_unavailable")
     if not warp_network_isolated():
@@ -1288,7 +1290,7 @@ def _siwc_password_failure(output: str, exit_code: int) -> str:
 
 def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
     require_warp_worker_egress(claim)
-    if claim.get("engine") == "session_studio":
+    if claim.get("engine") == "session_studio" and claim.get("warp_required") is not False:
         raise WorkerError("Session Studio cannot guarantee WARP egress")
     oauth_profile = str(claim.get("oauth_profile") or "codex")
     if oauth_profile not in {"codex", "excel", "siwc"}:

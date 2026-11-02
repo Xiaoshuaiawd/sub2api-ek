@@ -235,7 +235,10 @@ func openAIProxyStreamCircuitProxyID(account *Account) (int64, bool) {
 	}
 	// OpenAI traffic is sent through the node WARP sidecar, not its saved
 	// account proxy; never quarantine or heal that unrelated proxy.
-	return 0, false
+	if OpenAIWarpEnabled() {
+		return 0, false
+	}
+	return *account.ProxyID, true
 }
 
 type openAIResponseEgressKey struct{}

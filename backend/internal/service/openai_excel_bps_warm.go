@@ -23,7 +23,7 @@ func excelBPSWarmTargets(accounts []Account) (managed, static int) {
 		a := &accounts[i]
 		// OpenAI BPS traffic uses WARP, so probing or warming legacy proxy
 		// pools would send unrelated traffic through exits no longer in use.
-		if a.Platform == PlatformOpenAI {
+		if OpenAIWarpEnabled() && a.Platform == PlatformOpenAI {
 			continue
 		}
 		// Keep one healthy exit available for opted-in disabled accounts, even

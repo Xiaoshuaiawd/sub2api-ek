@@ -755,6 +755,7 @@ describe("admin SettingsView payment visible method controls", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
+
   it("keeps the IP risk form on IP Audit without loading or saving it from Settings", async () => {
     settingsRoute.query = { tab: 'security' };
     const get = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: {} });
@@ -2300,6 +2301,20 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(Array.isArray(receivedProviders[0].supported_types)).toBe(true);
     expect(receivedProviders[0].supported_types).toEqual([]);
   });
+  it("shows and saves the OpenAI WARP gateway switch", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, openai_warp_enabled: true });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    const toggle = wrapper.get('[data-testid="openai-warp-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+    await toggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0]).toMatchObject({ openai_warp_enabled: false });
+    wrapper.unmount();
+  });
+
 });
 
 describe("admin SettingsView wechat connect controls", () => {

@@ -508,7 +508,20 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 	}
 	fedRAMP = account.IsChatGPTAccountFedRAMP()
 
-	return accessToken, chatGPTAccountID, OpenAIWarpProxyURL(), fedRAMP, nil
+	if OpenAIWarpEnabled() {
+		return accessToken, chatGPTAccountID, OpenAIWarpProxyURL(), fedRAMP, nil
+	}
+	if account.ProxyID != nil {
+		switch {
+		case account.Proxy != nil:
+			proxyURL = account.Proxy.URL()
+		case s.proxyRepo != nil:
+			if proxy, perr := s.proxyRepo.GetByID(ctx, *account.ProxyID); perr == nil && proxy != nil {
+				proxyURL = proxy.URL()
+			}
+		}
+	}
+	return accessToken, chatGPTAccountID, proxyURL, fedRAMP, nil
 }
 
 func (s *OpenAIQuotaService) recoverAgentIdentityTask(ctx context.Context, accountID int64, expectedTaskID string) error {

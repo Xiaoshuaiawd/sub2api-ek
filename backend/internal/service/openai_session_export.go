@@ -57,6 +57,7 @@ type OpenAISessionExportTaskRecord struct {
 }
 
 type OpenAISessionExportClaim struct {
+	WarpRequired   bool   `json:"warp_required"`
 	Operation      string `json:"operation"`
 	TaskID         int64  `json:"task_id"`
 	AccountID      int64  `json:"account_id"`
@@ -248,9 +249,16 @@ func (s *OpenAIOAuthReauthService) ClaimSessionExportTask(ctx context.Context, w
 				return nil, nil
 			}
 			proxyURL := OpenAIWarpWorkerProxyURL()
+			if !OpenAIWarpEnabled() {
+				proxyURL, err = s.reauthProxyURL(ctx, account.ProxyID)
+				if err != nil {
+					_ = s.sessionExportRepo.FinishSessionExportTask(ctx, record.ID, workerID, OpenAISessionExportStatusFailed, "proxy_unavailable")
+					return nil, nil
+				}
+			}
 			expectedUserID := strings.TrimSpace(account.GetCredential("chatgpt_user_id"))
 			s.RecordWorkerHeartbeat(workerID, true)
-			return &OpenAISessionExportClaim{Operation: OpenAISessionExportOperation, TaskID: record.ID, AccountID: record.AccountID, LoginEmail: config.LoginEmail, Password: password, TOTPSecret: totpSecret, ProxyURL: proxyURL, ExpectedUserID: expectedUserID}, nil
+			return &OpenAISessionExportClaim{Operation: OpenAISessionExportOperation, TaskID: record.ID, AccountID: record.AccountID, LoginEmail: config.LoginEmail, Password: password, TOTPSecret: totpSecret, ProxyURL: proxyURL, ExpectedUserID: expectedUserID, WarpRequired: OpenAIWarpEnabled()}, nil
 		}
 	}
 	return nil, nil

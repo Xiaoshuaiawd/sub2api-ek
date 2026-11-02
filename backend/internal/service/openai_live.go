@@ -722,7 +722,7 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	}
 	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(record.CallID)
 	proxyURL := resolveAccountProxyURL(account)
-	if account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 		proxyURL = OpenAIWarpProxyURL()
 	}
 	conn, status, _, err := s.getOpenAIWSPassthroughDialer().Dial(ctx, target, headers, proxyURL)

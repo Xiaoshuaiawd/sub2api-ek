@@ -83,6 +83,9 @@ func (s *OpenAIOAuthReauthService) WorkerStatus() reauthruntime.Status {
 		return reauthruntime.Status{Mode: "external", State: "unavailable", Reason: "external_not_configured"}
 	}
 	isolated, unisolated := s.workerHeartbeatSummary(now, 0)
+	if !OpenAIWarpEnabled() && (isolated || unisolated) {
+		return reauthruntime.Status{Mode: "external", State: "running"}
+	}
 	if isolated {
 		return reauthruntime.Status{Mode: "external", State: "running"}
 	}
@@ -93,6 +96,10 @@ func (s *OpenAIOAuthReauthService) WorkerStatus() reauthruntime.Status {
 }
 
 func managedWorkerHeartbeatStatus(status reauthruntime.Status, isolated, unisolated bool, now time.Time) reauthruntime.Status {
+	if !OpenAIWarpEnabled() {
+		isolated = isolated || unisolated
+		unisolated = false
+	}
 	if status.State == "running" && !isolated {
 		status.State = "preparing"
 		if unisolated {

@@ -178,7 +178,7 @@ func (s *OpenAIGatewayService) doOpenAIProxyAttempt(req *http.Request, account *
 // that HTTP never received a connection before another egress may be tried.
 // A response (including its later stream failures) always ends this loop.
 func (s *OpenAIGatewayService) doUpstreamWithProxyFallback(ctx context.Context, req *http.Request, account *Account, primaryProxyURL string) (*http.Response, error) {
-	if account != nil && account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
 		return s.doOpenAIProxyAttempt(req, account, runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"})
 	}
 	primary := runtimeProxyEgress{url: primaryProxyURL, proxyID: -1}

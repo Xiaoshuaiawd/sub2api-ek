@@ -223,7 +223,7 @@ func ProbeOpenAICodexStateRoute(ctx context.Context, upstream HTTPUpstream, temp
 	runOpenAICodexStateProbe(ctx, result, pinned.String(), func(state, cookie string) (openAICodexStateShot, error) {
 		return fireOpenAICodexStateShotRequest(ctx, template.Header, result.Model, state, cookie, func(req *http.Request) (*http.Response, error) {
 			req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(req.Context()))
-			resp, err := upstream.DoWithTLS(req, OpenAIWarpProxyURL(), accountID, concurrency, profile)
+			resp, err := upstream.DoWithTLS(req, openAIWarpOrProxyURL(proxy), accountID, concurrency, profile)
 			if resp != nil {
 				for _, got := range resp.Cookies() {
 					if got.Name == "__oailb" && (got.Value != pinned.Value || got.MaxAge < 0 || (!got.Expires.IsZero() && !time.Now().Before(got.Expires))) {
@@ -330,7 +330,7 @@ func (s *OpenAIGatewayService) fireOpenAICodexStateShot(ctx context.Context, acc
 	}
 	applyOpenAICodexTicketHarvestIdentity(headers, model)
 	return fireOpenAICodexStateShotRequest(ctx, headers, model, turnState, cookie, func(req *http.Request) (*http.Response, error) {
-		return s.httpUpstream.Do(req, OpenAIWarpProxyURL(), account.ID, account.Concurrency)
+		return s.httpUpstream.Do(req, openAIWarpOrProxyURL(proxy), account.ID, account.Concurrency)
 	})
 }
 

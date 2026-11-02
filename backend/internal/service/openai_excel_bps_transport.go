@@ -181,7 +181,7 @@ func (s *OpenAIGatewayService) doExcelBPSRequestTo(ctx context.Context, c *gin.C
 	if account.Proxy != nil {
 		proxy = account.Proxy.URL()
 	}
-	if account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 		// All BPS attempts share WARP. Do not acquire or retry legacy proxy
 		// lanes: they are not the egress used by the physical transport.
 		managed = false

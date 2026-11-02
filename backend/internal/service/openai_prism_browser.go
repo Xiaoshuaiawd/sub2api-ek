@@ -373,7 +373,7 @@ func (s *OpenAIGatewayService) callPrismBrowserWithSession(ctx context.Context, 
 }
 
 func (s *OpenAIGatewayService) callPrismBrowserForCaller(ctx context.Context, account *Account, body []byte, sessionID, callerID string) ([]byte, http.Header, int, error) {
-	if account != nil && account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
 		return nil, nil, 0, errors.New("Prism browser transport cannot guarantee WARP-only egress")
 	}
 	return s.callPrismBrowserAdapter(ctx, account, body, sessionID, callerID)

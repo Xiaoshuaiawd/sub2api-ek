@@ -5330,6 +5330,13 @@
               </p>
             </div>
             <div class="space-y-5 p-6">
+              <div class="flex items-center justify-between gap-5 border-b border-gray-100 pb-5 dark:border-dark-700">
+                <div>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t("admin.settings.gatewayForwarding.openAIWarp") }}</label>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.settings.gatewayForwarding.openAIWarpHint") }}</p>
+                </div>
+                <Toggle v-model="form.openai_warp_enabled" :aria-label="t('admin.settings.gatewayForwarding.openAIWarp')" data-testid="openai-warp-toggle" />
+              </div>
               <div class="grid gap-5 border-b border-gray-100 pb-5 dark:border-dark-700 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <div>
                   <label
@@ -10502,6 +10509,7 @@ const form = reactive<SettingsForm>({
   // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
+  openai_warp_enabled: true,
   openai_request_timezone_enabled: true,
   openai_request_timezone_auto: true,
   claude_code_client_version: "",
@@ -12242,6 +12250,7 @@ async function saveSettings() {
         form.openai_codex_client_version?.trim() || "",
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
+      openai_warp_enabled: form.openai_warp_enabled,
       openai_request_timezone_enabled: form.openai_request_timezone_enabled,
       openai_request_timezone_auto: form.openai_request_timezone_auto,
       claude_code_client_version: form.claude_code_client_version?.trim() || "",

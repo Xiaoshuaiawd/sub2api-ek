@@ -248,12 +248,29 @@ func (s *OpenAIGatewayService) probeExcelBPS403Recovery(ctx context.Context, acc
 	if err != nil {
 		return err
 	}
+	proxy := ""
+	var lease excelBPSLease
+	if !OpenAIWarpEnabled() {
+		probe := *account
+		probe.Extra = cloneExcelBPSRecoveryExtra(account.Extra)
+		probe.Extra["openai_excel_bps"] = true
+		if account.Proxy != nil {
+			proxy = account.Proxy.URL()
+		}
+		if probe.IsExcelBPSMihomoEnabled() {
+			proxy, lease, err = s.excelBPSAcquireFor(&probe)(ctx, "transient:bps-403-recovery:"+nonce)
+			if err != nil {
+				return err
+			}
+			defer lease.Release()
+		}
+	}
 	ctx = WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileExcelBPS))
 	req, err := newExcelBPSRequest(ctx, body, token, accountID)
 	if err != nil {
 		return err
 	}
-	resp, err := s.httpUpstream.Do(req, OpenAIWarpProxyURL(), account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.Do(req, openAIWarpOrProxyURL(proxy), account.ID, account.Concurrency)
 	if resp != nil && resp.Body != nil {
 		defer func() { _ = resp.Body.Close() }()
 	}
@@ -277,6 +294,9 @@ func (s *OpenAIGatewayService) probeExcelBPS403Recovery(ctx context.Context, acc
 	}
 	if !bpsProbeExactText(response, nonce) {
 		return errors.New("BPS recovery response mismatch")
+	}
+	if lease != nil {
+		lease.ReportSuccess()
 	}
 	return nil
 }

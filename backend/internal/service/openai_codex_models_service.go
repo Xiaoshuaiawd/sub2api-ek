@@ -1977,7 +1977,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstreamForRequest(reques
 }
 
 func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, request openAIModelsRequest, ifNoneMatch string) (*OpenAIModelsResponse, error) {
-	warpEgress := request.credentialAccount != nil && request.credentialAccount.Platform == PlatformOpenAI
+	warpEgress := OpenAIWarpEnabled() && request.credentialAccount != nil && request.credentialAccount.Platform == PlatformOpenAI
 	if warpEgress {
 		request.proxyURL = OpenAIWarpProxyURL()
 	}

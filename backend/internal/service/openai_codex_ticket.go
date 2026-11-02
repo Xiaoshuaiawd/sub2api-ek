@@ -358,8 +358,16 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestProxyURL() string {
 
 // openAICodexTicketHarvestProxySetting returns the configured harvest exit
 // verbatim, including the IP-pool sentinel.
-func (s *OpenAIGatewayService) openAICodexTicketHarvestProxySetting(_ context.Context) string {
-	return OpenAIWarpProxyURL()
+func (s *OpenAIGatewayService) openAICodexTicketHarvestProxySetting(ctx context.Context) string {
+	if OpenAIWarpEnabled() {
+		return OpenAIWarpProxyURL()
+	}
+	if s.settingService != nil {
+		if proxy := s.settingService.GetOpenAICodexTicketHarvestProxyURL(ctx); proxy != "" {
+			return proxy
+		}
+	}
+	return strings.TrimSpace(s.openAICodexTicketConfig().HarvestProxyURL)
 }
 
 func (s *OpenAIGatewayService) openAICodexTicketHarvestIPPoolEnabled(ctx context.Context) bool {
@@ -503,7 +511,10 @@ func (t *openAICodexTicket) valid(now time.Time, targetLen int) bool {
 	// A ticket's cookies and state are bound to the exit used to harvest it.
 	// Treat unknown or legacy exits as invalid everywhere, so automatic and
 	// manual harvesting replace them instead of retaining them as primary.
-	if strings.TrimSpace(t.HarvestProxyURL) != OpenAIWarpProxyURL() || strings.TrimSpace(t.HarvestNodeID) != "" || strings.TrimSpace(t.HarvestNodeName) != "" {
+	if OpenAIWarpEnabled() && (strings.TrimSpace(t.HarvestProxyURL) != OpenAIWarpProxyURL() || strings.TrimSpace(t.HarvestNodeID) != "" || strings.TrimSpace(t.HarvestNodeName) != "") {
+		return false
+	}
+	if !OpenAIWarpEnabled() && strings.TrimSpace(t.HarvestProxyURL) == OpenAIWarpProxyURL() {
 		return false
 	}
 	if t.Length == 780 {

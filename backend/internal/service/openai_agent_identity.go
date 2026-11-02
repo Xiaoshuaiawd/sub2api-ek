@@ -181,7 +181,11 @@ func registerAgentIdentityTask(ctx context.Context, account *Account) (string, e
 	if err != nil {
 		return "", err
 	}
-	proxyURL := OpenAIWarpProxyURL()
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	proxyURL = openAIWarpOrProxyURL(proxyURL)
 	client, err := httpclient.GetClient(httpclient.Options{
 		ProxyURL:              proxyURL,
 		Timeout:               agentIdentityTaskRegistrationTimeout,

@@ -43,7 +43,7 @@ func (s *OpenAIGatewayService) executeParallelHarvest(ctx context.Context, req M
 	if s.codexTicketChatHeld(account.ID) {
 		return errors.New("account is in an active conversation")
 	}
-	if account.Platform == PlatformOpenAI {
+	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
 		req.CollectLanes = min(req.CollectLanes, req.MaxAttempts)
 		if openAICodexTicketTargetLength(account, s.openAICodexTicketConfig()) == 780 {
 			req.CollectLanes = min(req.CollectLanes, max(1, req.MaxAttempts/2))
@@ -173,7 +173,7 @@ func (s *OpenAIGatewayService) runParallelHarvest(ctx context.Context, req Manua
 					continue
 				}
 				ticket := codexHarvestTicket(account, model, r, cfg, out.attempt)
-				bindCodexHarvestEgress(ticket, codexHarvestAttempt{proxy: mihomo.Endpoint, node: mihomo.HarvestNode{ID: out.node, Name: out.node, Provider: "managed"}}, out.session)
+				bindCodexHarvestEgress(ticket, codexHarvestAttempt{proxy: r.ProxyURL, node: mihomo.HarvestNode{ID: out.node, Name: out.node, Provider: "managed"}}, out.session)
 				if e = s.storeOpenAICodexTicket(ctx, fresh, ticket); e != nil {
 					event.Result = "persist_failed"
 					event.Level = "WARN"
