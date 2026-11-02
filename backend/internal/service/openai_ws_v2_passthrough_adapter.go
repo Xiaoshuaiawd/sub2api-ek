@@ -907,6 +907,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	if account.Platform == PlatformOpenAI {
+		proxyURL = OpenAIWarpProxyURL()
+	}
 
 	dialer := s.getOpenAIWSPassthroughDialer()
 	if dialer == nil {

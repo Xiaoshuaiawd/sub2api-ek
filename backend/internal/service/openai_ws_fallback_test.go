@@ -184,7 +184,7 @@ func TestWriteOpenAIWSFallbackErrorResponseMarksDefaultClientRouteUnknown(t *tes
 	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
 }
 
-func TestWriteOpenAIWSFallbackErrorResponseKeepsManagedProxy(t *testing.T) {
+func TestWriteOpenAIWSFallbackErrorResponseDoesNotAttributeAccountProxy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	svc := &OpenAIGatewayService{}
@@ -198,9 +198,8 @@ func TestWriteOpenAIWSFallbackErrorResponseKeepsManagedProxy(t *testing.T) {
 	events, ok := raw.([]*OpsUpstreamErrorEvent)
 	require.True(t, ok)
 	require.Len(t, events, 1)
-	require.NotNil(t, events[0].ProxyID)
-	require.Equal(t, proxyID, *events[0].ProxyID)
-	require.Equal(t, "ws-proxy", events[0].ProxyName)
+	require.Nil(t, events[0].ProxyID)
+	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
 }
 
 func TestOpsUpstreamWSProxyAttributionNeverReportsDirect(t *testing.T) {

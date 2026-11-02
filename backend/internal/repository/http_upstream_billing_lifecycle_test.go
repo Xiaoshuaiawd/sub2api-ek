@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,6 +91,16 @@ func TestHTTPUpstreamForwardDrainsUsageAfterClientDisconnect(t *testing.T) {
 	defer srv.Close()
 	defer srv.CloseClientConnections()
 	defer release()
+	target, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	forward := httputil.NewSingleHostReverseProxy(target)
+	var proxyCalls atomic.Int32
+	warp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyCalls.Add(1)
+		forward.ServeHTTP(w, r)
+	}))
+	defer warp.Close()
+	t.Setenv("OPENAI_WARP_PROXY_URL", warp.URL)
 
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1
@@ -147,6 +160,7 @@ func TestHTTPUpstreamForwardDrainsUsageAfterClientDisconnect(t *testing.T) {
 		t.Fatal("forward did not finish draining usage")
 	}
 	require.Len(t, billingRepo.commands, 1)
+	require.EqualValues(t, 1, proxyCalls.Load(), "the billing stream must use WARP")
 	require.Len(t, usageRepo.logs, 1)
 	require.Equal(t, 17, usageRepo.logs[0].InputTokens)
 	require.Equal(t, 8, usageRepo.logs[0].OutputTokens)

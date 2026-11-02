@@ -106,7 +106,7 @@ func TestPluginReconcileFailsClosedWhenDesiredStateCannotBeRead(t *testing.T) {
 		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 	})
 	require.True(t, handled)
-	require.ErrorContains(t, routeErr, "插件不可用")
+	require.ErrorContains(t, routeErr, "cannot guarantee WARP-only egress")
 }
 
 type normalizingPluginClient struct {

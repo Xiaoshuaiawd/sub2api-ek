@@ -58,6 +58,8 @@ func TestSIWCTokenScopeAndVerifiedIdentityOffline(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proxy := "http://siwc-offline.invalid:12345"
+			warp := "http://siwc-warp.invalid:12345"
+			t.Setenv("OPENAI_WARP_PROXY_URL", warp)
 			client := req.C()
 			calls := []string{}
 			client.GetTransport().WrapRoundTripFunc(func(_ http.RoundTripper) req.HttpRoundTripFunc {
@@ -80,7 +82,7 @@ func TestSIWCTokenScopeAndVerifiedIdentityOffline(t *testing.T) {
 					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(payload)), Request: r}, nil
 				}
 			})
-			poolKey := buildReqClientKey(reqClientOptions{ProxyURL: proxy, Timeout: 120 * time.Second})
+			poolKey := buildReqClientKey(reqClientOptions{ProxyURL: warp, Timeout: 120 * time.Second})
 			sharedReqClients.Store(poolKey, client)
 			defer sharedReqClients.Delete(poolKey)
 			nonce := ""

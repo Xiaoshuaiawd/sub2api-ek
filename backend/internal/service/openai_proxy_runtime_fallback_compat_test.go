@@ -62,7 +62,7 @@ func TestRuntimeProxyFallbackRequestSafety(t *testing.T) {
 			primary := proxyForTest(1, "primary.invalid", 8080)
 			primary.FallbackMode, primary.BackupProxyID = tc.mode, i64(2)
 			backup := proxyForTest(2, "backup.invalid", 8080)
-			account := &Account{ID: 1, Type: AccountTypeAPIKey, Concurrency: 3, Proxy: primary}
+			account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Concurrency: 3, Proxy: primary}
 			calls, outerTraceCalls := 0, 0
 			ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GetConn: func(string) { outerTraceCalls++ }})
 			ctx = WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI)
@@ -135,6 +135,38 @@ func TestRuntimeProxyFallbackRequestSafety(t *testing.T) {
 	}
 }
 
+func TestOpenAIWarpFailureNeverFallsBack(t *testing.T) {
+	t.Setenv("OPENAI_WARP_PROXY_URL", "http://warp.invalid:8080")
+	for _, mode := range []string{FallbackModeNone, FallbackModeDirect, FallbackModeProxy} {
+		t.Run(mode, func(t *testing.T) {
+			primary := proxyForTest(1, "primary.invalid", 8080)
+			primary.FallbackMode, primary.BackupProxyID = mode, i64(2)
+			backup := proxyForTest(2, "backup.invalid", 8080)
+			account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Proxy: primary}
+			calls := 0
+			upstream := &runtimeFallbackUpstream{do: func(r *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
+				calls++
+				require.Equal(t, "http://warp.invalid:8080", proxy)
+				if trace := httptrace.ContextClientTrace(r.Context()); trace != nil && trace.GetConn != nil {
+					trace.GetConn("warp.invalid:8080")
+				}
+				return nil, syscall.ECONNREFUSED
+			}}
+			s := &OpenAIGatewayService{httpUpstream: upstream, proxyRepo: &fakeProxyLookup{byID: map[int64]*Proxy{2: backup}}}
+			req, err := http.NewRequest(http.MethodPost, "https://example.invalid/v1/responses", strings.NewReader("body"))
+			require.NoError(t, err)
+			resp, err := s.doOpenAIUpstream(req, primary.URL(), account)
+			require.Nil(t, resp)
+			require.ErrorIs(t, err, syscall.ECONNREFUSED)
+			proxyID, proxyName := runtimeProxyErrorAttribution(account, err)
+			require.Nil(t, proxyID)
+			require.Equal(t, opsProxyNameUnknown, proxyName)
+			require.Equal(t, 1, calls, "WARP failure must not retry through the account proxy, backup, or direct")
+			require.Same(t, primary, account.Proxy)
+		})
+	}
+}
+
 func TestRuntimeProxyFallbackRealRefusedConnection(t *testing.T) {
 	var postCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +185,7 @@ func TestRuntimeProxyFallbackRealRefusedConnection(t *testing.T) {
 	require.NoError(t, deadListener.Close())
 	primary := proxyForTest(1, "127.0.0.1", dead.Port)
 	primary.FallbackMode = FallbackModeDirect
-	account := &Account{ID: 1, Proxy: primary, Type: AccountTypeAPIKey}
+	account := &Account{ID: 1, Platform: PlatformAnthropic, Proxy: primary, Type: AccountTypeAPIKey}
 	var calls int
 	upstream := &runtimeFallbackUpstream{do: func(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
 		calls++

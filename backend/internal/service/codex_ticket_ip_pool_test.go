@@ -57,10 +57,10 @@ func TestCodexTicketIPPoolResolvesToActiveUnexpiredMembers(t *testing.T) {
 	svc := ipPoolTestService(t, OpenAICodexTicketHarvestIPPoolURL, repo)
 	ctx := context.Background()
 
-	require.True(t, svc.openAICodexTicketHarvestIPPoolEnabled(ctx))
-	require.Empty(t, svc.openAICodexTicketHarvestFixedProxyURL(ctx), "business requests must not rotate through the pool")
+	require.False(t, svc.openAICodexTicketHarvestIPPoolEnabled(ctx))
+	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestFixedProxyURL(ctx))
 	members := []string{"http://u:secret@a.example.com:8080", "socks5h://b.example.com:1080"}
-	require.Contains(t, members, svc.openAICodexTicketHarvestProxyURLContext(ctx))
+	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestProxyURLContext(ctx))
 
 	seen := map[string]string{}
 	for i := 0; i < 4; i++ {
@@ -97,7 +97,7 @@ func TestCodexTicketIPPoolKeepsMembershipOnRefreshErrorAndEmptiesWhenPoolEmpty(t
 	svc.harvestIPPoolSyncedAt = time.Time{}
 	_, ok = svc.pickHarvestIPPoolExit(ctx, nil)
 	require.False(t, ok)
-	require.Empty(t, svc.openAICodexTicketHarvestProxyURLContext(ctx), "an empty pool never falls back to a direct connection")
+	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestProxyURLContext(ctx), "an empty pool must still use WARP")
 }
 
 func TestCodexTicketStaticHarvestProxyIsNotAffectedByPool(t *testing.T) {
@@ -105,12 +105,12 @@ func TestCodexTicketStaticHarvestProxyIsNotAffectedByPool(t *testing.T) {
 	svc := ipPoolTestService(t, "http://static.example.com:8080", repo)
 	ctx := context.Background()
 	require.False(t, svc.openAICodexTicketHarvestIPPoolEnabled(ctx))
-	require.Equal(t, "http://static.example.com:8080", svc.openAICodexTicketHarvestFixedProxyURL(ctx))
-	require.Equal(t, "http://static.example.com:8080", svc.openAICodexTicketHarvestProxyURLContext(ctx))
+	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestFixedProxyURL(ctx))
+	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestProxyURLContext(ctx))
 	require.Zero(t, repo.calls)
 }
 
-func TestCodexTicketIPPoolRefreshPrefersTicketExit(t *testing.T) {
+func TestCodexTicketIPPoolRefreshDoesNotPreferLegacyTicketExit(t *testing.T) {
 	repo := &ipPoolProxyRepoStub{proxies: ipPoolTestProxies()}
 	svc := ipPoolTestService(t, OpenAICodexTicketHarvestIPPoolURL, repo)
 	ctx := context.Background()
@@ -121,11 +121,13 @@ func TestCodexTicketIPPoolRefreshPrefersTicketExit(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Minute), HarvestProxyURL: pinned,
 	}))
 
-	for i := 0; i < 3; i++ {
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
 		exit, ok := svc.pickHarvestIPPoolExitFor(ctx, account, "gpt-6-astra", map[string]bool{})
 		require.True(t, ok)
-		require.Equal(t, pinned, exit.url)
+		seen[exit.url] = true
 	}
+	require.Equal(t, map[string]bool{"http://u:secret@a.example.com:8080": true, pinned: true}, seen)
 	exit, ok := svc.pickHarvestIPPoolExitFor(ctx, account, "gpt-6-astra", map[string]bool{pinned: true})
 	require.True(t, ok)
 	require.Equal(t, "http://u:secret@a.example.com:8080", exit.url)

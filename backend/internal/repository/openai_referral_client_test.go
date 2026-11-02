@@ -20,7 +20,7 @@ func referralTestClient(t *testing.T, handler http.HandlerFunc) *openAIReferralC
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	adapter := NewOpenAIReferralClient(func(proxy string) (*req.Client, error) {
-		require.Equal(t, "test-proxy", proxy)
+		require.Equal(t, service.OpenAIWarpProxyURL(), proxy)
 		// A shared factory may have retries; the adapter must override them.
 		return req.C().SetCommonRetryCount(2).SetCommonRetryCondition(func(_ *req.Response, _ error) bool { return true }), nil
 	})

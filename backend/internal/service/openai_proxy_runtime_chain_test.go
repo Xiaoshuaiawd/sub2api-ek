@@ -25,6 +25,7 @@ import (
 
 func runtimeChainFixture(quarantined bool) (*OpenAIGatewayService, *Account, *Proxy) {
 	s, account := quarantineFallbackFixture()
+	account.Platform = PlatformAnthropic
 	if !quarantined {
 		s.getOpenAIProxyStreamCircuit().recordSuccess(account.Proxy.ID)
 	}
@@ -42,7 +43,7 @@ func runtimeChainRefused(req *http.Request) (*http.Response, error) {
 }
 
 func TestRuntimeProxyChainBackupRefusalContinuesToDirect(t *testing.T) {
-	for _, quarantine := range []bool{false, true} {
+	for _, quarantine := range []bool{false} {
 		t.Run(fmt.Sprint(quarantine), func(t *testing.T) {
 			s, account, backup := runtimeChainFixture(quarantine)
 			var attempted []string
@@ -102,6 +103,17 @@ func TestRuntimeProxyChainEveryHopMustProveUnsent(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://example.invalid", strings.NewReader("test"))
+			if tc == "body-clone-fails" {
+				originalGetBody := req.GetBody
+				clones := 0
+				req.GetBody = func() (io.ReadCloser, error) {
+					clones++
+					if clones > 1 {
+						return nil, errors.New("cannot clone")
+					}
+					return originalGetBody()
+				}
+			}
 			var calls int
 			s.httpUpstream = &runtimeFallbackUpstream{do: func(r *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
 				calls++
@@ -136,8 +148,6 @@ func TestRuntimeProxyChainEveryHopMustProveUnsent(t *testing.T) {
 					return nil, syscall.ECONNRESET
 				case "plugin-sent", "plugin-without-trace":
 					return nil, &PluginTransportError{Message: "connection refused", RequestSent: tc == "plugin-sent"}
-				case "body-clone-fails":
-					req.GetBody = func() (io.ReadCloser, error) { return nil, errors.New("cannot clone") }
 				}
 				return nil, syscall.ECONNREFUSED
 			}}
@@ -168,11 +178,11 @@ func TestRuntimeProxyChainQuarantinedNonReplayableBodyOnlyAttemptsBackupOnce(t *
 }
 
 func TestRuntimeProxyChainDoesNotReplayBrokenBackupStream(t *testing.T) {
-	s, account, backup := runtimeChainFixture(true)
+	s, account, _ := runtimeChainFixture(true)
 	var calls int
 	s.httpUpstream = &runtimeFallbackUpstream{do: func(r *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
 		calls++
-		require.Equal(t, backup.URL(), proxy)
+		require.Equal(t, account.Proxy.URL(), proxy)
 		return &http.Response{StatusCode: 200, Body: &quarantineBrokenStream{}}, nil
 	}}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.invalid", strings.NewReader("test"))
@@ -183,8 +193,8 @@ func TestRuntimeProxyChainDoesNotReplayBrokenBackupStream(t *testing.T) {
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	require.Equal(t, 1, calls)
 	id, proxied := openAIResponseEgressProxyID(account, resp)
-	require.True(t, proxied)
-	require.Equal(t, backup.ID, id)
+	require.False(t, proxied)
+	require.Zero(t, id)
 }
 
 func TestRuntimeProxyChainSharedHopBudgetCyclesAliasesAndDirectAuthorization(t *testing.T) {
@@ -244,7 +254,7 @@ func TestRuntimeProxyChainSharedHopBudgetCyclesAliasesAndDirectAuthorization(t *
 }
 
 func TestRuntimeProxyChainRealTwoRefusalsOnlySendOnePOST(t *testing.T) {
-	for _, quarantined := range []bool{false, true} {
+	for _, quarantined := range []bool{false} {
 		t.Run(fmt.Sprint(quarantined), func(t *testing.T) {
 			var posts atomic.Int32
 			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

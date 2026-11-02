@@ -155,3 +155,20 @@ func TestExcelBPSMixedRoutesAndAliasesUseTheirOwnCatalog(t *testing.T) {
 	// Group listing policy is enforced at the existing group merge boundary.
 	require.Contains(t, string(projected), "reasoning_efforts")
 }
+
+func TestExcelBPSModelDiscoveryUsesWarpWhenLegacyPoolUnavailable(t *testing.T) {
+	svc := openAIClientToolsTestService(nil)
+	calls := 0
+	svc.httpUpstream = &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
+		calls++
+		require.Equal(t, OpenAIWarpProxyURL(), proxy)
+		return ordinaryModelsUpstreamResponse(bpsAccessFixture), nil
+	}}
+	account := excelAccount()
+	account.Extra["openai_excel_bps_mihomo"] = true
+	account.Extra[ExcelBPSProxySourceKey] = ExcelBPSProxySourceIPPool
+	manifest, err := svc.FetchCodexModelsManifest(context.Background(), account, "", "")
+	require.NoError(t, err)
+	require.Contains(t, string(manifest.Body), "gpt-7-new")
+	require.Equal(t, 1, calls)
+}

@@ -207,6 +207,22 @@ type routingObservation struct {
 	ClientErrorMessage string                   `json:"client_error_message,omitempty"`
 }
 
+// WARP transport failures terminate with a 502 instead of rotating accounts.
+// All captured upstream route, model and credential fields must still match.
+func matchesWarpTerminalTransportDifference(tc routingMatrixCase, want, got routingObservation) bool {
+	if tc.platform != PlatformOpenAI || want.Error != "upstream error: 502 (failover)" ||
+		got.Error != "stop after capture" || got.Status != http.StatusBadGateway ||
+		got.ClientErrorType != "upstream_error" || got.ClientErrorMessage != "WARP proxy or upstream connection failed" {
+		return false
+	}
+	got.Error = want.Error
+	got.Status = want.Status
+	got.ClientErrorType = want.ClientErrorType
+	got.ClientErrorCode = want.ClientErrorCode
+	got.ClientErrorMessage = want.ClientErrorMessage
+	return reflect.DeepEqual(want, got)
+}
+
 func (o routingObservation) String() string {
 	data, _ := json.Marshal(o)
 	return string(data)
@@ -325,6 +341,7 @@ func TestUpstreamProtocolRoutingMatrixMatchesMainGolden(t *testing.T) {
 	var differences []string
 	mismatched := 0
 	knownDifferences := 0
+	warpDifferences := 0
 	for i, tc := range cases {
 		index := golden.Results[i]
 		require.GreaterOrEqual(t, index, 0)
@@ -338,6 +355,10 @@ func TestUpstreamProtocolRoutingMatrixMatchesMainGolden(t *testing.T) {
 			knownDifferences++
 			continue
 		}
+		if matchesWarpTerminalTransportDifference(tc, want, got) {
+			warpDifferences++
+			continue
+		}
 		mismatched++
 		if len(differences) < 12 {
 			differences = append(differences, fmt.Sprintf("%s\nmain: %s\ncurrent: %s", tc.key(), want, got))
@@ -347,4 +368,5 @@ func TestUpstreamProtocolRoutingMatrixMatchesMainGolden(t *testing.T) {
 	// 2 account types × 4 modes × 3 probe states × 4 address configurations ×
 	// 2 model spellings. A disappeared or expanded exception requires review.
 	require.Equal(t, 192, knownDifferences, "unexpected change to the declared Zhipu non-API-Key difference")
+	require.Equal(t, 576, warpDifferences, "unexpected change to the declared WARP terminal-error behavior")
 }

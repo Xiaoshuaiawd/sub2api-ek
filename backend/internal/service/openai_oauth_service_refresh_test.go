@@ -79,6 +79,7 @@ func TestOpenAIOAuthService_RefreshAccountToken_PATIgnoresStaleRefreshToken(t *t
 	defer server.Close()
 
 	originalURL := openAICodexPATWhoamiURL
+	useCodexModelsTestWARP(t, server)
 	openAICodexPATWhoamiURL = server.URL
 	defer func() { openAICodexPATWhoamiURL = originalURL }()
 
@@ -158,6 +159,7 @@ func TestOpenAITokenRefresher_Refresh_PATRemovesStaleOAuthFields(t *testing.T) {
 	defer server.Close()
 
 	originalURL := openAICodexPATWhoamiURL
+	useCodexModelsTestWARP(t, server)
 	openAICodexPATWhoamiURL = server.URL
 	defer func() { openAICodexPATWhoamiURL = originalURL }()
 

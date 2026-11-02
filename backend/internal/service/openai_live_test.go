@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -240,4 +241,26 @@ func TestRequestTypeLive(t *testing.T) {
 	parsed, err := ParseUsageRequestType("live")
 	require.NoError(t, err)
 	require.Equal(t, RequestTypeLive, parsed)
+}
+
+func TestLiveCreateSharedWarpFailureAndReadFailureDoNotFailOver(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		upstream *httpUpstreamRecorder
+	}{
+		{name: "warp_unavailable", upstream: &httpUpstreamRecorder{err: errors.New("connection refused")}},
+		{name: "response_body_interrupted", upstream: &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Location": {"/backend-api/codex/call_test"}}, Body: io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))}}},
+		{name: "missing_location", upstream: &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("accepted"))}}},
+		{name: "oversized_body", upstream: &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Location": {"/backend-api/codex/call_test"}}, Body: io.NopCloser(strings.NewReader(strings.Repeat("x", liveUpstreamBodyLimit+1)))}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: tc.upstream}
+			account := &Account{ID: 7, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "test-access-token", "chatgpt_account_id": "acct_test"}}
+			created, err := service.createUpstreamLiveCall(context.Background(), account, &LiveCallRequest{SDP: "v=offer\r\n", Session: json.RawMessage(`{"model":"gpt-live"}`)}, `{"v":1}`)
+			require.Nil(t, created)
+			require.Error(t, err)
+			require.False(t, service.shouldFailoverLiveCreateError(account, err), "a shared WARP failure or accepted SDP must not select a second account")
+		})
+	}
 }

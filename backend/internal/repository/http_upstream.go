@@ -235,6 +235,9 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	if req != nil {
 		profile = service.HTTPUpstreamProfileFromContext(req.Context())
 	}
+	if req != nil && service.OpenAIWarpApplies(req.Context(), profile) {
+		proxyURL = service.OpenAIWarpProxyURL()
+	}
 
 	// 获取或创建对应的客户端，并标记请求占用
 	if s.useRegionalEgress(proxyURL, accountID, profile) {
@@ -308,6 +311,9 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	upstreamProfile := service.HTTPUpstreamProfileDefault
 	if req != nil {
 		upstreamProfile = service.HTTPUpstreamProfileFromContext(req.Context())
+	}
+	if req != nil && service.OpenAIWarpApplies(req.Context(), upstreamProfile) {
+		proxyURL = service.OpenAIWarpProxyURL()
 	}
 
 	targetHost := ""

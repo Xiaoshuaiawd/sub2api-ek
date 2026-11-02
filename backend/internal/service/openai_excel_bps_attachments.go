@@ -63,7 +63,7 @@ func (s *OpenAIGatewayService) uploadExcelBPSAttachment(ctx context.Context, acc
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.ContentLength = length
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.Do(req, OpenAIWarpProxyURL(), account.ID, account.Concurrency)
 	if err != nil {
 		return "", excelBPSAttachmentFailure("attachment_transport", transportdiag.Classify(err), 0, err)
 	}

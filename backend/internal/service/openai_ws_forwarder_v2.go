@@ -223,6 +223,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if pinErr != nil {
 		return nil, wrapOpenAIWSFallback("codex_ticket_unavailable", pinErr)
 	}
+	if account.Platform == PlatformOpenAI {
+		proxyURL = OpenAIWarpProxyURL()
+	}
 	defer releaseHarvest()
 	// A bound ticket already supplied the complete Cookie pair and pinned exit.
 	// Do not acquire a second lease or overlay a gateway cookie on that bundle.

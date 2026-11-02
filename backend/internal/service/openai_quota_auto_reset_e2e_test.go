@@ -111,6 +111,7 @@ func TestOpenAIQuotaAutoResetDisabledWindowHTTPFlow(t *testing.T) {
 				}
 			}))
 			t.Cleanup(upstream.Close)
+			proxyCalls := useCodexModelsTestWARP(t, upstream)
 			tokens := &stubQuotaTokenCache{tokens: map[string]string{OpenAITokenCacheKey(account): "fake-token"}}
 			quota := NewOpenAIQuotaService(repo, nil, NewOpenAITokenProvider(repo, tokens, nil), newQuotaRedirectingFactory(upstream), nil)
 			idempotencyConfig := DefaultIdempotencyConfig()
@@ -121,6 +122,7 @@ func TestOpenAIQuotaAutoResetDisabledWindowHTTPFlow(t *testing.T) {
 			require.NoError(t, repo.UpdateExtra(ctx, account.ID, map[string]any{"codex_usage_updated_at": now.Add(-time.Hour).Format(time.RFC3339)}))
 			require.NoError(t, svc.evaluateAccount(ctx, account.ID))
 			require.Positive(t, usageCalls.Load())
+			require.GreaterOrEqual(t, proxyCalls.Load(), usageCalls.Load(), "quota requests must use WARP")
 			saved, err := repo.GetByID(ctx, account.ID)
 			require.NoError(t, err)
 			require.Equal(t, tt.threshold5h, saved.Extra[OpenAIAutoResetCredit5hThresholdExtraKey])

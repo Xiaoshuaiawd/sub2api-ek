@@ -59,7 +59,7 @@ func unifiedAstraFixture(t *testing.T) (*OpenAIGatewayService, *astraTicketRepo,
 	s.accountRepo = repo
 	s.cfg.Gateway.CodexGatewayPin = config.CodexGatewayPinConfig{Enabled: true, SourceAccountIDs: []int64{1}, TargetAccountIDs: []int64{2}, IPAffinity: true, TTLSeconds: 240}
 	now := time.Now().Add(-5 * time.Second)
-	seed := &openAICodexTicket{AccountID: 1, Model: "gpt-6-astra", State: mint780State(now), Length: 780, Blocks: 33, IssuedAt: now, CapturedAt: now, ExpiresAt: now.Add(240 * time.Second), ProbeVerified: true, Transport: "sse", Gateway: "unified-42", HarvestCookies: mint780Pair(time.Now().Add(time.Hour), "unified-42"), HarvestProxyURL: "http://source.invalid:8080"}
+	seed := &openAICodexTicket{AccountID: 1, Model: "gpt-6-astra", State: mint780State(now), Length: 780, Blocks: 33, IssuedAt: now, CapturedAt: now, ExpiresAt: now.Add(240 * time.Second), ProbeVerified: true, Transport: "sse", Gateway: "unified-42", HarvestCookies: mint780Pair(time.Now().Add(time.Hour), "unified-42"), HarvestProxyURL: OpenAIWarpProxyURL()}
 	require.NoError(t, s.storeOpenAICodexTicket(t.Context(), a, seed))
 	repo.writes = 0
 	return s, repo, seed
@@ -80,7 +80,7 @@ func TestUnifiedAstraReusePersistsTargetBundleAndUsesItWithoutReprobing(t *testi
 	calls := 0
 	s.httpUpstream = &harvestProxyUpstream{do: func(req *http.Request, proxy string) (*http.Response, error) {
 		calls++
-		require.Equal(t, "http://source.invalid:8080", proxy)
+		require.Equal(t, OpenAIWarpProxyURL(), proxy)
 		require.Equal(t, "Bearer target-token", req.Header.Get("Authorization"))
 		require.Equal(t, "target-workspace", req.Header.Get("ChatGPT-Account-ID"))
 		require.Equal(t, strings.Join(seed.HarvestCookies, "; "), req.Header.Get("Cookie"))
@@ -103,7 +103,7 @@ func TestUnifiedAstraReusePersistsTargetBundleAndUsesItWithoutReprobing(t *testi
 	require.False(t, s.codexTicketChatHeld(2))
 	require.Equal(t, 2, calls)
 	require.Equal(t, 1, repo.writes)
-	require.Equal(t, "http://source.invalid:8080", proxy)
+	require.Equal(t, OpenAIWarpProxyURL(), proxy)
 	require.Equal(t, targetState, h.Get(openAICodexTurnStateHeader))
 	require.Equal(t, strings.Join(seed.HarvestCookies, "; "), h.Get("Cookie"))
 	a, _ := repo.GetByID(t.Context(), 2)
@@ -225,7 +225,7 @@ func TestUnifiedAstraSourceBootstrapUsesSameStoreAndBudget(t *testing.T) {
 	s.httpUpstream = &harvestProxyUpstream{do: func(req *http.Request, proxy string) (*http.Response, error) {
 		calls++
 		require.Equal(t, "Bearer source-token", req.Header.Get("Authorization"))
-		require.Equal(t, "http://self.invalid:8080", proxy)
+		require.Equal(t, OpenAIWarpProxyURL(), proxy)
 		h := http.Header{}
 		if calls == 1 {
 			require.Empty(t, req.Header.Get(openAICodexTurnStateHeader))
@@ -289,7 +289,7 @@ func TestUnifiedAstraOwnTicketWinsAndHarvestLockPreventsDuplicateAcquisition(t *
 	own.AccountID = 2
 	own.Identity = ""
 	own.State = mint780State(time.Now())
-	own.HarvestProxyURL = "http://own.invalid:8080"
+	own.HarvestProxyURL = OpenAIWarpProxyURL()
 	own.Acquisition = "self"
 	own.HarvestCookies = mint780Pair(time.Now().Add(time.Hour), "unified-99")
 	own.Gateway = "unified-99"
@@ -302,7 +302,7 @@ func TestUnifiedAstraOwnTicketWinsAndHarvestLockPreventsDuplicateAcquisition(t *
 	proxy, release, err := s.ApplyStoredAstraTarget(t.Context(), h, 2, "sse")
 	require.NoError(t, err)
 	release()
-	require.Equal(t, "http://own.invalid:8080", proxy)
+	require.Equal(t, OpenAIWarpProxyURL(), proxy)
 	require.Equal(t, own.State, h.Get(openAICodexTurnStateHeader))
 	require.Equal(t, strings.Join(own.HarvestCookies, "; "), h.Get("Cookie"))
 	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, chatgptCodexURL, nil)
@@ -334,7 +334,7 @@ func TestUnifiedAstraBackgroundFallsBackToSelfWithinSharedBudget(t *testing.T) {
 					require.Equal(t, borrowed, req.Header.Get(openAICodexTurnStateHeader))
 					h.Set(openAICodexTurnStateHeader, self) // Failed reuse must not be persisted.
 				case 3:
-					require.Equal(t, "http://self.invalid:8080", proxy)
+					require.Equal(t, OpenAIWarpProxyURL(), proxy)
 					require.Empty(t, req.Header.Get(openAICodexTurnStateHeader))
 					require.Empty(t, req.Header.Get("Cookie"))
 					h.Set(openAICodexTurnStateHeader, self)
@@ -354,7 +354,7 @@ func TestUnifiedAstraBackgroundFallsBackToSelfWithinSharedBudget(t *testing.T) {
 			require.Equal(t, budget == 4, ticket.valid(time.Now(), 780))
 			if budget == 4 {
 				require.Equal(t, self, ticket.State)
-				require.Equal(t, "http://self.invalid:8080", ticket.HarvestProxyURL)
+				require.Equal(t, OpenAIWarpProxyURL(), ticket.HarvestProxyURL)
 				require.Zero(t, ticket.SourceAccountID)
 			}
 		})
@@ -381,7 +381,13 @@ func TestUnifiedAstraConcurrentVerificationDoesNotDuplicateMint(t *testing.T) {
 	}}
 	done := make(chan error, 1)
 	go func() { done <- s.VerifyStoredAstraTarget(t.Context(), 2) }()
-	<-started
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("verification exited before probing: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("verification did not start probing")
+	}
 	require.EqualError(t, s.VerifyStoredAstraTarget(t.Context(), 2), "target_validation_in_progress")
 	close(proceed)
 	require.NoError(t, <-done)
@@ -405,5 +411,47 @@ func TestUnifiedAstraForwardingNeverAcquiresMissingTicket(t *testing.T) {
 		release()
 		require.Equal(t, before, h)
 		require.Zero(t, repo.writes)
+	}
+}
+
+func TestLegacyPrimaryDoesNotBlockWarpTicketPersistenceAndReload(t *testing.T) {
+	t.Setenv("OPENAI_WARP_PROXY_URL", "http://warp.invalid:8080")
+	for _, tc := range []struct {
+		name, proxy, nodeID, nodeName string
+	}{
+		{name: "empty exit"},
+		{name: "old exit", proxy: "http://old.invalid:8080"},
+		{name: "old node id", proxy: "http://warp.invalid:8080", nodeID: "old-id"},
+		{name: "old node name", proxy: "http://warp.invalid:8080", nodeName: "old-name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := ticketTestAccount(41)
+			now := time.Now()
+			old := &openAICodexTicket{Model: "gpt-6-astra", State: fakeCodexTicketStateSalt(292, 1), Length: 292,
+				CapturedAt: now, ExpiresAt: now.Add(time.Hour), HarvestProxyURL: tc.proxy, HarvestNodeID: tc.nodeID, HarvestNodeName: tc.nodeName}
+			account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-6-astra"): old}
+			repo := &astraTicketRepo{accounts: map[int64]*Account{account.ID: account}}
+			cfg := config.OpenAICodexTicketConfig{Enabled: true, TargetLength: 292, Models: []string{"gpt-6-astra"}}
+			svc := ticketTestService(t, cfg, nil)
+			svc.accountRepo = repo
+			svc.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, "gpt-6-astra"), old)
+			require.False(t, old.valid(now, 292))
+			fresh := &openAICodexTicket{Model: "gpt-6-astra", State: fakeCodexTicketStateSalt(292, 2), Length: 292,
+				CapturedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour), HarvestProxyURL: OpenAIWarpProxyURL()}
+			require.NoError(t, svc.storeOpenAICodexTicket(t.Context(), account, fresh))
+			require.Equal(t, 1, repo.writes)
+			persisted, err := repo.GetByID(t.Context(), account.ID)
+			require.NoError(t, err)
+			saved := parseOpenAICodexTicketFromAny(account.ID, "gpt-6-astra", persisted.Extra[openAICodexTicketExtraKey("gpt-6-astra")])
+			require.NotNil(t, saved)
+			require.Equal(t, fresh.State, saved.State)
+			require.Nil(t, saved.Standby, "legacy primary must not keep the WARP ticket as standby")
+			require.True(t, saved.valid(time.Now(), 292))
+			restarted := ticketTestService(t, cfg, nil)
+			reloaded := restarted.lookupOpenAICodexTicket(persisted, "gpt-6-astra")
+			require.NotNil(t, reloaded)
+			require.Equal(t, fresh.State, reloaded.State)
+			require.True(t, reloaded.valid(time.Now(), 292))
+		})
 	}
 }

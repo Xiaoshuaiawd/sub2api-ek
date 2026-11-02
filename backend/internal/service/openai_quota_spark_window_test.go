@@ -89,8 +89,8 @@ func (c *stubQuotaTokenCache) ReleaseRefreshLock(_ context.Context, _ string) er
 // newQuotaRedirectingFactory 返回 PrivacyClientFactory，将请求重定向到 httptest.Server。
 func newQuotaRedirectingFactory(srv *httptest.Server) PrivacyClientFactory {
 	targetURL, _ := url.Parse(srv.URL)
-	return func(_ string) (*req.Client, error) {
-		c := req.C().WrapRoundTripFunc(func(rt req.RoundTripper) req.RoundTripFunc {
+	return func(proxyURL string) (*req.Client, error) {
+		c := req.C().SetProxyURL(proxyURL).WrapRoundTripFunc(func(rt req.RoundTripper) req.RoundTripFunc {
 			return func(r *req.Request) (*req.Response, error) {
 				r.URL.Scheme = targetURL.Scheme
 				r.URL.Host = targetURL.Host
@@ -207,6 +207,7 @@ func TestResetCreditTargetedSendsStableCreditAndRedeemIDs(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":"ok","windows_reset":1}`))
 	}))
 	defer srv.Close()
+	useCodexModelsTestWARP(t, srv)
 
 	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
 	result, err := svc.ResetCreditTargeted(context.Background(), account.ID, "credit-123", "redeem-456")
@@ -256,6 +257,7 @@ func TestResetCreditAgentIdentityUsesAssertionAndRecoversInvalidTaskOnce(t *test
 		_, _ = w.Write([]byte(`{"code":"ok","windows_reset":2}`))
 	}))
 	defer srv.Close()
+	useCodexModelsTestWARP(t, srv)
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
 	openAIAgentIdentityAuthAPIBaseURL = srv.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
@@ -319,6 +321,7 @@ func TestResetCreditAgentIdentityReusesConcurrentlyRecoveredTask(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":"ok","windows_reset":1}`))
 	}))
 	defer srv.Close()
+	useCodexModelsTestWARP(t, srv)
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
 	openAIAgentIdentityAuthAPIBaseURL = srv.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
@@ -414,6 +417,7 @@ func TestQueryUsageAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
 		_, _ = w.Write([]byte(`{"plan_type":"pro","rate_limit":{"allowed":true}}`))
 	}))
 	defer srv.Close()
+	useCodexModelsTestWARP(t, srv)
 	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingFactory(srv), nil)
 	usage, err := svc.QueryUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -463,6 +467,7 @@ func TestQueryUsageAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
 		_, _ = w.Write([]byte(`{"plan_type":"pro","rate_limit":{"allowed":true}}`))
 	}))
 	defer srv.Close()
+	useCodexModelsTestWARP(t, srv)
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
 	openAIAgentIdentityAuthAPIBaseURL = srv.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
@@ -563,6 +568,7 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
+	useCodexModelsTestWARP(t, srv)
 
 	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
 	usage, err := svc.QueryUsage(ctx, 100)
@@ -624,6 +630,7 @@ func TestQueryUsageResetCreditDetails401NonFatal(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
+	useCodexModelsTestWARP(t, srv)
 
 	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
 	usage, err := svc.QueryUsage(ctx, 100)
@@ -773,6 +780,7 @@ func TestQueryUsageShadowResolve_EndToEnd(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(OpenAIQuotaUsage{})
 	}))
 	defer srv.Close()
+	useCodexModelsTestWARP(t, srv)
 
 	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
 	usage, err := svc.QueryUsage(ctx, 200)

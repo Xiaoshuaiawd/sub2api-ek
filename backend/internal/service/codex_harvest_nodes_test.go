@@ -20,3 +20,16 @@ func TestHarvestNodeRanking(t *testing.T) {
 	require.Empty(t, rankCodexHarvestNodes(nil, records, nil, 1, now))
 	require.Equal(t, "b", rankCodexHarvestNodes(nodes[:3], nil, nil, 1, now)[0].ID)
 }
+
+func TestPinnedHarvestNodeHonorsTriedAndMissingNodes(t *testing.T) {
+	nodes := []mihomo.HarvestNode{{ID: "a"}, {ID: "b"}}
+	node, ok := pinnedHarvestNode(nodes, &openAICodexTicket{HarvestNodeID: "b"}, nil)
+	require.True(t, ok)
+	require.Equal(t, "b", node.ID)
+	_, ok = pinnedHarvestNode(nodes, &openAICodexTicket{HarvestNodeID: "b"}, map[string]bool{"b": true})
+	require.False(t, ok)
+	_, ok = pinnedHarvestNode(nodes, &openAICodexTicket{HarvestNodeID: "missing"}, nil)
+	require.False(t, ok)
+	_, ok = pinnedHarvestNode(nodes, nil, nil)
+	require.False(t, ok)
+}

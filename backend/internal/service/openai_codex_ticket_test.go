@@ -60,7 +60,7 @@ func attachReadyCodexTicket(account *Account, model string) {
 	if account.Extra == nil {
 		account.Extra = map[string]any{}
 	}
-	account.Extra[openAICodexTicketExtraKey(model)] = openAICodexTicket{
+	account.Extra[openAICodexTicketExtraKey(model)] = openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		AccountID:  account.ID,
 		Model:      model,
 		State:      fakeCodexTicketState(292),
@@ -89,7 +89,7 @@ func TestApplyOpenAICodexTicket_ReplacesHeader(t *testing.T) {
 		FailClosed:   true,
 	}, nil)
 	account := ticketTestAccount(41)
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		AccountID:  41,
 		Model:      "gpt-6-astra",
 		State:      state,
@@ -117,7 +117,7 @@ func TestApplyOpenAICodexTicket_DoesNotReuseOtherModelOrAccount(t *testing.T) {
 	a := ticketTestAccount(41)
 	b := ticketTestAccount(42)
 	astra := fakeCodexTicketState(292)
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), a, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), a, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		AccountID:  41,
 		Model:      "gpt-6-astra",
 		State:      astra,
@@ -146,7 +146,7 @@ func TestLookupOpenAICodexTicket_PrefersNewerExtra(t *testing.T) {
 	account := ticketTestAccount(41)
 	oldState := fakeCodexTicketState(292)
 	newState := openAICodexTicketStatePrefix + strings.Repeat("C", 286)
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		AccountID:  41,
 		Model:      "gpt-6-astra",
 		State:      oldState,
@@ -154,7 +154,7 @@ func TestLookupOpenAICodexTicket_PrefersNewerExtra(t *testing.T) {
 		CapturedAt: time.Now().Add(-30 * time.Minute),
 		ExpiresAt:  time.Now().Add(-time.Minute),
 	}))
-	account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
+	account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		Model:      "gpt-6-astra",
 		State:      newState,
 		Length:     292,
@@ -177,7 +177,7 @@ func TestApplyOpenAICodexTicket_ExpiredNotInjected(t *testing.T) {
 		HarvestProxyURL: "socks5h://harvest",
 	}, &httpUpstreamRecorder{err: io.EOF})
 	account := ticketTestAccount(41)
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		AccountID:  41,
 		Model:      "gpt-6-astra",
 		State:      fakeCodexTicketState(292),
@@ -199,7 +199,7 @@ func TestApplyOpenAICodexTicket_WrongLengthNotInjected(t *testing.T) {
 		FailClosed:   true,
 	}, nil)
 	account := ticketTestAccount(41)
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		AccountID:  41,
 		Model:      "gpt-6-astra",
 		State:      fakeCodexTicketState(312),
@@ -273,7 +273,7 @@ func TestHarvestOpenAICodexTicket_StopsAt292AndUsesHarvestProxy(t *testing.T) {
 	ticket := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
 	require.NotNil(t, ticket)
 	require.Equal(t, state292, ticket.State)
-	require.Equal(t, "socks5h://user:pass@harvest.example:31", ticket.HarvestProxyURL)
+	require.Equal(t, OpenAIWarpProxyURL(), ticket.HarvestProxyURL)
 	require.Empty(t, ticket.HarvestNodeID)
 	require.NotEqual(t, upstream.requests[0].Header.Get("session_id"), upstream.requests[1].Header.Get("session_id"))
 	require.NotEmpty(t, upstream.requests[0].Header.Get("session_id"))
@@ -281,7 +281,7 @@ func TestHarvestOpenAICodexTicket_StopsAt292AndUsesHarvestProxy(t *testing.T) {
 	h.Set(openAICodexTurnStateHeader, "stale")
 	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", h))
 	require.Equal(t, state292, h.Get(openAICodexTurnStateHeader))
-	require.Equal(t, "socks5h://user:pass@harvest.example:31", upstream.lastProxyURL)
+	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
 	require.Len(t, upstream.requests, 2)
 	require.Empty(t, upstream.requests[0].Header.Get(openAICodexTurnStateHeader))
 	require.Equal(t, openAICodexAstraMinVersion, upstream.requests[0].Header.Get("version"))
@@ -331,11 +331,12 @@ func TestLookupOpenAICodexTicket_HydratesFromExtra(t *testing.T) {
 	account := ticketTestAccount(9)
 	account.Extra = map[string]any{
 		openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
-			"state":       state,
-			"length":      292,
-			"model":       "gpt-6-astra",
-			"captured_at": time.Now().Add(-time.Minute),
-			"expires_at":  time.Now().Add(time.Hour),
+			"state":             state,
+			"length":            292,
+			"harvest_proxy_url": OpenAIWarpProxyURL(),
+			"model":             "gpt-6-astra",
+			"captured_at":       time.Now().Add(-time.Minute),
+			"expires_at":        time.Now().Add(time.Hour),
 		},
 	}
 	got := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
@@ -354,7 +355,7 @@ func TestLookupOpenAICodexTicket_SchedulerSnapshotRequiresIdentityHydration(t *t
 	full := ticketTestAccount(2)
 	full.Credentials["email"] = "user@example.com"
 	state := fakeCodexTicketState(292)
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), full, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), full, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		AccountID:  2,
 		Model:      "gpt-6-astra",
 		State:      state,
@@ -370,11 +371,12 @@ func TestLookupOpenAICodexTicket_SchedulerSnapshotRequiresIdentityHydration(t *t
 		Credentials: map[string]any{"plan_type": "plus"},
 		Extra: map[string]any{
 			openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
-				"state":       state,
-				"length":      292,
-				"identity":    ticketIdentity(full),
-				"captured_at": time.Now(),
-				"expires_at":  time.Now().Add(time.Hour),
+				"state":             state,
+				"length":            292,
+				"harvest_proxy_url": OpenAIWarpProxyURL(),
+				"identity":          ticketIdentity(full),
+				"captured_at":       time.Now(),
+				"expires_at":        time.Now().Add(time.Hour),
 			},
 		},
 	}
@@ -402,7 +404,7 @@ func TestLookupOpenAICodexTicket_IdentityMismatchStillRejected(t *testing.T) {
 	}, nil)
 	original := ticketTestAccount(2)
 	original.Credentials["email"] = "user@example.com"
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), original, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), original, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		AccountID:  2,
 		Model:      "gpt-6-astra",
 		State:      fakeCodexTicketState(292),
@@ -422,11 +424,12 @@ func TestOpenAICodexTicketStatuses_ReportsRemainingTTL(t *testing.T) {
 	account := ticketTestAccount(41)
 	account.Extra = map[string]any{
 		openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
-			"state":       fakeCodexTicketState(292),
-			"length":      292,
-			"model":       "gpt-6-astra",
-			"captured_at": time.Now().Add(-10 * time.Minute),
-			"expires_at":  time.Now().Add(50 * time.Minute),
+			"state":             fakeCodexTicketState(292),
+			"length":            292,
+			"harvest_proxy_url": OpenAIWarpProxyURL(),
+			"model":             "gpt-6-astra",
+			"captured_at":       time.Now().Add(-10 * time.Minute),
+			"expires_at":        time.Now().Add(50 * time.Minute),
 		},
 	}
 	now := time.Now()
@@ -445,11 +448,12 @@ func TestOpenAICodexTicketStatuses_ReportsIssuedBoundRemaining(t *testing.T) {
 	account := ticketTestAccount(42)
 	account.Extra = map[string]any{
 		openAICodexTicketExtraKey("gpt-6-astra"): map[string]any{
-			"state":      fakeCodexTicketState(292),
-			"length":     292,
-			"model":      "gpt-6-astra",
-			"issued_at":  now.Add(-50 * time.Minute),
-			"expires_at": now.Add(2 * time.Hour),
+			"state":             fakeCodexTicketState(292),
+			"length":            292,
+			"harvest_proxy_url": OpenAIWarpProxyURL(),
+			"model":             "gpt-6-astra",
+			"issued_at":         now.Add(-50 * time.Minute),
+			"expires_at":        now.Add(2 * time.Hour),
 		},
 	}
 	got := OpenAICodexTicketStatuses(account, config.OpenAICodexTicketConfig{Enabled: true, FailClosed: true}, now)
@@ -463,13 +467,13 @@ func TestOpenAICodexTicketStatuses_PromotedStandbyKeepsRemainingAndFlag(t *testi
 	now := time.Now()
 	account := ticketTestAccount(43)
 	account.Extra = map[string]any{
-		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
+		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 			State:     fakeCodexTicketState(292),
 			Length:    292,
 			Model:     "gpt-6-astra",
 			IssuedAt:  now.Add(-70 * time.Minute),
 			ExpiresAt: now.Add(-10 * time.Minute),
-			Standby: &openAICodexTicket{
+			Standby: &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 				State:     fakeCodexTicketState(292),
 				Length:    292,
 				IssuedAt:  now.Add(-10 * time.Minute),
@@ -489,13 +493,13 @@ func TestOpenAICodexTicketStatuses_PrimaryKeepsStandbyExpiry(t *testing.T) {
 	now := time.Now()
 	account := ticketTestAccount(44)
 	account.Extra = map[string]any{
-		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
+		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 			State:     fakeCodexTicketState(292),
 			Length:    292,
 			Model:     "gpt-6-astra",
 			IssuedAt:  now.Add(-10 * time.Minute),
 			ExpiresAt: now.Add(50 * time.Minute),
-			Standby: &openAICodexTicket{
+			Standby: &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 				State:     fakeCodexTicketState(292),
 				Length:    292,
 				IssuedAt:  now.Add(-2 * time.Minute),
@@ -621,7 +625,7 @@ func TestProbeOpenAICodexTicket_RejectsInvalidState(t *testing.T) {
 	}
 }
 func TestOpenAICodexTicket_RequiresActualLengthAndExpiry(t *testing.T) {
-	ticket := &openAICodexTicket{State: fakeCodexTicketState(312), Length: 292, ExpiresAt: time.Now().Add(time.Hour)}
+	ticket := &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), State: fakeCodexTicketState(312), Length: 292, ExpiresAt: time.Now().Add(time.Hour)}
 	require.False(t, ticket.valid(time.Now(), 292))
 	ticket.State = fakeCodexTicketState(292)
 	ticket.ExpiresAt = time.Time{}
@@ -890,7 +894,7 @@ func TestOpenAICodexTicketBlocksOutOfHarvestScopeLeftover(t *testing.T) {
 }
 
 func TestDoOpenAIUpstream_BoundTicketUsesHarvestProxy(t *testing.T) {
-	harvest := "socks5h://harvest.example:31"
+	harvest := OpenAIWarpProxyURL()
 	account := ticketTestAccount(41)
 	account.Proxy = &Proxy{ID: 9, Protocol: "http", Host: "account.example", Port: 8080, Status: StatusActive}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}"))}}
@@ -927,8 +931,8 @@ func TestDoOpenAIUpstream_BoundTicketUsesHarvestProxy(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 }
 
-func TestDoOpenAIUpstream_BoundTicketUsesConfiguredHarvestProxy(t *testing.T) {
-	harvest := "socks5h://harvest.example:31"
+func TestDoOpenAIUpstream_BoundTicketWithoutEgressIsRejected(t *testing.T) {
+	harvest := OpenAIWarpProxyURL()
 	account := ticketTestAccount(41)
 	account.Proxy = &Proxy{ID: 9, Protocol: "http", Host: "account.example", Port: 8080, Status: StatusActive}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}"))}}
@@ -938,13 +942,14 @@ func TestDoOpenAIUpstream_BoundTicketUsesConfiguredHarvestProxy(t *testing.T) {
 		Model: "gpt-6-astra", State: state, Length: 292,
 		CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}))
+	account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{Model: "gpt-6-astra", State: state, Length: 292, CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}}
 	req, err := http.NewRequest(http.MethodPost, "https://example.invalid/responses", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set(openAICodexTurnStateHeader, state)
 	resp, err := svc.doOpenAIUpstream(req, account.Proxy.URL(), account)
-	require.NoError(t, err)
-	require.Equal(t, harvest, upstream.lastProxyURL)
-	require.NoError(t, resp.Body.Close())
+	require.ErrorIs(t, err, ErrOpenAICodexTicketUnavailable)
+	require.Nil(t, resp)
+	require.Empty(t, upstream.requests)
 }
 
 func TestDoOpenAIUpstream_UnboundKeepsAccountProxy(t *testing.T) {
@@ -959,7 +964,7 @@ func TestDoOpenAIUpstream_UnboundKeepsAccountProxy(t *testing.T) {
 	req.Header.Set("conversation_id", "isolated-session")
 	resp, err := svc.doOpenAIUpstream(req, account.Proxy.URL(), account)
 	require.NoError(t, err)
-	require.Equal(t, account.Proxy.URL(), upstream.lastProxyURL)
+	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
 	require.Equal(t, "isolated-session", upstream.lastReq.Header.Get("session_id"))
 	require.Equal(t, "isolated-session", upstream.lastReq.Header.Get("conversation_id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
@@ -977,13 +982,13 @@ func TestDoOpenAIProxyAttempt_BoundTicketSkipsPlugin(t *testing.T) {
 	svc.pluginManager = mgr
 	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
 		Model: "gpt-6-astra", State: state, Length: 292,
-		HarvestProxyURL: "http://harvest.invalid:8080", HarvestSessionID: "harvest-session-sticky",
+		HarvestProxyURL: OpenAIWarpProxyURL(), HarvestSessionID: "harvest-session-sticky",
 		CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}))
 	req, err := http.NewRequest(http.MethodPost, "https://example.invalid/responses", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set(openAICodexTurnStateHeader, state)
-	resp, err := svc.doOpenAIProxyAttempt(req, account, runtimeProxyEgress{url: "http://harvest.invalid:8080", proxyID: -1})
+	resp, err := svc.doOpenAIProxyAttempt(req, account, runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Len(t, upstream.requests, 1)
@@ -991,7 +996,7 @@ func TestDoOpenAIProxyAttempt_BoundTicketSkipsPlugin(t *testing.T) {
 }
 
 func TestPinCodexTicketWSAcquireUsesHarvestProxy(t *testing.T) {
-	harvest := "socks5h://harvest.example:31"
+	harvest := OpenAIWarpProxyURL()
 	account := ticketTestAccount(41)
 	account.Proxy = &Proxy{ID: 9, Protocol: "http", Host: "account.example", Port: 8080, Status: StatusActive}
 	account.ProxyID = &account.Proxy.ID
@@ -1025,8 +1030,8 @@ func TestPinCodexTicketWSAcquireUsesHarvestProxy(t *testing.T) {
 	require.Equal(t, buildCodexCLIUserAgent(openAICodexAstraMinVersion), h.Get("user-agent"))
 }
 
-func TestPinCodexTicketWSAcquireConfiguredHarvestWhenTicketHasNoProxy(t *testing.T) {
-	harvest := "socks5h://harvest.example:31"
+func TestPinCodexTicketWSAcquireRejectsTicketWithoutEgress(t *testing.T) {
+	harvest := OpenAIWarpProxyURL()
 	account := ticketTestAccount(41)
 	account.Proxy = &Proxy{ID: 9, Protocol: "http", Host: "account.example", Port: 8080, Status: StatusActive}
 	account.ProxyID = &account.Proxy.ID
@@ -1037,14 +1042,16 @@ func TestPinCodexTicketWSAcquireConfiguredHarvestWhenTicketHasNoProxy(t *testing
 		HarvestSessionID: "harvest-session-sticky",
 		CapturedAt:       time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}))
+	account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{Model: "gpt-6-astra", State: state, Length: 292, CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}}
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, state)
 	h.Set("session_id", "isolated-session")
 	proxy, release, err := svc.pinCodexTicketWSAcquire(context.Background(), h, account)
-	require.NoError(t, err)
-	release()
-	require.Equal(t, harvest, proxy)
-	require.Equal(t, "harvest-session-sticky", h.Get("session_id"))
+	require.ErrorIs(t, err, ErrOpenAICodexTicketUnavailable)
+	require.Empty(t, proxy)
+	if release != nil {
+		release()
+	}
 }
 
 func TestPinCodexTicketWSAcquireUnboundKeepsAccountProxy(t *testing.T) {
@@ -1058,7 +1065,7 @@ func TestPinCodexTicketWSAcquireUnboundKeepsAccountProxy(t *testing.T) {
 	proxy, release, err := svc.pinCodexTicketWSAcquire(context.Background(), h, account)
 	require.NoError(t, err)
 	release()
-	require.Equal(t, account.Proxy.URL(), proxy)
+	require.Equal(t, OpenAIWarpProxyURL(), proxy)
 	require.Equal(t, "isolated-session", h.Get("session_id"))
 	require.Equal(t, "isolated-session", h.Get("conversation_id"))
 }
@@ -1103,7 +1110,7 @@ func TestHarvestPinnedSessionForModel(t *testing.T) {
 	require.Empty(t, svc.harvestPinnedSessionForModel(context.Background(), account, "gpt-6-astra"))
 	require.False(t, svc.harvestPinsCodexIdentity(context.Background(), account, "gpt-6-astra"))
 
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		Model: "gpt-6-astra", State: fakeCodexTicketState(292), Length: 292,
 		HarvestSessionID: "harvest-session-sticky",
 		CapturedAt:       time.Now(), ExpiresAt: time.Now().Add(time.Hour),
@@ -1120,7 +1127,7 @@ func TestBuildUpstreamRequest_BoundTicketPinsHarvestIdentity(t *testing.T) {
 		Enabled: true, TargetLength: 292, TTLSeconds: 3600, Models: []string{"gpt-6-astra"},
 	}, nil)
 	state := fakeCodexTicketState(292)
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 		Model: "gpt-6-astra", State: state, Length: 292,
 		HarvestSessionID: "harvest-session-sticky",
 		CapturedAt:       time.Now(), ExpiresAt: time.Now().Add(time.Hour),
@@ -1153,4 +1160,23 @@ func TestBuildUpstreamRequest_BoundTicketPinsHarvestIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, gjson.GetBytes(got, "prompt_cache_key").Exists())
 	require.False(t, gjson.GetBytes(got, "client_metadata").Exists())
+}
+
+func TestPinStoredCodexTicketRejectsNonWarpEgress(t *testing.T) {
+	t.Setenv("OPENAI_WARP_PROXY_URL", "http://warp.invalid:8080")
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true}, nil)
+	for _, tc := range []struct{ name, proxy string }{
+		{name: "old exit", proxy: "http://old-exit.invalid:8080"},
+		{name: "empty exit", proxy: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ticket := &openAICodexTicket{HarvestProxyURL: tc.proxy}
+			proxy, release, err := svc.pinStoredCodexTicketEgress(context.Background(), ticket, "http://account.invalid:8080")
+			require.ErrorIs(t, err, ErrOpenAICodexTicketUnavailable)
+			require.Empty(t, proxy)
+			if release != nil {
+				release()
+			}
+		})
+	}
 }

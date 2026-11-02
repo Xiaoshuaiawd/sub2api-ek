@@ -131,11 +131,11 @@ func TestPrismBrowserSessionForwardAndStatelessAdminTest(t *testing.T) {
 	c.Set("api_key", &APIKey{ID: 7})
 	expected, err := prismBrowserSessionID(c, account.ID, []byte(body))
 	require.NoError(t, err)
-	_, err = s.forwardPrismBrowser(context.Background(), c, account, []byte(body), time.Now())
+	_, err = s.forwardPrismBrowserWithCaller(context.Background(), c, account, []byte(body), time.Now(), s.callPrismBrowserAdapter)
 	require.NoError(t, err)
 	require.Equal(t, expected, <-requests)
 	require.NotEqual(t, "fixture-session", expected)
-	_, _, _, err = s.callPrismBrowser(context.Background(), account, []byte(body))
+	_, _, _, err = s.callPrismBrowserAdapter(context.Background(), account, []byte(body), "", "")
 	require.NoError(t, err)
 	require.Empty(t, <-requests, "admin tests always create a fresh project")
 }
@@ -149,7 +149,7 @@ func TestPrismBrowserInvalidSessionDoesNotDispatch(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			c.Request.Header.Set("session-id", value)
 			c.Set("api_key", &APIKey{ID: 7})
-			_, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(`{"model":"gpt-5.6-sol","input":"fixture"}`), time.Now())
+			_, err := s.forwardPrismBrowserWithCaller(context.Background(), c, account, []byte(`{"model":"gpt-5.6-sol","input":"fixture"}`), time.Now(), s.callPrismBrowserAdapter)
 			require.Error(t, err)
 			require.Equal(t, http.StatusBadRequest, w.Code, "invalid identity must be rejected before contacting the adapter")
 		})
@@ -168,7 +168,7 @@ func TestPrismBrowserExplicitMappingReachesAdapter(t *testing.T) {
 	account.Credentials["model_mapping"] = map[string]any{"my-sol": "gpt-6.1-sol"}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	result, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(`{"model":"my-sol","input":"hi"}`), time.Now())
+	result, err := s.forwardPrismBrowserWithCaller(context.Background(), c, account, []byte(`{"model":"my-sol","input":"hi"}`), time.Now(), s.callPrismBrowserAdapter)
 	require.NoError(t, err)
 	require.Equal(t, "my-sol", result.Model)
 	require.Equal(t, "gpt-6.1-sol", result.UpstreamModel)
@@ -196,7 +196,7 @@ func TestPrismBrowserChannelMappingRestoresClientModel(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			body := []byte(fmt.Sprintf(`{"model":"channel-model","input":"hi","stream":%t}`, stream))
 			ctx := context.WithValue(context.Background(), openAIClientModelContextKey{}, "public-model")
-			result, err := s.forwardPrismBrowser(ctx, c, account, body, time.Now())
+			result, err := s.forwardPrismBrowserWithCaller(ctx, c, account, body, time.Now(), s.callPrismBrowserAdapter)
 			require.NoError(t, err)
 			require.Equal(t, "gpt-6.1-sol", result.UpstreamModel)
 			require.Contains(t, rec.Body.String(), `"model":"public-model"`)
@@ -224,7 +224,7 @@ func TestPrismBrowserCallProtectsCredentialBoundary(t *testing.T) {
 	}))
 	defer server.Close()
 	s, account := prismTestService(server.URL)
-	if _, _, _, err := s.callPrismBrowser(context.Background(), account, []byte(`{"input":"test"}`)); err == nil {
+	if _, _, _, err := s.callPrismBrowserAdapter(context.Background(), account, []byte(`{"input":"test"}`), "", ""); err == nil {
 		t.Fatal("redirect must be rejected")
 	}
 	if count != 1 {
@@ -234,7 +234,7 @@ func TestPrismBrowserCallProtectsCredentialBoundary(t *testing.T) {
 	if !accountHasPrismBrowser(account) {
 		t.Fatal("disabled server config must not erase account intent")
 	}
-	if _, _, _, err := s.callPrismBrowser(context.Background(), account, nil); err == nil {
+	if _, _, _, err := s.callPrismBrowserAdapter(context.Background(), account, nil, "", ""); err == nil {
 		t.Fatal("disabled adapter must fail closed")
 	}
 	if count != 1 {
@@ -260,7 +260,7 @@ func TestPrismBrowserForwardTerminalAndUsage(t *testing.T) {
 		if stream {
 			body = strings.Replace(body, "false", "true", 1)
 		}
-		result, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(body), time.Now())
+		result, err := s.forwardPrismBrowserWithCaller(context.Background(), c, account, []byte(body), time.Now(), s.callPrismBrowserAdapter)
 		server.Close()
 		if err != nil || w.Code != http.StatusOK || result == nil || !result.UsageUnavailable || result.ResponseID != "resp_fixture" {
 			t.Fatalf("unexpected result: result=%+v status=%d err=%v", result, w.Code, err)
@@ -348,7 +348,7 @@ func TestPrismBrowserAdapterMisconfigurationIsNotTheClientsAuthFailure(t *testin
 			c, _ := gin.CreateTestContext(w)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 
-			_, err := s.forwardPrismBrowser(context.Background(), c, account, []byte(`{"model":"gpt-5.6-sol","input":"hi"}`), time.Now())
+			_, err := s.forwardPrismBrowserWithCaller(context.Background(), c, account, []byte(`{"model":"gpt-5.6-sol","input":"hi"}`), time.Now(), s.callPrismBrowserAdapter)
 
 			require.Error(t, err)
 			require.Equal(t, tc.wantStatus, w.Code)
@@ -361,11 +361,11 @@ func TestPrismBrowserAdapterMisconfigurationIsNotTheClientsAuthFailure(t *testin
 	}
 }
 
-func TestPrismBrowserAccountTestExplainsAdapterRefusal(t *testing.T) {
+func TestPrismBrowserProductionEntrypointsFailClosed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	count := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusConflict)
-		_, _ = io.WriteString(w, `{"error":{"type":"pending_turn","message":"Previous Prism turn outcome is unknown; inspect it before a new request"}}`)
+		count++
 	}))
 	defer server.Close()
 	gateway, account := prismTestService(server.URL)
@@ -375,8 +375,8 @@ func TestPrismBrowserAccountTestExplainsAdapterRefusal(t *testing.T) {
 		enabled bool
 		want    string
 	}{
-		{name: "adapter refusal", enabled: true, want: "Prism adapter returned HTTP 409 (pending_turn): Previous Prism turn outcome is unknown"},
-		{name: "gateway switch off", enabled: false, want: "Prism adapter request failed: prism adapter is disabled"},
+		{name: "adapter enabled", enabled: true, want: "cannot guarantee WARP-only egress"},
+		{name: "gateway switch off", enabled: false, want: "cannot guarantee WARP-only egress"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gateway.cfg.Gateway.PrismBrowser.Enabled = tc.enabled
@@ -388,6 +388,14 @@ func TestPrismBrowserAccountTestExplainsAdapterRefusal(t *testing.T) {
 			require.Contains(t, rec.Body.String(), tc.want)
 		})
 	}
+	_, _, _, err := gateway.callPrismBrowser(context.Background(), account, []byte(`{"input":"hi"}`))
+	require.ErrorContains(t, err, "cannot guarantee WARP-only egress")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_, err = gateway.forwardPrismBrowser(context.Background(), c, account, []byte(`{"model":"gpt-5.6-sol","input":"hi"}`), time.Now())
+	require.ErrorContains(t, err, "cannot guarantee WARP-only egress")
+	require.Zero(t, count)
 }
 
 // A WebSocket session placed on a Prism account is closed right after selection,

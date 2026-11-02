@@ -111,6 +111,7 @@ func TestRegisterAgentIdentityTaskAcceptsPlaintextAndEncryptedResponses(t *testi
 	}))
 	defer server.Close()
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	useCodexModelsTestWARP(t, server)
 	openAIAgentIdentityAuthAPIBaseURL = server.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
@@ -134,6 +135,7 @@ func TestEnsureAgentIdentityTaskPersistsAndRedactsCredentials(t *testing.T) {
 	}))
 	defer server.Close()
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	useCodexModelsTestWARP(t, server)
 	openAIAgentIdentityAuthAPIBaseURL = server.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
@@ -176,6 +178,7 @@ func TestEnsureAgentIdentityTaskSharesLockAcrossServicesForSameAccount(t *testin
 	}))
 	defer server.Close()
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	useCodexModelsTestWARP(t, server)
 	openAIAgentIdentityAuthAPIBaseURL = server.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 

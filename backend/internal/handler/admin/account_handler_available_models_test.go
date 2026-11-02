@@ -539,7 +539,7 @@ func TestAccountHandlerSyncUpstreamModelsPreviewUsesUnsavedConnection(t *testing
 			require.Len(t, upstream.requests, 1)
 			require.Equal(t, "https://draft.example/v1/models", upstream.requests[0].URL.String())
 			require.Equal(t, "Bearer unsaved-test-key", upstream.requests[0].Header.Get("Authorization"))
-			require.Equal(t, tc.wantProxy, upstream.proxyURLs[0])
+			require.Equal(t, service.OpenAIWarpProxyURL(), upstream.proxyURLs[0])
 			require.Zero(t, upstream.accountIDs[0], "preview must not require a saved account")
 			var resp struct {
 				Data service.UpstreamModelCatalog `json:"data"`

@@ -950,6 +950,12 @@ func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.
 	if !m.ShouldRouteOpenAIOAuth(account) {
 		return nil, false, nil
 	}
+	// A plugin executes network traffic in another process. The proxy URL is
+	// advisory in the plugin protocol, so the core cannot prove that it is
+	// honored. Refuse the request rather than allow an unverified direct exit.
+	if account.Platform == PlatformOpenAI {
+		return nil, true, errors.New("OpenAI OAuth plugin transport cannot guarantee WARP-only egress")
+	}
 	route := m.route.Load()
 	if route == nil {
 		return nil, false, nil

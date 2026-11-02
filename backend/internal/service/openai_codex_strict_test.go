@@ -25,7 +25,7 @@ func TestTicketStrictResponseIsTerminalAndDoesNotReadBody(t *testing.T) {
 			svc.settingService = NewSettingService(&codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: values}}, &config.Config{})
 			account := ticketTestAccount(41)
 			state := fakeCodexTicketState(292)
-			require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{Model: "gpt-6-astra", State: state, Length: 292, ExpiresAt: time.Now().Add(time.Hour)}))
+			require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), Model: "gpt-6-astra", State: state, Length: 292, ExpiresAt: time.Now().Add(time.Hour)}))
 			req, _ := http.NewRequest(http.MethodPost, "https://example.org", nil)
 			req.Header.Set(openAICodexTurnStateHeader, state)
 			resp, err := svc.doOpenAIUpstream(req, "", account)

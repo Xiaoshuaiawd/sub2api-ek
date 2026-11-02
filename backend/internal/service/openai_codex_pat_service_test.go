@@ -30,6 +30,7 @@ func TestOpenAIOAuthService_ValidateCodexPersonalAccessToken(t *testing.T) {
 	defer server.Close()
 
 	originalURL := openAICodexPATWhoamiURL
+	useCodexModelsTestWARP(t, server)
 	openAICodexPATWhoamiURL = server.URL
 	defer func() { openAICodexPATWhoamiURL = originalURL }()
 

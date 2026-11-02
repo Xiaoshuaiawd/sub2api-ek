@@ -169,11 +169,13 @@ docker compose logs -f sub2api
 ```
 
 **What the script does:**
-- Downloads `docker-compose.local.yml` (saved as `docker-compose.yml`) and `.env.example`
+- Downloads `docker-compose.local.yml` (saved as `docker-compose.yml`), `warp-entrypoint.sh`, `warp-dns.py`, and `.env.example`
 - Generates secure credentials (JWT_SECRET, TOTP_ENCRYPTION_KEY, POSTGRES_PASSWORD)
 - Creates `.env` file with auto-generated secrets
 - Creates data directories (uses local directories for easy backup/migration)
 - Displays generated credentials for your reference
+
+OpenAI server-side requests require the WARP sidecar and fail closed if it is unavailable. See [OpenAI WARP deployment](deploy/OPENAI_WARP.md) for requirements and worker networking.
 
 #### Manual Deployment
 

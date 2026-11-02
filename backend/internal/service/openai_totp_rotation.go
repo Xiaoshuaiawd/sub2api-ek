@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base32"
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -160,7 +159,7 @@ func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker
 	if worker == "" || len(worker) > 128 {
 		return nil, infraerrors.BadRequest("TOTP_WORKER_INVALID", "Invalid worker ID")
 	}
-	s.workerLastSeen.Store(time.Now().UnixNano())
+	s.RecordWorkerHeartbeat(worker, true)
 	s.totpWorkerLastSeen.Store(time.Now().UnixNano())
 	record, err := repo.ClaimTOTPRotation(ctx, worker)
 	if err != nil {
@@ -170,7 +169,7 @@ func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker
 		return nil, nil
 	}
 	s.releaseMihomoLease(-record.TaskID)
-	account, cfg, err := s.rotationConfig(ctx, record.AccountID)
+	_, cfg, err := s.rotationConfig(ctx, record.AccountID)
 	if err == nil && !record.ConfigUpdatedAt.Equal(cfg.UpdatedAt) {
 		err = errors.New("configuration changed")
 	}
@@ -186,30 +185,7 @@ func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker
 		claim.Candidate, err = s.decryptReauthSecret(record.CandidateCiphertext, "Candidate TOTP cannot be decrypted")
 	}
 	if err == nil {
-		source, sourceErr := normalizeReauthProxySource(cfg.ProxySource, cfg.ProxyID)
-		err = sourceErr
-		if err == nil {
-			switch source {
-			case OpenAIOAuthReauthProxySourceAccount:
-				claim.ProxyURL, err = s.reauthProxyURL(ctx, account.ProxyID)
-			case OpenAIOAuthReauthProxySourceManagedProxy:
-				claim.ProxyURL, err = s.reauthProxyURL(ctx, cfg.ProxyID)
-			case OpenAIOAuthReauthProxySourceMihomo:
-				if s.acquireMihomoProxy == nil {
-					err = errors.New("proxy unavailable")
-				} else {
-					var release func()
-					claim.ProxyURL, release, err = s.acquireMihomoProxy(ctx, fmt.Sprintf("openai-totp-task:%d", record.TaskID))
-					if release != nil {
-						if err != nil {
-							release()
-						} else {
-							s.replaceMihomoLease(-record.TaskID, release)
-						}
-					}
-				}
-			}
-		}
+		claim.ProxyURL = OpenAIWarpWorkerProxyURL()
 	}
 	if err != nil {
 		_ = repo.FinishTOTPRotation(ctx, record.TaskID, worker, false, "configuration_unavailable")

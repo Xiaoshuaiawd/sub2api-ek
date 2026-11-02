@@ -93,8 +93,9 @@ func (h *OpenAIOAuthReauthHandler) CreateTask(c *gin.Context) {
 }
 
 type reauthWorkerRequest struct {
-	WorkerID string   `json:"worker_id"`
-	Engines  []string `json:"engines"`
+	WorkerID            string   `json:"worker_id"`
+	Engines             []string `json:"engines"`
+	WarpNetworkIsolated bool     `json:"warp_network_isolated"`
 }
 
 type reauthWorkerProgressRequest struct {
@@ -119,8 +120,9 @@ type reauthWorkerFailureRequest struct {
 }
 
 type sessionExportClaimRequest struct {
-	WorkerID     string   `json:"worker_id"`
-	Capabilities []string `json:"capabilities"`
+	WorkerID            string   `json:"worker_id"`
+	Capabilities        []string `json:"capabilities"`
+	WarpNetworkIsolated bool     `json:"warp_network_isolated"`
 }
 
 type sessionExportProgressRequest struct {
@@ -165,6 +167,10 @@ func (h *OpenAIOAuthReauthHandler) Claim(c *gin.Context) {
 		response.BadRequest(c, "Invalid worker request")
 		return
 	}
+	if !req.WarpNetworkIsolated {
+		response.BadRequest(c, "WARP network isolation must be confirmed before claiming tasks")
+		return
+	}
 	claim, err := h.service.ClaimTaskWithEngines(c.Request.Context(), req.WorkerID, req.Engines)
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -180,6 +186,10 @@ func (h *OpenAIOAuthReauthHandler) ClaimSessionExport(c *gin.Context) {
 	var req sessionExportClaimRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid worker request")
+		return
+	}
+	if !req.WarpNetworkIsolated {
+		response.BadRequest(c, "WARP network isolation must be confirmed before claiming tasks")
 		return
 	}
 	claim, err := h.service.ClaimSessionExportTask(c.Request.Context(), req.WorkerID, req.Capabilities)
@@ -258,7 +268,14 @@ func (h *OpenAIOAuthReauthHandler) RuntimeSettings(c *gin.Context) {
 	if !h.requireWorker(c) {
 		return
 	}
-	h.service.MarkWorkerSeen()
+	var heartbeat struct {
+		WorkerID            string `json:"worker_id"`
+		WarpNetworkIsolated bool   `json:"warp_network_isolated"`
+	}
+	if err := c.ShouldBindJSON(&heartbeat); err != nil {
+		heartbeat.WarpNetworkIsolated = false
+	}
+	h.service.RecordWorkerHeartbeat(heartbeat.WorkerID, heartbeat.WarpNetworkIsolated)
 	cfg, err := h.service.GetRuntimeSettings(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)

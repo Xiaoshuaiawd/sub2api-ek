@@ -83,6 +83,7 @@ func TestAccountTestServiceOpenAICompactAgentIdentityRecoversInvalidTaskOnce(t *
 	}))
 	defer registerServer.Close()
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	useCodexModelsTestWARP(t, registerServer)
 	openAIAgentIdentityAuthAPIBaseURL = registerServer.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
@@ -317,6 +318,7 @@ func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
 	}))
 	defer registerServer.Close()
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	useCodexModelsTestWARP(t, registerServer)
 	openAIAgentIdentityAuthAPIBaseURL = registerServer.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
@@ -421,6 +423,7 @@ func TestOpenAIAgentIdentityCompatRoutesRecoverInvalidTaskOnce(t *testing.T) {
 			}))
 			defer registerServer.Close()
 			oldBase := openAIAgentIdentityAuthAPIBaseURL
+			useCodexModelsTestWARP(t, registerServer)
 			openAIAgentIdentityAuthAPIBaseURL = registerServer.URL
 			t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
@@ -462,6 +465,7 @@ func TestOpenAIAgentIdentityChatRecoveryKeepsAutoDerivedSessionIsolationStable(t
 	}))
 	defer registerServer.Close()
 	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	useCodexModelsTestWARP(t, registerServer)
 	openAIAgentIdentityAuthAPIBaseURL = registerServer.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 

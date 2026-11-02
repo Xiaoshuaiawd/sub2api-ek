@@ -182,7 +182,7 @@ func TestManualHarvestLiveModels(t *testing.T) {
 		t.Fatal("no tickets yet")
 	}
 	if err := svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
-		AccountID: 2, Model: "gpt-6-astra", State: fakeCodexTicketState(292), Length: 292, ExpiresAt: time.Now().Add(time.Hour),
+		AccountID: 2, Model: "gpt-6-astra", State: fakeCodexTicketState(292), Length: 292, HarvestProxyURL: OpenAIWarpProxyURL(), ExpiresAt: time.Now().Add(time.Hour),
 	}); err != nil {
 		t.Fatal(err)
 	}

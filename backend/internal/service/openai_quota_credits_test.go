@@ -44,6 +44,7 @@ func TestQueryUsageCodexCredits(t *testing.T) {
 				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			}))
 			defer srv.Close()
+			proxyCalls := useCodexModelsTestWARP(t, srv)
 			svc := NewOpenAIQuotaService(repo, nil, NewOpenAITokenProvider(repo, tokens, nil), newQuotaRedirectingFactory(srv), nil)
 			usage, err := svc.QueryUsage(context.Background(), 100)
 			require.NoError(t, err)
@@ -52,6 +53,7 @@ func TestQueryUsageCodexCredits(t *testing.T) {
 			require.NoError(t, err)
 			require.JSONEq(t, tc.want, string(encoded))
 			require.Equal(t, []string{"/backend-api/wham/usage", "/backend-api/wham/rate-limit-reset-credits"}, paths)
+			require.EqualValues(t, len(paths), proxyCalls.Load(), "all quota requests must use WARP")
 			require.Zero(t, repo.extraUpdateCalls, "read-only query must not write account state")
 		})
 	}

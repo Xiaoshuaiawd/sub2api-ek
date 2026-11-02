@@ -40,161 +40,64 @@ func (u *bpsTestUpstream) Do(r *http.Request, proxy string, _ int64, _ int) (*ht
 	return u.send(r, proxy)
 }
 
-func TestExcelBPSProxyFailoverOnlyBeforeRequestSent(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		evidence func(*http.Request)
-		retry    bool
-	}{
-		{"dial_failure", func(r *http.Request) { httptrace.ContextClientTrace(r.Context()).GetConn("bps.openai.com:443") }, true},
-		{"missing_trace", func(*http.Request) {}, false},
-		{"connection_obtained", func(r *http.Request) {
-			tr := httptrace.ContextClientTrace(r.Context())
-			tr.GetConn("bps.openai.com:443")
-			tr.GotConn(httptrace.GotConnInfo{})
-		}, false},
-		{"header_started", func(r *http.Request) {
-			tr := httptrace.ContextClientTrace(r.Context())
-			tr.GetConn("bps.openai.com:443")
-			tr.WroteHeaderField("Authorization", []string{"secret"})
-		}, false},
-		{"body_read_without_trace", func(r *http.Request) {
-			tr := httptrace.ContextClientTrace(r.Context())
-			tr.GetConn("bps.openai.com:443")
-			_, _ = r.Body.Read(make([]byte, 1))
-		}, false},
-		{"replay_body_read", func(r *http.Request) {
-			tr := httptrace.ContextClientTrace(r.Context())
-			tr.GetConn("bps.openai.com:443")
-			b, _ := r.GetBody()
-			defer func() { _ = b.Close() }()
-			_, _ = b.Read(make([]byte, 1))
-		}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-			account := excelAccount()
-			account.Extra["openai_excel_bps_mihomo"] = true
-			first, second := &bpsTestLease{}, &bpsTestLease{}
-			acquired, calls := 0, 0
-			acquire := func(_ context.Context, _ string, excluded ...string) (string, excelBPSLease, error) {
-				acquired++
-				if acquired == 1 {
-					require.Empty(t, excluded)
-					return "http://127.0.0.1:19000", first, nil
-				}
-				require.Equal(t, []string{"http://127.0.0.1:19000"}, excluded)
-				require.Equal(t, 1, first.releases)
-				return "http://127.0.0.1:19001", second, nil
-			}
-			upstream := &bpsTestUpstream{send: func(r *http.Request, proxy string) (*http.Response, error) {
-				calls++
-				defer func() { _ = r.Body.Close() }()
-				if calls == 1 {
-					tc.evidence(r)
-					return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNRESET}
-				}
-				require.Equal(t, "http://127.0.0.1:19001", proxy)
-				b, err := io.ReadAll(r.Body)
-				require.NoError(t, err)
-				require.Equal(t, "original body", string(b))
-				require.Equal(t, "Bearer bearer-secret", r.Header.Get("Authorization"))
-				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("response"))}, nil
-			}}
-			s := &OpenAIGatewayService{httpUpstream: upstream}
-			resp, lease, _, err := s.doExcelBPSRequest(context.Background(), c, account, "private-session", []byte("original body"), "bearer-secret", "account-secret", acquire)
-			require.Equal(t, 1, first.releases)
-			require.Equal(t, 1, first.failures)
-			if tc.retry {
-				require.NoError(t, err)
-				require.Equal(t, 2, calls)
-				require.Equal(t, 2, acquired)
-				require.Zero(t, second.releases, "caller owns lease until response closes")
-				require.NoError(t, resp.Body.Close())
-				lease.Release()
-				require.Equal(t, 1, second.releases)
-				_, set := c.Get(OpsUpstreamErrorMessageKey)
-				require.False(t, set, "recovered attempt is not the terminal upstream error")
-			} else {
-				require.Error(t, err)
-				require.Nil(t, resp)
-				require.Nil(t, lease)
-				require.Equal(t, 1, calls)
-				require.Equal(t, 1, acquired)
-			}
-		})
-	}
-}
-
-func TestExcelBPSFailoverBudgetAndCancellation(t *testing.T) {
-	for _, scenario := range []string{"twice_failed", "cancelled", "deadline", "http_403", "response_and_error", "pool_exhausted", "static_proxy"} {
+func TestExcelBPSWarpNeverRetriesTransportFailures(t *testing.T) {
+	for _, scenario := range []string{"dial_failure", "connection_obtained", "header_started", "body_read", "replay_body_read", "cancelled", "deadline", "http_403", "response_and_error"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			account := excelAccount()
-			account.Extra["openai_excel_bps_mihomo"] = scenario != "static_proxy"
-			leases := []*bpsTestLease{}
+			account.Extra["openai_excel_bps_mihomo"] = true
+			account.Proxy = &Proxy{Protocol: "http", Host: "legacy-proxy", Port: 8080}
 			acquired, calls := 0, 0
 			acquire := func(context.Context, string, ...string) (string, excelBPSLease, error) {
 				acquired++
-				if scenario == "pool_exhausted" && acquired == 2 {
-					return "", nil, errors.New("no eligible nodes")
-				}
-				l := &bpsTestLease{}
-				leases = append(leases, l)
-				return fmt.Sprintf("http://127.0.0.1:%d", 19000+acquired), l, nil
+				return "http://legacy-proxy:8080", &bpsTestLease{}, nil
 			}
-			upstream := &bpsTestUpstream{send: func(r *http.Request, _ string) (*http.Response, error) {
+			upstream := &bpsTestUpstream{send: func(r *http.Request, proxy string) (*http.Response, error) {
 				calls++
-				defer func() { _ = r.Body.Close() }()
-				httptrace.ContextClientTrace(r.Context()).GetConn("bps.openai.com:443")
-				if scenario == "http_403" {
-					return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader("denied"))}, nil
-				}
-				if scenario == "response_and_error" {
-					return &http.Response{StatusCode: 502, Body: io.NopCloser(strings.NewReader("failed"))}, io.EOF
-				}
-				if scenario == "cancelled" {
+				require.Equal(t, OpenAIWarpProxyURL(), proxy)
+				require.NotEmpty(t, proxy)
+				trace := httptrace.ContextClientTrace(r.Context())
+				trace.GetConn("bps.openai.com:443")
+				switch scenario {
+				case "connection_obtained":
+					trace.GotConn(httptrace.GotConnInfo{})
+				case "header_started":
+					trace.WroteHeaderField("Authorization", []string{"secret"})
+				case "body_read":
+					_, _ = r.Body.Read(make([]byte, 1))
+				case "replay_body_read":
+					replay, err := r.GetBody()
+					require.NoError(t, err)
+					_, _ = replay.Read(make([]byte, 1))
+					_ = replay.Close()
+				case "cancelled":
 					cancel()
 					return nil, context.Canceled
-				}
-				if scenario == "deadline" {
+				case "deadline":
 					return nil, context.DeadlineExceeded
+				case "http_403":
+					return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader("denied"))}, nil
+				case "response_and_error":
+					return &http.Response{StatusCode: 502, Body: io.NopCloser(strings.NewReader("failed"))}, io.EOF
 				}
-				return nil, io.EOF
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNRESET}
 			}}
 			s := &OpenAIGatewayService{httpUpstream: upstream}
-			resp, lease, _, err := s.doExcelBPSRequest(ctx, c, account, "session", []byte("body"), "token", "account", acquire)
+			resp, lease, proxy, err := s.doExcelBPSRequest(ctx, c, account, "session", []byte("body"), "token", "account", acquire)
+			require.Equal(t, OpenAIWarpProxyURL(), proxy)
+			require.Zero(t, acquired)
+			require.Equal(t, 1, calls)
+			require.Nil(t, lease)
 			if scenario == "http_403" {
 				require.NoError(t, err)
 				require.Equal(t, 403, resp.StatusCode)
 				require.NoError(t, resp.Body.Close())
-				lease.Release()
 			} else {
 				require.Error(t, err)
-				require.Nil(t, lease)
-			}
-			expected := 1
-			if scenario == "twice_failed" {
-				expected = 2
-			}
-			require.Equal(t, expected, calls)
-			for _, l := range leases {
-				require.Equal(t, 1, l.releases)
-				if scenario == "cancelled" || scenario == "deadline" || scenario == "http_403" {
-					require.Zero(t, l.failures)
-				} else {
-					require.Equal(t, 1, l.failures)
-				}
-			}
-			if scenario == "pool_exhausted" {
-				require.ErrorIs(t, err, errExcelBPSProxyUnavailable)
-			}
-			if scenario == "static_proxy" {
-				require.Zero(t, acquired)
+				require.Nil(t, resp)
 			}
 		})
 	}
@@ -240,7 +143,7 @@ func TestExcelBPSTransportErrorClassification(t *testing.T) {
 }
 
 // Exercise actual net/http tracing without listening sockets or external traffic.
-func TestExcelBPSFailoverRealHTTPTransport(t *testing.T) {
+func TestExcelBPSWarpRealHTTPTransportNeverReplays(t *testing.T) {
 	for _, sent := range []bool{false, true} {
 		t.Run(fmt.Sprintf("sent_%t", sent), func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -250,7 +153,7 @@ func TestExcelBPSFailoverRealHTTPTransport(t *testing.T) {
 			acquired, calls := 0, 0
 			acquire := func(context.Context, string, ...string) (string, excelBPSLease, error) {
 				acquired++
-				return fmt.Sprintf("http://127.0.0.1:%d", 19000+acquired), &bpsTestLease{}, nil
+				return "http://legacy-proxy:8080", &bpsTestLease{}, nil
 			}
 			observed := make(chan string, 1)
 			transport := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -259,7 +162,7 @@ func TestExcelBPSFailoverRealHTTPTransport(t *testing.T) {
 				}
 				local, remote := net.Pipe()
 				go func() {
-					defer func() { _ = remote.Close() }()
+					defer remote.Close()
 					req, e := http.ReadRequest(bufio.NewReader(remote))
 					if e != nil {
 						observed <- "read error"
@@ -268,33 +171,27 @@ func TestExcelBPSFailoverRealHTTPTransport(t *testing.T) {
 					b, _ := io.ReadAll(req.Body)
 					_ = req.Body.Close()
 					observed <- string(b)
-					// Drop after accepting the POST, before returning response headers.
 				}()
 				return local, nil
 			}}
 			defer transport.CloseIdleConnections()
 			client := &http.Client{Transport: transport}
-			upstream := &bpsTestUpstream{send: func(r *http.Request, _ string) (*http.Response, error) {
+			upstream := &bpsTestUpstream{send: func(r *http.Request, proxy string) (*http.Response, error) {
 				calls++
-				if calls == 2 {
-					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok"))}, nil
-				}
-				r.URL.Scheme = "http" // in-memory peer; no DNS, socket or TLS bypass in production
+				require.Equal(t, OpenAIWarpProxyURL(), proxy)
+				r.URL.Scheme = "http" // in-memory peer only
 				return client.Do(r)
 			}}
 			s := &OpenAIGatewayService{httpUpstream: upstream}
-			resp, lease, _, err := s.doExcelBPSRequest(context.Background(), c, account, "session", []byte("must not duplicate"), "token", "account", acquire)
+			resp, lease, proxy, err := s.doExcelBPSRequest(context.Background(), c, account, "session", []byte("must not duplicate"), "token", "account", acquire)
+			require.Error(t, err)
+			require.Nil(t, resp)
+			require.Nil(t, lease)
+			require.Equal(t, OpenAIWarpProxyURL(), proxy)
+			require.Equal(t, 1, calls)
+			require.Zero(t, acquired)
 			if sent {
-				require.Error(t, err)
-				require.Equal(t, 1, calls)
-				require.Equal(t, 1, acquired)
 				require.Equal(t, "must not duplicate", <-observed)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, 2, calls)
-				require.Equal(t, 2, acquired)
-				require.NoError(t, resp.Body.Close())
-				lease.Release()
 			}
 		})
 	}
@@ -330,7 +227,7 @@ func TestExcelBPSTransportAndStreamFailureAreServerErrors(t *testing.T) {
 	}
 }
 
-func TestExcelBPSAttachmentLeaseCannotChangeExitOrReleaseOwner(t *testing.T) {
+func TestExcelBPSAttachmentPinnedLegacyLeaseIsNotUsedForOpenAI(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
 			lease := &bpsTestLease{}
@@ -341,28 +238,26 @@ func TestExcelBPSAttachmentLeaseCannotChangeExitOrReleaseOwner(t *testing.T) {
 			calls := 0
 			upstream := &bpsTestUpstream{send: func(r *http.Request, proxy string) (*http.Response, error) {
 				calls++
-				require.Equal(t, "http://127.0.0.1:19007", proxy)
+				require.Equal(t, OpenAIWarpProxyURL(), proxy)
 				if fail {
-					httptrace.ContextClientTrace(r.Context()).GetConn("bps.openai.com:443")
 					return nil, errors.New("dial failed")
 				}
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok"))}, nil
 			}}
 			svc := openAIClientToolsTestService(nil)
 			svc.httpUpstream = upstream
-			resp, borrowed, _, err := svc.doExcelBPSRequest(context.Background(), c, account, "scope", []byte("{}"), "token", "account", pinnedExcelBPSAcquire("http://127.0.0.1:19007", lease))
+			resp, borrowed, proxy, err := svc.doExcelBPSRequest(context.Background(), c, account, "scope", []byte("{}"), "token", "account", pinnedExcelBPSAcquire("http://127.0.0.1:19007", lease))
 			if fail {
 				require.Error(t, err)
-				require.Equal(t, 1, lease.failures)
 			} else {
 				require.NoError(t, err)
 				require.NoError(t, resp.Body.Close())
-				borrowed.Release()
 			}
+			require.Equal(t, OpenAIWarpProxyURL(), proxy)
+			require.Nil(t, borrowed)
 			require.Equal(t, 1, calls)
+			require.Zero(t, lease.failures)
 			require.Zero(t, lease.releases)
-			lease.Release()
-			require.Equal(t, 1, lease.releases)
 		})
 	}
 }

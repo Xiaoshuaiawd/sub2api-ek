@@ -77,7 +77,7 @@ func TestBuildCodexHarvestFlowSnapshotAndStages(t *testing.T) {
 	account := ticketTestAccount(2)
 	account.Name = "20x"
 	account.Extra = map[string]any{
-		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
+		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 			AccountID:  2,
 			Model:      "gpt-6-astra",
 			State:      fakeCodexTicketState(292),
@@ -89,7 +89,7 @@ func TestBuildCodexHarvestFlowSnapshotAndStages(t *testing.T) {
 		},
 	}
 	recordCodexHarvestProbe(account, "gpt-6-astra", "success", "airport-node-2", "", 200, 292, 10, 292, 10, true)
-	recordCodexHarvestTicketStore(account, &openAICodexTicket{Model: "gpt-6-astra", Length: 292, Blocks: 10}, false)
+	recordCodexHarvestTicketStore(account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), Model: "gpt-6-astra", Length: 292, Blocks: 10}, false)
 	recordCodexHarvestSelect(account, "gpt-6-astra", "selected", "", "")
 
 	snapshot := BuildCodexHarvestFlow(context.Background(), &config.Config{
@@ -136,7 +136,7 @@ func TestBuildCodexHarvestFlowSkipHarvestAccount(t *testing.T) {
 	account.Name = "5x"
 	account.Extra = map[string]any{
 		OpenAICodexSkipHarvestExtraKey: true,
-		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
+		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 			AccountID:  5,
 			Model:      "gpt-6-astra",
 			State:      fakeCodexTicketState(292),
@@ -177,7 +177,7 @@ func TestBuildCodexHarvestFlowAppliesRuntimeEnabled(t *testing.T) {
 	account := ticketTestAccount(2)
 	account.Name = "20x"
 	account.Extra = map[string]any{
-		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
+		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
 			AccountID:  2,
 			Model:      "gpt-6-astra",
 			State:      fakeCodexTicketState(292),
@@ -415,7 +415,8 @@ func TestHarvestFlowPersistFailureKeepsMemory(t *testing.T) {
 	require.Empty(t, store.events)
 }
 
-func TestExternalHarvestProxyDoesNotQueryOrInheritSidecar(t *testing.T) {
+func TestHarvestFlowReportsWarpInsteadOfLegacyProxy(t *testing.T) {
+	t.Setenv("OPENAI_WARP_PROXY_URL", "socks5h://warp-test.invalid:1080")
 	resetCodexHarvestFlow()
 	t.Cleanup(resetCodexHarvestFlow)
 	var queries atomic.Int32
@@ -427,19 +428,17 @@ func TestExternalHarvestProxyDoesNotQueryOrInheritSidecar(t *testing.T) {
 	sidecarControllerCache.Store(&cachedSidecarController{until: time.Now().Add(time.Hour), controller: server.URL})
 	t.Cleanup(func() { sidecarControllerCache.Store(nil) })
 	recordCodexHarvestNode("previous-mihomo-node", "LoadBalance", 1)
-	for _, proxy := range []string{"http://user:password@residential.example:8080", ""} {
+	for _, proxy := range []string{"http://user:password@residential.example:8080", "", mihomo.Endpoint} {
 		snapshot := BuildCodexHarvestFlow(context.Background(), &config.Config{Gateway: config.GatewayConfig{OpenAICodexTicket: config.OpenAICodexTicketConfig{HarvestProxyURL: proxy}}}, nil, nil)
+		require.Equal(t, "socks5h://warp-test.invalid:1080", snapshot.Harvest.HarvestProxy)
 		require.Empty(t, snapshot.Sidecar.Error)
 		require.Empty(t, snapshot.Sidecar.Now)
 		require.Empty(t, snapshot.Stages[0].Node)
 		require.NotEqual(t, "fail", snapshot.Stages[0].Status)
 		require.False(t, snapshot.Sidecar.Reachable, "configuration is not a health probe")
-		require.Empty(t, watchCodexHarvestExit(proxy)())
-		if proxy == "" {
-			require.Equal(t, "unconfigured", snapshot.Sidecar.Mode)
-		} else {
-			require.Equal(t, "external", snapshot.Sidecar.Mode)
-		}
+		require.Empty(t, watchCodexHarvestExit(OpenAIWarpProxyURL())())
+		require.Equal(t, "external", snapshot.Sidecar.Mode)
+		require.Equal(t, "external_proxy", snapshot.Stages[0].Detail)
 	}
 	require.Zero(t, queries.Load())
 	local := observeCodexHarvestProxy(context.Background(), mihomo.Endpoint)

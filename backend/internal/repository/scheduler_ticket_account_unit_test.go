@@ -108,7 +108,7 @@ func TestSchedulerTicketRedisToGateway(t *testing.T) {
 		Status: service.StatusActive, Schedulable: true, GroupIDs: []int64{groupID}, Concurrency: 10,
 		Credentials: map[string]any{"chatgpt_account_id": "synthetic", "email": "fixture@example.invalid", "plan_type": "pro"},
 		Extra: map[string]any{"codex_turn_ticket:gpt-6-astra": map[string]any{
-			"state": "gAAAAA" + strings.Repeat("B", 286), "length": 292,
+			"state": "gAAAAA" + strings.Repeat("B", 286), "length": 292, "harvest_proxy_url": service.OpenAIWarpProxyURL(),
 			"identity":    fmt.Sprintf("%x", sha256.Sum256([]byte("synthetic\x00fixture@example.invalid"))),
 			"captured_at": time.Now(), "issued_at": time.Now(), "expires_at": time.Now().Add(30 * time.Minute),
 		}},

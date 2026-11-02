@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestForwardAsAnthropic_TransportError_ReturnsFailoverError(t *testing.T) {
+func TestForwardAsAnthropic_WarpTransportErrorIsTerminal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
@@ -36,11 +36,11 @@ func TestForwardAsAnthropic_TransportError_ReturnsFailoverError(t *testing.T) {
 
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
-	require.True(t, errors.As(err, &failoverErr), "transport error should return UpstreamFailoverError for handler failover, got: %T", err)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.False(t, errors.As(err, &failoverErr), "shared WARP failure must not rotate accounts")
+	require.Equal(t, http.StatusBadGateway, rec.Code)
 }
 
-func TestForwardAsAnthropic_TransportError_DoesNotWriteResponse(t *testing.T) {
+func TestForwardAsAnthropic_WarpTransportErrorWritesBadGateway(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
@@ -60,8 +60,8 @@ func TestForwardAsAnthropic_TransportError_DoesNotWriteResponse(t *testing.T) {
 	account := rawChatCompletionsTestAccount()
 	_, _ = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 
-	require.Equal(t, http.StatusOK, rec.Code, "transport error must not write HTTP response — handler owns the response for failover")
-	require.Empty(t, rec.Body.String(), "response body must be empty so handler can write the correct error or failover")
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Contains(t, rec.Body.String(), "WARP")
 }
 
 func TestForwardAsAnthropic_TransportError_ClientCanceled_NoFailover(t *testing.T) {

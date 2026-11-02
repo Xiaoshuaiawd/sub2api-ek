@@ -18,6 +18,19 @@ type harvestCollection interface {
 	Close() error
 }
 
+// A mandatory WARP deployment has one node-local exit. Preserve the existing
+// parallel request budget without leasing or reporting unrelated Mihomo nodes.
+type warpHarvestCollection struct{}
+
+func (warpHarvestCollection) Next(ctx context.Context, _ int) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	return "warp", OpenAIWarpProxyURL(), nil
+}
+
+func (warpHarvestCollection) Close() error { return nil }
+
 type parallelHarvestOutcome struct {
 	result        codexHarvestProbeResult
 	node, session string
@@ -29,6 +42,13 @@ type parallelHarvestOutcome struct {
 func (s *OpenAIGatewayService) executeParallelHarvest(ctx context.Context, req ManualHarvestRequest, account *Account, emit func(ManualHarvestProgress)) (err error) {
 	if s.codexTicketChatHeld(account.ID) {
 		return errors.New("account is in an active conversation")
+	}
+	if account.Platform == PlatformOpenAI {
+		req.CollectLanes = min(req.CollectLanes, req.MaxAttempts)
+		if openAICodexTicketTargetLength(account, s.openAICodexTicketConfig()) == 780 {
+			req.CollectLanes = min(req.CollectLanes, max(1, req.MaxAttempts/2))
+		}
+		return s.runParallelHarvest(ctx, req, account, emit, warpHarvestCollection{})
 	}
 	if s.openAICodexTicketHarvestIPPoolEnabled(ctx) {
 		return errors.New("parallel collection requires the managed Mihomo proxy; the IP pool harvests on a single lane")

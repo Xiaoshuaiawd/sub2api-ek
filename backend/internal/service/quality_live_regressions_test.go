@@ -86,6 +86,7 @@ func TestQualityLiveModelListCredentialErrorIsStructured(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"code":"token_revoked","message":"synthetic-private-provider-text"}}`))
 	}))
 	defer server.Close()
+	useCodexModelsTestWARP(t, server)
 	original := chatgptCodexModelsURL
 	chatgptCodexModelsURL = server.URL
 	t.Cleanup(func() { chatgptCodexModelsURL = original })

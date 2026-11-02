@@ -127,7 +127,7 @@ func TestExcelBPSInvalidEncryptedContentRecoversSameRoute(t *testing.T) {
 				require.Len(t, upstream.requests, 2)
 				require.True(t, first.closed.Load())
 				require.True(t, second.closed.Load())
-				require.Equal(t, account.Proxy.URL(), upstream.lastProxyURL)
+				require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
 				require.Equal(t, "gpt-5.4", result.Model)
 				require.Equal(t, "gpt-5.6-sol", result.UpstreamModel)
 				require.Equal(t, 10, result.Usage.InputTokens)

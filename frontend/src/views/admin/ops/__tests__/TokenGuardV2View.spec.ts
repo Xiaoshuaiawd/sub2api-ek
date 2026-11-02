@@ -145,7 +145,7 @@ describe('TokenGuardV2View', () => {
     expect(wrapper.findAll('input[type="password"]').map(input => input.element.value)).toEqual(['', ''])
 
     expect(wrapper.text()).toContain('SOCKS5H')
-    await wrapper.get('#token-guard-v2-proxy').setValue('proxy:8')
+    expect(wrapper.get('#token-guard-v2-proxy').attributes('disabled')).toBeDefined()
 
     const saveButton = wrapper.findAll('button').find(button => button.text() === 'tokenGuardV2.save')!
     expect(saveButton.attributes()).toMatchObject({ type: 'submit', form: 'token-guard-v2-editor' })
@@ -154,13 +154,17 @@ describe('TokenGuardV2View', () => {
     expect(api.updateGuard).toHaveBeenCalledWith(42, expect.objectContaining({
       credential_mode: 'password_totp',
       proxy_source: 'managed_proxy',
-      proxy_id: 8,
+      proxy_id: 7,
       password: '',
       totp_secret: '',
     }))
   })
 
-  it('saves the managed Mihomo pool without a proxy id', async () => {
+  it('preserves a legacy Mihomo selection while WARP is required', async () => {
+    const data = await api.listGuard()
+    data.accounts[0].login_config.proxy_source = 'mihomo'
+    data.accounts[0].login_config.proxy_id = null
+    api.listGuard.mockResolvedValue(data)
     wrapper = mount(TokenGuardV2View, {
       global: {
         stubs: {
@@ -177,7 +181,7 @@ describe('TokenGuardV2View', () => {
     await flushPromises()
 
     await wrapper.findAll('button').find(button => button.text() === 'tokenGuardV2.edit')!.trigger('click')
-    await wrapper.get('#token-guard-v2-proxy').setValue('mihomo')
+    expect(wrapper.get('#token-guard-v2-proxy').attributes('disabled')).toBeDefined()
     await wrapper.get('#token-guard-v2-editor').trigger('submit')
     await flushPromises()
 
@@ -476,6 +480,19 @@ describe('managed re-login availability', () => {
     expect(runtime.text()).toContain('tokenGuardV2.runtimeReasons.runtime_install_failed')
     expect(runtime.text()).toContain('tokenGuardV2.runtimeManaged')
   })
+
+  it('shows why a worker without WARP isolation cannot run', async () => {
+    const data = await api.listGuard()
+    api.listGuard.mockResolvedValue({
+      ...data, worker: { mode: 'external', state: 'unavailable', reason: 'warp_isolation_required' }
+    })
+    wrapper = mount(TokenGuardV2View, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Icon: true, SmartOpsNav: true } }
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="reauth-runtime-status"]').text()).toContain('tokenGuardV2.runtimeReasons.warp_isolation_required')
+    expect(wrapper.get('option[value="session_studio"]').attributes('disabled')).toBeDefined()
+  })
 })
 
 async function mountControls() {
@@ -565,12 +582,12 @@ it('preserves legacy engine choices when only concurrency changes', async () => 
   expect(api.saveRuntime).toHaveBeenCalledWith({ engine: '', worker_concurrency: 4 })
 })
 
-it('uses local proxies for email OTP under the remote global engine', async () => {
+it('keeps legacy proxy selection disabled for both login modes', async () => {
   const data = await api.listGuard(); data.runtime_settings.engine = 'session_studio'
   api.listGuard.mockResolvedValue(data)
   const view = await mountControls()
   await view.findAll('button').find(button => button.text() === 'tokenGuardV2.edit')!.trigger('click')
   expect(view.get('#token-guard-v2-proxy').attributes('disabled')).toBeDefined()
   await view.get('input[value="email_otp_url"]').setValue()
-  expect(view.get('#token-guard-v2-proxy').attributes('disabled')).toBeUndefined()
+  expect(view.get('#token-guard-v2-proxy').attributes('disabled')).toBeDefined()
 })

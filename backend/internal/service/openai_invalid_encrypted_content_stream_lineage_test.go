@@ -304,6 +304,7 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentAfterOutputStri
 		})
 	}))
 	defer wsServer.Close()
+	setLocalWarpProxy(t, wsServer.URL)
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false

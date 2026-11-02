@@ -55,12 +55,14 @@ func (u *blockingOpenAIResponseHeaderUpstream) DoWithTLS(req *http.Request, _ st
 func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := &blockingOpenAIResponseHeaderUpstream{canceled: make(chan struct{})}
+	repo := &bridgeTransportAccountRepo{}
 	svc := &OpenAIGatewayService{
 		cfg: &config.Config{Gateway: config.GatewayConfig{
 			OpenAIFirstOutputTimeoutSeconds: 1,
 			MaxLineSize:                     defaultMaxLineSize,
 		}},
 		httpUpstream: upstream,
+		accountRepo:  repo,
 	}
 	body := []byte(`{"model":"gpt-5.5","stream":true,"reasoning":{"effort":"low"},"input":"hello"}`)
 	rec := httptest.NewRecorder()
@@ -77,12 +79,13 @@ func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T)
 
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusGatewayTimeout, failoverErr.StatusCode)
-	require.Contains(t, string(failoverErr.ResponseBody), "first_output_timeout")
-	require.True(t, failoverErr.SafeToFailoverAfterWrite)
+	require.False(t, errors.As(err, &failoverErr))
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Zero(t, repo.unschedules)
+	require.Nil(t, account.TempUnschedulableUntil)
 	require.Less(t, time.Since(started), 1300*time.Millisecond)
-	require.Empty(t, rec.Body.String())
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Contains(t, rec.Body.String(), "WARP proxy or upstream connection failed")
 	select {
 	case <-upstream.canceled:
 	default:
@@ -175,9 +178,8 @@ func TestNewOpenAIFirstOutputTimeoutErrorRecordsCallerProxyAttribution(t *testin
 	require.Equal(t, "first_output_timeout", events[0].Kind)
 	require.Nil(t, events[0].ProxyID)
 	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
-	require.NotNil(t, events[1].ProxyID)
-	require.Equal(t, proxyID, *events[1].ProxyID)
-	require.Equal(t, "ws-proxy", events[1].ProxyName)
+	require.Nil(t, events[1].ProxyID)
+	require.Equal(t, opsProxyNameUnknown, events[1].ProxyName)
 }
 
 func TestOpenAIFirstOutputTimeoutForReasoningEffort(t *testing.T) {

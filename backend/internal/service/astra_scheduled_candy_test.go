@@ -51,7 +51,7 @@ func TestScheduledAstraCandyIsObservationOnly(t *testing.T) {
 			calls := 0
 			s.httpUpstream = &harvestProxyUpstream{do: func(req *http.Request, proxy string) (*http.Response, error) {
 				calls++
-				require.Equal(t, "http://source.invalid:8080", proxy)
+				require.Equal(t, OpenAIWarpProxyURL(), proxy)
 				require.Equal(t, h.Get("Authorization"), req.Header.Get("Authorization"))
 				require.Equal(t, ticket.State, req.Header.Get(openAICodexTurnStateHeader))
 				require.Equal(t, strings.Join(ticket.HarvestCookies, "; "), req.Header.Get("Cookie"))

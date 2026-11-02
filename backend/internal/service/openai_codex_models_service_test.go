@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
@@ -1760,6 +1761,7 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -1813,6 +1815,7 @@ func TestFetchCodexModelsManifestAgentIdentityUsesAssertionWithoutOAuthToken(t *
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -1869,6 +1872,7 @@ func TestFetchCodexModelsManifestAgentIdentityRecoversInvalidTaskOnce(t *testing
 	defer server.Close()
 
 	originalModelsURL := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	t.Cleanup(func() { chatgptCodexModelsURL = originalModelsURL })
 	originalAuthBase := openAIAgentIdentityAuthAPIBaseURL
@@ -1906,6 +1910,7 @@ func TestFetchCodexModelsManifestAgentIdentityRedactsUpstreamErrors(t *testing.T
 	}))
 	defer server.Close()
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	t.Cleanup(func() { chatgptCodexModelsURL = original })
 
@@ -1928,6 +1933,7 @@ func TestFetchCodexModelsManifestDefaultClientVersion(t *testing.T) {
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -1951,6 +1957,7 @@ func TestFetchCodexModelsManifestNotModified(t *testing.T) {
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -1991,6 +1998,7 @@ func TestFetchCodexModelsManifestUpstreamError(t *testing.T) {
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -2065,7 +2073,7 @@ func TestFetchCodexModelsManifestAPIKeyCustomUpstream(t *testing.T) {
 	if gotRequest.Header.Get("chatgpt-account-id") != "" {
 		t.Errorf("chatgpt-account-id must not be sent to API key upstream: got %q", gotRequest.Header.Get("chatgpt-account-id"))
 	}
-	if gotProxyURL != "" || gotAccountID != 2 || gotConcurrency != 3 {
+	if gotProxyURL != OpenAIWarpProxyURL() || gotAccountID != 2 || gotConcurrency != 3 {
 		t.Errorf("upstream routing metadata: proxy=%q account_id=%d concurrency=%d", gotProxyURL, gotAccountID, gotConcurrency)
 	}
 	models := decodeCodexManifestModels(t, manifest.Body)
@@ -2449,6 +2457,7 @@ func TestFetchCodexModelsManifestOAuthPreservesResponsesLite(t *testing.T) {
 	}))
 	defer server.Close()
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -2555,6 +2564,7 @@ func TestFetchCodexModelsManifestAcceptsConfiguredLimitAboveLegacyBoundary(t *te
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -3314,6 +3324,7 @@ func TestFetchCodexModelsManifestOAuth401MarksAccountUnschedulable(t *testing.T)
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -3338,6 +3349,7 @@ func TestFetchCodexModelsManifestOAuth401TokenRevokedDisablesAccount(t *testing.
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -3375,6 +3387,7 @@ func TestFetchCodexModelsManifestAgentIdentity401DoesNotDisableAccount(t *testin
 	defer server.Close()
 
 	original := chatgptCodexModelsURL
+	useCodexModelsTestWARP(t, server)
 	chatgptCodexModelsURL = server.URL
 	defer func() { chatgptCodexModelsURL = original }()
 
@@ -3485,6 +3498,24 @@ func TestFetchCodexModelsManifestAPIKeyUsesOfficialOpenAIModelsEndpoint(t *testi
 
 // --- OAuth manifest 账号级缓存（统一缓存策略） ---
 
+// useCodexModelsTestWARP routes requests through a local proxy to the test
+// upstream. This exercises mandatory proxy use without depending on WARP.
+func useCodexModelsTestWARP(t *testing.T, upstream *httptest.Server) *atomic.Int32 {
+	t.Helper()
+	target, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
+	forward := httputil.NewSingleHostReverseProxy(target)
+	forward.Transport = &http.Transport{Proxy: nil}
+	calls := &atomic.Int32{}
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		forward.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+	t.Setenv("OPENAI_WARP_PROXY_URL", proxy.URL)
+	return calls
+}
+
 // newCodexModelsOAuthCacheServer 返回一个记录调用次数、返回给定 manifest 的
 // ChatGPT Codex models 测试上游。
 func newCodexModelsOAuthCacheServer(t *testing.T, body string) (*httptest.Server, *atomic.Int32) {
@@ -3496,6 +3527,10 @@ func newCodexModelsOAuthCacheServer(t *testing.T, body string) (*httptest.Server
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(server.Close)
+	proxyCalls := useCodexModelsTestWARP(t, server)
+	t.Cleanup(func() {
+		require.Equal(t, calls.Load(), proxyCalls.Load(), "OAuth requests must traverse the WARP proxy")
+	})
 	original := chatgptCodexModelsURL
 	chatgptCodexModelsURL = server.URL
 	t.Cleanup(func() { chatgptCodexModelsURL = original })
@@ -3540,6 +3575,7 @@ func TestFetchCodexModelsManifestOAuthStaleServesOldValueAndRefreshesInBackgroun
 		_, _ = w.Write([]byte(`{"models":[{"slug":"new"}]}`))
 	}))
 	t.Cleanup(server.Close)
+	useCodexModelsTestWARP(t, server)
 	original := chatgptCodexModelsURL
 	chatgptCodexModelsURL = server.URL
 	t.Cleanup(func() { chatgptCodexModelsURL = original })
@@ -3606,6 +3642,7 @@ func TestFetchCodexModelsManifestOAuthOverdueSynchronousRefreshAndFailure(t *tes
 			_, _ = w.Write([]byte(`{"models":[{"slug":"stale"}]}`))
 		}))
 		t.Cleanup(server.Close)
+		useCodexModelsTestWARP(t, server)
 		original := chatgptCodexModelsURL
 		chatgptCodexModelsURL = server.URL
 		t.Cleanup(func() { chatgptCodexModelsURL = original })
@@ -3642,6 +3679,7 @@ func TestFetchCodexModelsManifestOAuthOverdueSynchronousRefreshAndFailure(t *tes
 			_, _ = w.Write([]byte(`{"models":[{"slug":"stale"}]}`))
 		}))
 		t.Cleanup(server.Close)
+		useCodexModelsTestWARP(t, server)
 		original := chatgptCodexModelsURL
 		chatgptCodexModelsURL = server.URL
 		t.Cleanup(func() { chatgptCodexModelsURL = original })
@@ -3690,6 +3728,7 @@ func TestFetchCodexModelsManifestOAuthSharedAcrossGroupsWithIndependentFiltering
 		_, _ = w.Write([]byte(`{"models":[{"slug":"model-a"},{"slug":"model-b"}]}`))
 	}))
 	t.Cleanup(server.Close)
+	useCodexModelsTestWARP(t, server)
 	original := chatgptCodexModelsURL
 	chatgptCodexModelsURL = server.URL
 	t.Cleanup(func() { chatgptCodexModelsURL = original })
@@ -3910,6 +3949,76 @@ func TestGPT61SolAPIKeyCatalogContextWindow(t *testing.T) {
 			models := decodeCodexManifestModels(t, body)
 			require.Len(t, models, 1)
 			require.EqualValues(t, tc.want, models[0]["context_window"])
+		})
+	}
+}
+
+func TestCodexModelsWarpTransportFailureDoesNotSwitchAccount(t *testing.T) {
+	for _, platform := range []string{PlatformOpenAI, PlatformGrok} {
+		t.Run(platform, func(t *testing.T) {
+			var calls int
+			upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
+				calls++
+				if platform == PlatformOpenAI {
+					require.Equal(t, OpenAIWarpProxyURL(), proxy)
+				}
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}}
+			svc := &OpenAIGatewayService{httpUpstream: upstream}
+			request := openAIModelsRequest{url: "https://example.invalid/v1/models", useAPIKeyUpstream: true,
+				credentialAccount: &Account{ID: 1, Platform: platform, Type: AccountTypeAPIKey}, accountID: 1, accountConcurrency: 1}
+			_, err := svc.fetchOpenAIModelsUpstream(context.Background(), request, "")
+			require.Error(t, err)
+			require.Equal(t, platform != PlatformOpenAI, IsRetryableCodexModelsManifestError(err))
+			require.Equal(t, 1, calls)
+		})
+	}
+}
+
+func TestCodexModelsOAuthWarpTransportFailureDoesNotSwitchAccount(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	proxy := "http://" + listener.Addr().String()
+	require.NoError(t, listener.Close())
+	t.Setenv("OPENAI_WARP_PROXY_URL", proxy)
+	svc := &OpenAIGatewayService{}
+	request := openAIModelsRequest{url: "https://example.invalid/v1/models", credentialAccount: &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}}
+	_, err = svc.fetchOpenAIModelsUpstream(context.Background(), request, "")
+	require.Error(t, err)
+	require.False(t, IsRetryableCodexModelsManifestError(err))
+}
+
+func TestCodexModelsBodyTransportFailureRespectsAccountPlatform(t *testing.T) {
+	for _, platform := range []string{PlatformOpenAI, PlatformGrok} {
+		t.Run(platform, func(t *testing.T) {
+			upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: passthroughErrReadCloser{err: io.ErrUnexpectedEOF}}, nil
+			}}
+			svc := &OpenAIGatewayService{httpUpstream: upstream}
+			request := openAIModelsRequest{url: "https://example.invalid/v1/models", useAPIKeyUpstream: true,
+				credentialAccount: &Account{ID: 1, Platform: platform, Type: AccountTypeAPIKey}, accountID: 1, accountConcurrency: 1}
+			_, err := svc.fetchOpenAIModelsUpstream(context.Background(), request, "")
+			require.Error(t, err)
+			require.Equal(t, platform != PlatformOpenAI, IsRetryableCodexModelsManifestError(err))
+		})
+	}
+}
+
+func TestCodexModelsWarpHTTPStatusKeepsFailoverPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		status    int
+		retryable bool
+	}{{http.StatusUnauthorized, false}, {http.StatusTooManyRequests, true}, {http.StatusBadGateway, true}} {
+		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+			upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{}}`))}, nil
+			}}
+			svc := &OpenAIGatewayService{httpUpstream: upstream}
+			request := openAIModelsRequest{url: "https://example.invalid/v1/models", useAPIKeyUpstream: true,
+				credentialAccount: &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, accountID: 1, accountConcurrency: 1}
+			_, err := svc.fetchOpenAIModelsUpstream(context.Background(), request, "")
+			require.Error(t, err)
+			require.Equal(t, tc.retryable, IsRetryableCodexModelsManifestError(err))
 		})
 	}
 }

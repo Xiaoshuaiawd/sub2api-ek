@@ -1412,6 +1412,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				_ = resp.Body.Close()
 			}
 			headerGuard.close()
+			if account.Platform == PlatformOpenAI {
+				// Before response headers, a stalled shared WARP connection and
+				// a stalled upstream cannot be safely distinguished. Do not
+				// quarantine or rotate otherwise healthy accounts.
+				warpErr := &runtimeProxyEgressError{error: context.DeadlineExceeded, target: runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"}}
+				return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, warpErr, false)
+			}
 			return nil, s.newOpenAIFirstOutputTimeoutError(
 				ctx, c, account, opsUpstreamProxyID(account), opsUpstreamProxyName(account),
 				startTime, originalModel, reasoningEffortValue,

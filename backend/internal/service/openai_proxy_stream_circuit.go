@@ -233,7 +233,9 @@ func openAIProxyStreamCircuitProxyID(account *Account) (int64, bool) {
 	if account == nil || account.Platform != PlatformOpenAI || account.ProxyID == nil || *account.ProxyID <= 0 {
 		return 0, false
 	}
-	return *account.ProxyID, true
+	// OpenAI traffic is sent through the node WARP sidecar, not its saved
+	// account proxy; never quarantine or heal that unrelated proxy.
+	return 0, false
 }
 
 type openAIResponseEgressKey struct{}
@@ -242,7 +244,7 @@ type openAIResponseEgressKey struct{}
 // or the shared Account snapshot. A fallback response must not heal/blame the
 // bound primary proxy. A negative ID means the caller cannot identify egress.
 func markOpenAIResponseEgress(resp *http.Response, req *http.Request, proxyID int64) *http.Response {
-	if resp == nil || req == nil || proxyID < 0 {
+	if resp == nil || req == nil {
 		return resp
 	}
 	responseRequest := resp.Request

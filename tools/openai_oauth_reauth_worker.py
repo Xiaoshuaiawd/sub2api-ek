@@ -438,7 +438,7 @@ class WorkerAPI:
         return envelope.get("data")
 
     def runtime_concurrency(self) -> int:
-        data = self._post("/api/v1/internal/openai-reauth/runtime-settings", {})
+        data = self._post("/api/v1/internal/openai-reauth/runtime-settings", {"worker_id": self.config.worker_id, "warp_network_isolated": warp_network_isolated()})
         value = data.get("worker_concurrency") if isinstance(data, dict) else None
         if isinstance(data, dict) and "worker_concurrency" in data and value is None:
             return self.config.concurrency
@@ -468,19 +468,19 @@ class WorkerAPI:
         if time.monotonic() >= getattr(self, "_next_totp_recovery", 0):
             journal.recover(self)
             self._next_totp_recovery = time.monotonic() + 60
-        return self._post("/api/v1/internal/openai-reauth/totp-claim", {"worker_id": self.config.worker_id})
+        return self._post("/api/v1/internal/openai-reauth/totp-claim", {"worker_id": self.config.worker_id, "warp_network_isolated": warp_network_isolated()})
 
     def claim(self) -> dict[str, Any] | None:
         data = self._post(
             "/api/v1/internal/openai-reauth/claim",
-            {"worker_id": self.config.worker_id, "engines": ["local_worker", "session_studio"]},
+            {"worker_id": self.config.worker_id, "engines": ["local_worker", "session_studio"], "warp_network_isolated": warp_network_isolated()},
         )
         return data if isinstance(data, dict) else None
 
     def claim_session_export(self) -> dict[str, Any] | None:
         data = self._post(
             "/api/v1/internal/openai-reauth/session-export/claim",
-            {"worker_id": self.config.worker_id, "capabilities": ["chatgpt_session_export"]},
+            {"worker_id": self.config.worker_id, "capabilities": ["chatgpt_session_export"], "warp_network_isolated": warp_network_isolated()},
         )
         return data if isinstance(data, dict) else None
 
@@ -975,7 +975,22 @@ def _wait_for_otp(
     raise WorkerError("timed out waiting for a new mailbox verification code")
 
 
+WARP_ISOLATION_ERROR = "WARP network isolation is not confirmed; set OPENAI_WARP_WORKER_NETWORK_ISOLATED=true"
+
+
+def warp_network_isolated() -> bool:
+    return os.getenv("OPENAI_WARP_WORKER_NETWORK_ISOLATED", "").strip().lower() == "true"
+
+
+def require_warp_worker_egress(claim: dict[str, Any]) -> None:
+    if not str(claim.get("proxy_url") or "").strip():
+        raise WorkerError("proxy_unavailable")
+    if not warp_network_isolated():
+        raise WorkerError(WARP_ISOLATION_ERROR)
+
+
 def process_claim(api: WorkerAPI, protocol: SimpleNamespace | None, claim: dict[str, Any]) -> None:
+    require_warp_worker_egress(claim)
     mode = str(claim.get("credential_mode") or "email_otp_url").strip()
     if mode == "password_totp":
         process_password_claim(api, claim)
@@ -1003,8 +1018,6 @@ def process_claim(api: WorkerAPI, protocol: SimpleNamespace | None, claim: dict[
     session = None
     try:
         _best_effort_progress(api, task_id, "protocol_connecting")
-        # An empty proxy explicitly means direct connection.  Do not let the
-        # Turb project silently choose a local proxy pool for this worker.
         for bootstrap_attempt in (1, 2):
             session = protocol.ProtocolSession(
                 proxy=proxy_url or "",
@@ -1274,6 +1287,9 @@ def _siwc_password_failure(output: str, exit_code: int) -> str:
 
 
 def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
+    require_warp_worker_egress(claim)
+    if claim.get("engine") == "session_studio":
+        raise WorkerError("Session Studio cannot guarantee WARP egress")
     oauth_profile = str(claim.get("oauth_profile") or "codex")
     if oauth_profile not in {"codex", "excel", "siwc"}:
         raise WorkerError("unsupported OAuth login profile")
@@ -1505,6 +1521,7 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
 
 def process_session_export_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
     """Login to ChatGPT Web with the saved password/TOTP and return one session payload."""
+    require_warp_worker_egress(claim)
     task_id = int(claim.get("task_id") or 0)
     if task_id <= 0:
         raise WorkerError("claimed Session export task is missing task id")
@@ -1609,6 +1626,12 @@ def run_once(api: WorkerAPI, protocol: SimpleNamespace | None) -> bool:
             rotation = None  # Older APIs and unavailable recovery storage do not disrupt re-login.
         if rotation:
             try:
+                require_warp_worker_egress(rotation)
+            except WorkerError as exc:
+                LOGGER.error("2FA task=%s failed: %s", rotation.get("task_id", "?"), safe_worker_failure(exc))
+                api.totp_finish(int(rotation["task_id"]), False, "login_failed")
+                return True
+            try:
                 from .openai_totp_rotation import rotate
             except ImportError:
                 from openai_totp_rotation import rotate
@@ -1632,7 +1655,8 @@ def run_once(api: WorkerAPI, protocol: SimpleNamespace | None) -> bool:
             process_session_export_claim(api, claim)
         except Exception as exc:
             reason = session_export_error_code(exc)
-            LOGGER.error("Session export task=%s failed: %s", task_id or "?", reason)
+            diagnostic = safe_worker_failure(exc) if str(exc) == WARP_ISOLATION_ERROR else reason
+            LOGGER.error("Session export task=%s failed: %s", task_id or "?", diagnostic)
             if task_id > 0:
                 try:
                     api.session_export_fail(task_id, reason)
@@ -1658,6 +1682,8 @@ def safe_worker_failure(exc: BaseException) -> str:
     if isinstance(exc, SessionStudioError):
         return exc.diagnostic()
     raw = str(exc).strip()
+    if WARP_ISOLATION_ERROR in raw or "WARP network isolation must be confirmed" in raw:
+        return WARP_ISOLATION_ERROR
     if raw.startswith("session_studio_failed"):
         return sanitize_error(raw)  # Whole-protocol validator; never generic prose.
     if raw.startswith("local_protocol_failed"):

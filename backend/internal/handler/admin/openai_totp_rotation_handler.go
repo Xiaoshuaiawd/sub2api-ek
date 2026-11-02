@@ -103,6 +103,10 @@ func (h *OpenAIOAuthReauthHandler) ClaimTOTP(c *gin.Context) {
 		response.BadRequest(c, "Invalid worker request")
 		return
 	}
+	if !req.WarpNetworkIsolated {
+		response.BadRequest(c, "WARP network isolation must be confirmed before claiming tasks")
+		return
+	}
 	result, err := h.service.ClaimTOTPRotation(c.Request.Context(), req.WorkerID)
 	if err != nil {
 		response.ErrorFrom(c, err)

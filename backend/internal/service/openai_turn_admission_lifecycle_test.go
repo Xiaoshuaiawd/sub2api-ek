@@ -57,7 +57,7 @@ func TestOpenAITurnAdmissionDrainsCurrentRejectsNext(t *testing.T) {
 					firstModel, ticketExpiry = "gpt-5.6-sol", time.Now().Add(time.Hour)
 				}
 				a.Extra[openAICodexTicketExtraKey(firstModel)] = &openAICodexTicket{
-					AccountID: a.ID, Model: firstModel, State: fakeCodexTicketState(292), Length: 292,
+					HarvestProxyURL: OpenAIWarpProxyURL(), AccountID: a.ID, Model: firstModel, State: fakeCodexTicketState(292), Length: 292,
 					CapturedAt: time.Now(), IssuedAt: time.Now(), ExpiresAt: ticketExpiry, Identity: ticketIdentity(a),
 				}
 				upstream := newStagedPassthroughConn()

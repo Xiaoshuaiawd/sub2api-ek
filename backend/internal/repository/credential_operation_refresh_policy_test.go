@@ -29,6 +29,7 @@ func TestCredentialOperationRefreshPolicyHTTPContract(t *testing.T) {
 				_, _ = w.Write([]byte(sample.Body))
 			}))
 			defer server.Close()
+			proxyCalls := useOAuthTestWARP(t, server)
 			client := &openaiOAuthService{tokenURL: server.URL}
 			_, err := client.RefreshTokenWithClientID(context.Background(), "synthetic-old", "", "")
 			var operation *service.CredentialOperationError
@@ -36,6 +37,7 @@ func TestCredentialOperationRefreshPolicyHTTPContract(t *testing.T) {
 			require.Equal(t, sample.Category, operation.Code)
 			require.Equal(t, "token refresh failed: status 400, code "+sample.Marker, infraerrors.Message(err))
 			require.NotContains(t, err.Error(), "synthetic-private")
+			require.EqualValues(t, 1, proxyCalls.Load(), "refresh must use WARP")
 		})
 	}
 }
@@ -73,6 +75,7 @@ func TestCredentialOperationRefreshPolicyHTTPTypeInvalidGrantRace(t *testing.T) 
 		_, _ = w.Write([]byte(`{"error":{"type":"invalid_grant","message":"opaque","token":"synthetic-private"}}`))
 	}))
 	defer server.Close()
+	proxyCalls := useOAuthTestWARP(t, server)
 	old := &service.Account{ID: 42, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive,
 		Credentials: map[string]any{"refresh_token": "synthetic-old", "access_token": "synthetic-old-access", "expires_at": time.Now().Add(-time.Hour).Format(time.RFC3339)}}
 	fresh := &service.Account{ID: 42, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive,
@@ -83,6 +86,7 @@ func TestCredentialOperationRefreshPolicyHTTPTypeInvalidGrantRace(t *testing.T) 
 	result, err := service.NewOAuthRefreshAPI(repo, nil).RefreshIfNeeded(context.Background(), old, executor, time.Minute)
 	require.NoError(t, err, "the actual HTTP type invalid_grant must reach refresh race recovery")
 	require.Equal(t, int32(1), calls.Load())
+	require.EqualValues(t, 1, proxyCalls.Load(), "refresh must use WARP")
 	require.Equal(t, "synthetic-old", <-requestTokens)
 	require.Equal(t, 2, repo.reads)
 	require.Zero(t, repo.updates)

@@ -74,7 +74,7 @@ func TestExcelBPSForwardContract(t *testing.T) {
 			account.Proxy = &Proxy{Protocol: "http", Host: "127.0.0.1", Port: 7890}
 			account.Extra["openai_excel_bps_mihomo"] = false
 			result, err := svc.Forward(context.Background(), c, account, body)
-			require.Equal(t, account.Proxy.URL(), upstream.lastProxyURL)
+			require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.Equal(t, "bps.openai.com", upstream.lastReq.URL.Host)
@@ -212,7 +212,7 @@ func TestExcelBPSHTTPErrorRecordsUpstreamRejection(t *testing.T) {
 			require.Equal(t, "bps-upstream-request", attempts[0].UpstreamRequestID)
 			require.Equal(t, basispoints.ResponsesURL, attempts[0].UpstreamURL)
 			require.Equal(t, account.ID, attempts[0].AccountID)
-			require.Equal(t, "direct/no_proxy", attempts[0].ProxyName)
+			require.Equal(t, opsProxyNameUnknown, attempts[0].ProxyName)
 			if logBody {
 				require.Equal(t, "invalid_value", gjson.Get(attempts[0].Detail, "error.code").String())
 				require.Equal(t, "input[2].id", gjson.Get(attempts[0].Detail, "error.param").String())
@@ -271,10 +271,10 @@ func TestExcelBPSThreadScopeSeparatesParallelChildren(t *testing.T) {
 	require.NotEqual(t, first, second)
 }
 
-func TestExcelBPSMihomoFailsClosed(t *testing.T) {
+func TestExcelBPSLegacyMihomoSettingStillFailsClosedOnWarpError(t *testing.T) {
 	for _, identity := range []bool{false, true} {
 		t.Run(fmt.Sprint(identity), func(t *testing.T) {
-			upstream := &httpUpstreamRecorder{}
+			upstream := &httpUpstreamRecorder{err: io.EOF}
 			svc := openAIClientToolsTestService(upstream)
 			account := excelAccount()
 			account.Extra["openai_excel_bps_mihomo"] = true
@@ -287,9 +287,10 @@ func TestExcelBPSMihomoFailsClosed(t *testing.T) {
 				c.Request.Header.Set("session_id", "sticky-session")
 			}
 			_, err := svc.Forward(context.Background(), c, account, body)
-			require.ErrorContains(t, err, "basispoints_proxy_unavailable")
-			require.Equal(t, 503, rec.Code)
-			require.Nil(t, upstream.lastReq)
+			require.Error(t, err)
+			require.Equal(t, 502, rec.Code)
+			require.Len(t, upstream.requests, 1)
+			require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
 			account.Extra["openai_excel_bps"] = false
 			require.False(t, account.IsExcelBPSMihomoEnabled())
 		})

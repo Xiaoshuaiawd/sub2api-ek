@@ -96,6 +96,32 @@ main() {
     fi
     print_success "Downloaded docker-compose.yml"
 
+    # The compose file bind-mounts this guard into the WARP sidecar. Without
+    # it the sidecar must not start, since its proxy could leave WARP on failure.
+    print_info "Downloading warp-entrypoint.sh..."
+    if command_exists curl; then
+        if ! curl -fsSL "${GITHUB_RAW_URL}/warp-entrypoint.sh" -o warp-entrypoint.sh; then
+            print_error "Failed to download warp-entrypoint.sh"
+            exit 1
+        fi
+    elif ! wget -q "${GITHUB_RAW_URL}/warp-entrypoint.sh" -O warp-entrypoint.sh; then
+        print_error "Failed to download warp-entrypoint.sh"
+        exit 1
+    fi
+    print_success "Downloaded warp-entrypoint.sh"
+
+    print_info "Downloading warp-dns.py..."
+    if command_exists curl; then
+        if ! curl -fsSL "${GITHUB_RAW_URL}/warp-dns.py" -o warp-dns.py; then
+            print_error "Failed to download warp-dns.py"
+            exit 1
+        fi
+    elif ! wget -q "${GITHUB_RAW_URL}/warp-dns.py" -O warp-dns.py; then
+        print_error "Failed to download warp-dns.py"
+        exit 1
+    fi
+    print_success "Downloaded warp-dns.py"
+
     # Download .env.example
     print_info "Downloading .env.example..."
     if command_exists curl; then

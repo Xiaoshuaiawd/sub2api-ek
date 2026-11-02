@@ -16,7 +16,7 @@ import (
 )
 
 func TestAstraUnavailableRouteForwardsOriginalRequestOnce(t *testing.T) {
-	for _, state := range []string{"empty", "cooldown", "expired", "exit_unavailable"} {
+	for _, state := range []string{"empty", "cooldown", "expired"} {
 		t.Run(state, func(t *testing.T) {
 			cfg := &config.Config{}
 			cfg.Gateway.CodexGatewayPin = pinConfig()
@@ -27,17 +27,15 @@ func TestAstraUnavailableRouteForwardsOriginalRequestOnce(t *testing.T) {
 			s := &astraRoutingUpstream{cfg: cfg}
 			s.SetAstraGatewayPreparer(func(context.Context, int64) error { t.Fatal("business started a probe"); return nil })
 			s.pinNode = func(context.Context, mihomo.AstraNode) (string, func(), error) {
-				return "", func() {}, errors.New("exit unavailable")
+				t.Fatal("WARP routing must not lease an Astra node")
+				return "", nil, nil
 			}
 			pool := s.current(t.Context())
 			if state == "cooldown" {
 				pool.rotationRetryAfter = time.Now().Add(time.Minute)
 			}
-			if state == "expired" || state == "exit_unavailable" {
-				expires := time.Now().Add(time.Minute)
-				if state == "expired" {
-					expires = time.Now().Add(-time.Second)
-				}
+			if state == "expired" {
+				expires := time.Now().Add(-time.Second)
 				pool.recordSource(299, time.Now(), &codexGatewayRoute{cookie: http.Cookie{Name: "__oailb", Value: "borrowed", Path: "/"}, proxy: "borrowed-exit", expires: expires, node: mihomo.AstraNode{ID: "node", Identity: "node"}}, true)
 			}
 			for _, fail := range []bool{false, true} {
@@ -78,9 +76,7 @@ func TestAstraUnavailableRouteForwardsOriginalRequestOnce(t *testing.T) {
 			require.Equal(t, before, headers)
 			cookie, err = s.CodexGatewayPinWSHeader(300)
 			require.NoError(t, err)
-			if state != "exit_unavailable" {
-				require.Empty(t, cookie)
-			}
+			require.Empty(t, cookie)
 		})
 	}
 }

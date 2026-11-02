@@ -226,7 +226,7 @@ func TestOpenAIGatewayForwardRetriesExplicitNativeCompactHTTPFailureOnce(t *test
 	require.Equal(t, "compact_model_fallback", events[0].Reason)
 	require.Equal(t, http.StatusBadRequest, events[0].UpstreamStatusCode)
 	require.Nil(t, events[0].ProxyID)
-	require.Equal(t, opsProxyNameDirect, events[0].ProxyName)
+	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
 }
 
 func compactFallbackManagedProxyAccount() (*Account, *Proxy) {
@@ -242,9 +242,8 @@ func compactFallbackManagedProxyAccount() (*Account, *Proxy) {
 func requireCompactEventsAttributedTo(t *testing.T, events []*OpsUpstreamErrorEvent, proxy *Proxy) {
 	t.Helper()
 	for i, ev := range events {
-		require.NotNil(t, ev.ProxyID, "event %d proxy_id", i)
-		require.Equal(t, proxy.ID, *ev.ProxyID, "event %d proxy_id", i)
-		require.Equal(t, proxy.Name, ev.ProxyName, "event %d proxy_name", i)
+		require.Nil(t, ev.ProxyID, "event %d proxy_id", i)
+		require.Equal(t, opsProxyNameUnknown, ev.ProxyName, "event %d proxy_name", i)
 	}
 }
 
@@ -283,7 +282,7 @@ func TestOpenAIGatewayForwardNonStreamCompactRetryRecordsAttemptWithManagedProxy
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 2)
-	require.Equal(t, proxy.URL(), upstream.lastProxyURL)
+	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
 	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
 	events, ok := rawEvents.([]*OpsUpstreamErrorEvent)
@@ -471,7 +470,7 @@ func TestOpenAIGatewayForwardDoesNotRecurseWhenCompactFallbackAlsoFails(t *testi
 	require.Equal(t, "http_error", events[1].Kind)
 	for _, ev := range events {
 		require.Nil(t, ev.ProxyID)
-		require.Equal(t, opsProxyNameDirect, ev.ProxyName)
+		require.Equal(t, opsProxyNameUnknown, ev.ProxyName)
 	}
 }
 
@@ -516,6 +515,6 @@ func TestOpenAIPassthroughCompactFallbackSecondStreamFailureUsesStandardErrorPat
 	require.Equal(t, "compact_model_fallback", events[0].Reason)
 	require.Equal(t, "http_error", events[1].Kind)
 	require.True(t, events[1].Passthrough)
-	require.Equal(t, proxy.URL(), upstream.lastProxyURL)
+	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
 	requireCompactEventsAttributedTo(t, events, proxy)
 }

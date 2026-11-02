@@ -191,7 +191,8 @@ type OpenAIOAuthReauthService struct {
 	settings                AccountTokenGuardV2Settings
 	worker                  *reauthruntime.Manager
 	workerToken             string
-	workerLastSeen          atomic.Int64
+	workerHeartbeatMu       sync.Mutex
+	workerHeartbeats        map[string]workerHeartbeat
 	totpWorkerLastSeen      atomic.Int64
 	repo                    OpenAIOAuthReauthRepository
 	accounts                OpenAIOAuthReauthAccountReader
@@ -732,7 +733,7 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 	if settingsErr != nil {
 		return nil, settingsErr
 	}
-	s.workerLastSeen.Store(time.Now().UnixNano())
+	s.RecordWorkerHeartbeat(workerID, true)
 	var record *OpenAIOAuthReauthTaskRecord
 	var err error
 	if runtimeSettings.Engine != "" {
@@ -807,54 +808,16 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 		_ = s.repo.MarkFailed(ctx, record.ID, workerID, "selected re-login engine is unsupported by this worker")
 		return nil, nil
 	}
-	proxySource, proxyErr := normalizeReauthProxySource(stored.ProxySource, stored.ProxyID)
-	if proxyErr != nil {
-		_ = s.repo.MarkFailed(ctx, record.ID, workerID, "configured re-login proxy source is invalid")
+	// Session Studio performs login on a remote service whose egress cannot be
+	// controlled by this server. Fail closed rather than sending credentials.
+	if engine == OpenAIOAuthReauthEngineSessionStudio {
+		_ = s.repo.MarkFailed(ctx, record.ID, workerID, "Session Studio cannot guarantee WARP egress")
 		return nil, nil
 	}
-	proxyID := stored.ProxyID
-	proxyError := "configured re-login proxy is unavailable"
-	var proxyURL string
-	var release func()
-	if engine == OpenAIOAuthReauthEngineLocal {
-		switch proxySource {
-		case OpenAIOAuthReauthProxySourceAccount:
-			proxyID = account.ProxyID
-			proxyError = "configured account proxy is unavailable"
-			proxyURL, proxyErr = s.reauthProxyURL(ctx, proxyID)
-		case OpenAIOAuthReauthProxySourceManagedProxy:
-			proxyURL, proxyErr = s.reauthProxyURL(ctx, proxyID)
-		case OpenAIOAuthReauthProxySourceMihomo:
-			proxyError = "managed Mihomo proxy is unavailable"
-			if s.acquireMihomoProxy == nil {
-				proxyErr = errors.New("managed Mihomo proxy is unavailable")
-			} else {
-				proxyURL, release, proxyErr = s.acquireMihomoProxy(ctx, fmt.Sprintf("openai-reauth-task:%d", record.ID))
-			}
-		}
-	}
-	leaseStored := false
-	if release != nil {
-		defer func() {
-			if !leaseStored {
-				release()
-			}
-		}()
-	}
-	if proxyErr != nil {
-		_ = s.repo.MarkFailed(ctx, record.ID, workerID, proxyError)
-		return nil, nil
-	}
+	proxyURL := OpenAIWarpProxyURL()
 	claim := &OpenAIOAuthReauthClaim{
 		TaskID: record.ID, AccountID: record.AccountID, LoginEmail: stored.LoginEmail,
-		CredentialMode: mode, Engine: engine, ProxyURL: proxyURL, OAuthProfile: reauthTaskProfile(record), ExpectedWorkspace: account.GetCredential("chatgpt_account_id"),
-	}
-	if claim.Engine == OpenAIOAuthReauthEngineSessionStudio {
-		claim.ReloginEndpoint, claim.ReloginHeaders, err = s.sessionStudioConfig(ctx)
-		if err != nil {
-			_ = s.repo.MarkFailed(ctx, record.ID, workerID, "Session Studio configuration is unavailable")
-			return nil, nil
-		}
+		CredentialMode: mode, Engine: engine, ProxyURL: OpenAIWarpWorkerProxyURL(), OAuthProfile: reauthTaskProfile(record), ExpectedWorkspace: account.GetCredential("chatgpt_account_id"),
 	}
 	switch mode {
 	case OpenAIOAuthReauthModeEmailOTPURL:
@@ -867,13 +830,7 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 			_ = s.repo.MarkFailed(ctx, record.ID, workerID, "OTP mailbox URL is invalid")
 			return nil, nil
 		}
-		var auth *OpenAIAuthURLResult
-		var authErr error
-		if proxySource == OpenAIOAuthReauthProxySourceMihomo {
-			auth, authErr = s.oauth.GenerateAuthURLWithProxyURL(ctx, proxyURL, "", PlatformOpenAI)
-		} else {
-			auth, authErr = s.oauth.GenerateAuthURL(ctx, proxyID, "", PlatformOpenAI)
-		}
+		auth, authErr := s.oauth.GenerateAuthURLWithProxyURL(ctx, proxyURL, "", PlatformOpenAI)
 		if authErr != nil {
 			_ = s.repo.MarkFailed(ctx, record.ID, workerID, "failed to create OpenAI authorization session")
 			return nil, nil
@@ -912,10 +869,6 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 			return nil, nil
 		}
 		claim.AuthURL = auth.AuthURL
-	}
-	if release != nil {
-		s.replaceMihomoLease(record.ID, release)
-		leaseStored = true
 	}
 	return claim, nil
 }

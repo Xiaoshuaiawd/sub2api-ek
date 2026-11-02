@@ -214,7 +214,7 @@ func (s *OpenAIOAuthReauthService) ClaimSessionExportTask(ctx context.Context, w
 	if workerID == "" || len(workerID) > 128 {
 		return nil, infraerrors.BadRequest("OPENAI_REAUTH_WORKER_ID_INVALID", "worker id is required")
 	}
-	s.MarkWorkerSeen()
+	s.RecordWorkerHeartbeat(workerID, true)
 	if s.sessionExportRepo == nil {
 		return nil, infraerrors.ServiceUnavailable("OPENAI_SESSION_EXPORT_UNAVAILABLE", "ChatGPT Session export is unavailable")
 	}
@@ -247,13 +247,9 @@ func (s *OpenAIOAuthReauthService) ClaimSessionExportTask(ctx context.Context, w
 				_ = s.sessionExportRepo.FinishSessionExportTask(ctx, record.ID, workerID, OpenAISessionExportStatusFailed, "totp_unavailable")
 				return nil, nil
 			}
-			proxyURL, err := s.reauthProxyURL(ctx, account.ProxyID)
-			if err != nil {
-				_ = s.sessionExportRepo.FinishSessionExportTask(ctx, record.ID, workerID, OpenAISessionExportStatusFailed, "proxy_unavailable")
-				return nil, nil
-			}
+			proxyURL := OpenAIWarpWorkerProxyURL()
 			expectedUserID := strings.TrimSpace(account.GetCredential("chatgpt_user_id"))
-			s.workerLastSeen.Store(time.Now().UnixNano())
+			s.RecordWorkerHeartbeat(workerID, true)
 			return &OpenAISessionExportClaim{Operation: OpenAISessionExportOperation, TaskID: record.ID, AccountID: record.AccountID, LoginEmail: config.LoginEmail, Password: password, TOTPSecret: totpSecret, ProxyURL: proxyURL, ExpectedUserID: expectedUserID}, nil
 		}
 	}

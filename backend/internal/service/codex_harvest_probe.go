@@ -75,19 +75,17 @@ func mergeCookiePairs(existing, incoming []string) []string {
 	return out
 }
 
-func bindCodexHarvestEgress(ticket *openAICodexTicket, attempt codexHarvestAttempt, session string) {
+func bindCodexHarvestEgress(ticket *openAICodexTicket, _ codexHarvestAttempt, session string) {
 	if ticket == nil {
 		return
 	}
-	ticket.HarvestProxyURL = strings.TrimSpace(attempt.proxy)
-	if attempt.node.Provider == "managed" {
-		// Lane listeners are temporary leases; a stored ticket must reacquire
-		// its node through the manager before reusing the exit.
-		ticket.HarvestProxyURL = mihomo.Endpoint
-	}
-	ticket.HarvestNodeID = strings.TrimSpace(attempt.node.ID)
-	ticket.HarvestNodeName = strings.TrimSpace(attempt.node.Name)
-	ticket.HarvestNodeProvider = strings.TrimSpace(attempt.node.Provider)
+	// The transport always uses WARP, even if legacy collectors still supply
+	// an account, pool, or Mihomo candidate. Persist the actual exit rather
+	// than binding the ticket to a proxy that did not send the request.
+	ticket.HarvestProxyURL = OpenAIWarpProxyURL()
+	ticket.HarvestNodeID = ""
+	ticket.HarvestNodeName = ""
+	ticket.HarvestNodeProvider = ""
 	ticket.HarvestSessionID = strings.TrimSpace(session)
 }
 
@@ -99,6 +97,7 @@ func (s *OpenAIGatewayService) harvestAttemptSession(account *Account, model str
 }
 
 func (s *OpenAIGatewayService) executeCodexHarvestProbe(ctx context.Context, account *Account, token, model, proxy string, timeout time.Duration, reserve func() bool, sessionID string) (result codexHarvestProbeResult) {
+	proxy = OpenAIWarpProxyURL()
 	release, err := mihomo.Lease(ctx, proxy)
 	if err != nil {
 		return codexHarvestProbeResult{Err: err, Kind: "network_error"}
@@ -121,6 +120,7 @@ func (s *OpenAIGatewayService) executeCodexHarvestProbe(ctx context.Context, acc
 }
 
 func (s *OpenAIGatewayService) requestCodexHarvestProbe(ctx context.Context, account *Account, token, model, proxy string, reserve func() bool, sessionID string) (out codexHarvestProbeResult) {
+	proxy = OpenAIWarpProxyURL()
 	if openAICodexTicketTargetLength(account, s.openAICodexTicketConfig()) == 780 {
 		return s.requestCodex780Probe(ctx, account, token, model, proxy, reserve, sessionID)
 	}

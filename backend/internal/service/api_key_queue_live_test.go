@@ -314,14 +314,18 @@ func (s *liveLoopStoreStub) MarkLiveCallClosed(context.Context, string, time.Dur
 }
 
 type liveLoopUpstreamStub struct {
-	calls    int
-	failures int
+	calls            int
+	failures         int
+	transportFailure bool
 }
 
 func (s *liveLoopUpstreamStub) Do(*http.Request, string, int64, int) (*http.Response, error) {
 	s.calls++
 	if s.calls <= s.failures {
-		return nil, errors.New("live sdp transport failure")
+		if s.transportFailure {
+			return nil, errors.New("WARP transport unavailable")
+		}
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("upstream unavailable"))}, nil
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -441,4 +445,15 @@ func TestCreateLiveCallSafeRetryRetainsJointLease(t *testing.T) {
 	require.Zero(t, cacheStub.releaseLeaseCall,
 		"a live call keeps its joint Key/user lease; terminal release comes from finalize")
 	require.Equal(t, 1, store.saves)
+}
+
+func TestCreateLiveCallWarpFailureDoesNotRetryAndReleasesLease(t *testing.T) {
+	upstream := &liveLoopUpstreamStub{failures: 1, transportFailure: true}
+	svc, cacheStub, store := newLiveLoopFixture(t, upstream, true)
+	created, err := svc.CreateLiveCall(context.Background(), liveLoopRequest(), liveLoopIdentity(), 1)
+	require.Nil(t, created)
+	require.Error(t, err)
+	require.Equal(t, 1, upstream.calls, "shared WARP failure must not switch accounts")
+	require.Equal(t, 1, cacheStub.releaseLeaseCall)
+	require.Zero(t, store.saves)
 }

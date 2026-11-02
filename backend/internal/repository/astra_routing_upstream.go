@@ -56,6 +56,11 @@ func (s *astraRoutingUpstream) SetAstraGatewayHistoryRecorder(fn func(service.As
 
 func (s *astraRoutingUpstream) current(ctx context.Context) *codexGatewayPinUpstream {
 	settings := s.cfg.AstraRouting(ctx)
+	// Legacy Astra sources are OpenAI OAuth accounts. Their actual exit is now
+	// the node's single WARP proxy, so selecting or leasing an old Mihomo node
+	// would record a route different from the one that sent the request.
+	settings.CookiePool.RotateNodes = false
+	settings.CookiePool.IPAffinity = true
 	poolSettings := settings
 	poolSettings.AccountScheduling = false // Scheduling does not invalidate verified routes.
 	poolSettings.SchedulingMode = ""
@@ -78,6 +83,14 @@ func (s *astraRoutingUpstream) Do(r *http.Request, p string, a int64, n int) (*h
 	return s.DoWithTLS(r, p, a, n, nil)
 }
 func (s *astraRoutingUpstream) DoWithTLS(r *http.Request, p string, a int64, n int, f *tlsfingerprint.Profile) (*http.Response, error) {
+	if r != nil && service.IsKnownNonOpenAIAccount(r.Context()) {
+		// Legacy static settings can contain arbitrary IDs. A non-OpenAI
+		// account must not inherit cookies minted on the WARP OpenAI exit.
+		return s.delegate.DoWithTLS(r, p, a, n, f)
+	}
+	if r != nil && service.OpenAIWarpApplies(r.Context(), service.HTTPUpstreamProfileFromContext(r.Context())) {
+		p = service.OpenAIWarpProxyURL()
+	}
 	if r != nil && service.IsBoundAstraTicketRequest(r.Context()) {
 		return s.delegate.DoWithTLS(r, p, a, n, f)
 	}

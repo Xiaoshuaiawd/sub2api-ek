@@ -51,12 +51,12 @@ func TestSessionStudioDiagnosticFailureUsesExistingTaskOwnership(t *testing.T) {
 	ctx := context.Background()
 	_, err := svc.SaveCredentialConfig(ctx, 42, OpenAIOAuthReauthConfigInput{
 		LoginEmail: "user@example.test", CredentialMode: OpenAIOAuthReauthModePasswordTOTP,
-		Engine: OpenAIOAuthReauthEngineSessionStudio, Password: "synthetic-password",
+		Engine: OpenAIOAuthReauthEngineLocal, Password: "synthetic-password",
 	})
 	require.NoError(t, err)
 	_, err = svc.CreateTask(ctx, 42)
 	require.NoError(t, err)
-	claim, err := svc.ClaimTaskWithEngines(ctx, "worker-a", []string{OpenAIOAuthReauthEngineSessionStudio})
+	claim, err := svc.ClaimTaskWithEngines(ctx, "worker-a", []string{OpenAIOAuthReauthEngineLocal})
 	require.NoError(t, err)
 	require.NotNil(t, claim)
 	raw := "session_studio_failed stage=terminal_result reason=provider_failed elapsed_ms=120 http_status=0"

@@ -37,11 +37,9 @@ func TestOpenAIOAuthReauthEngineSelectionAndLegacyWorker(t *testing.T) {
 	require.Equal(t, OpenAIOAuthReauthStatusQueued, repo.task.Status)
 	claim, err = svc.ClaimTaskWithEngines(ctx, "modern", []string{OpenAIOAuthReauthEngineLocal, OpenAIOAuthReauthEngineSessionStudio})
 	require.NoError(t, err)
-	require.NotNil(t, claim)
-	require.Equal(t, OpenAIOAuthReauthEngineSessionStudio, claim.Engine)
-	require.Equal(t, OpenAIOAuthReauthDefaultSessionStudioEndpoint, claim.ReloginEndpoint)
-	require.Equal(t, "password-secret", claim.Password)
-	require.Equal(t, "totp-secret", claim.TOTPSecret)
+	require.Nil(t, claim)
+	require.Equal(t, OpenAIOAuthReauthStatusFailed, repo.task.Status)
+	require.Equal(t, "Session Studio cannot guarantee WARP egress", repo.task.Error)
 }
 
 func TestOpenAIOAuthReauthEngineConfigurationUsesGuardSettings(t *testing.T) {
@@ -57,9 +55,7 @@ func TestOpenAIOAuthReauthEngineConfigurationUsesGuardSettings(t *testing.T) {
 	require.NoError(t, err)
 	claim, err := svc.ClaimTaskWithEngines(ctx, "modern", []string{OpenAIOAuthReauthEngineSessionStudio})
 	require.NoError(t, err)
-	require.NotNil(t, claim)
-	require.Equal(t, "https://login.example/api/relogin", claim.ReloginEndpoint)
-	require.Equal(t, "synthetic-service-secret", claim.ReloginHeaders["X-Service-Key"])
+	require.Nil(t, claim)
 }
 
 func TestOpenAIOAuthReauthEngineRejectsInvalidModeAndConfiguration(t *testing.T) {
@@ -97,27 +93,8 @@ func TestOpenAIOAuthReauthEngineRemoteDoesNotAcquireLocalProxy(t *testing.T) {
 	require.NoError(t, err)
 	claim, err := svc.ClaimTaskWithEngines(ctx, "modern", []string{OpenAIOAuthReauthEngineSessionStudio})
 	require.NoError(t, err)
-	require.NotNil(t, claim)
-	require.Empty(t, claim.ProxyURL)
+	require.Nil(t, claim)
 	require.False(t, acquired)
-}
-
-func TestOpenAIOAuthReauthEngineRemoteStillChecksIdentity(t *testing.T) {
-	svc, _, repo, updater, _, _ := newReauthTestService("acct-1")
-	ctx := context.Background()
-	_, err := svc.SaveCredentialConfig(ctx, 42, OpenAIOAuthReauthConfigInput{LoginEmail: "user@example.com", CredentialMode: OpenAIOAuthReauthModePasswordTOTP, Engine: OpenAIOAuthReauthEngineSessionStudio, Password: "secret"})
-	require.NoError(t, err)
-	_, err = svc.CreateTask(ctx, 42)
-	require.NoError(t, err)
-	claim, err := svc.ClaimTaskWithEngines(ctx, "modern", []string{OpenAIOAuthReauthEngineSessionStudio})
-	require.NoError(t, err)
-	result, err := svc.SubmitCredentials(ctx, claim.TaskID, "modern", map[string]any{
-		"access_token": "access", "refresh_token": "refresh", "id_token": reauthTestJWT(map[string]any{"email": "wrong@example.com", "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "wrong", "chatgpt_user_id": "other"}}),
-	}, nil)
-	require.Error(t, err)
-	require.Nil(t, result)
-	require.Equal(t, OpenAIOAuthReauthStatusFailed, repo.task.Status)
-	require.False(t, updater.applied)
 }
 
 func TestOpenAIOAuthReauthEngineManagedClaimRetainsPasswordScope(t *testing.T) {

@@ -100,6 +100,7 @@ func TestBPSHTTP2PrematureCloseFallsBackWithoutReplaying(t *testing.T) {
 				}()
 			}))
 			t.Cleanup(proxy.Close)
+			t.Setenv("OPENAI_WARP_PROXY_URL", proxy.URL)
 			svc, ok := NewHTTPUpstream(nil).(*httpUpstreamService)
 			require.True(t, ok)
 			// Run unchanged on production baseline, which routed BPS as long_stream.

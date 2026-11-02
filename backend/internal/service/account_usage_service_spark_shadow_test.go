@@ -50,7 +50,6 @@ func (r *sparkShadowUsageTestRepo) UpdateExtra(_ context.Context, _ int64, updat
 // non-nil FiveHour AND SevenDay windows — proving that the rebuild happened
 // and not just the DB write.
 func TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 
 	pid := int64(100)
@@ -116,6 +115,7 @@ func TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(t *test
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
+	proxyCalls := useCodexModelsTestWARP(t, srv)
 
 	quotaService := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
 	svc := &AccountUsageService{
@@ -129,6 +129,7 @@ func TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(t *test
 	// Assertion A-1: upstream received the PARENT's chatgpt-account-id.
 	require.Equal(t, "org-spark-parent", capturedAccountID,
 		"QueryUsage must use parent's chatgpt-account-id for spark shadow accounts")
+	require.Positive(t, proxyCalls.Load(), "quota requests must use WARP")
 
 	// Assertion A-2: shadow Extra was persisted with codex_5h_used_percent.
 	select {

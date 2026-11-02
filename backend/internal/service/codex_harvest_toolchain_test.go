@@ -84,7 +84,11 @@ func TestCodex780GatewayHostsAndAnyKeepActualRoute(t *testing.T) {
 	require.Equal(t, "unified-123", r.Gateway)
 	ticket := codexHarvestTicket(account, "gpt-6-astra", r, svc.openAICodexTicketConfig(), 1)
 	bindCodexHarvestEgress(ticket, codexHarvestAttempt{proxy: "http://127.0.0.1:17893", node: mihomo.HarvestNode{ID: "node-1", Name: "dynamic-1", Provider: "managed"}}, "session")
-	require.Equal(t, mihomo.Endpoint, ticket.HarvestProxyURL)
+	require.Equal(t, OpenAIWarpProxyURL(), ticket.HarvestProxyURL)
+	require.Empty(t, ticket.HarvestNodeID)
+	require.Empty(t, ticket.HarvestNodeName)
+	require.Empty(t, ticket.HarvestNodeProvider)
+	require.Equal(t, "session", ticket.HarvestSessionID)
 	svc.openaiCodexTickets.Store(openAICodexTicketKey(1, "gpt-6-astra"), ticket)
 	require.NotNil(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra"))
 	svc.codexHarvest.current.TargetGateway = "unified-95"
@@ -113,7 +117,7 @@ func TestCodex780SeedPairCannotMaskPartialRotation(t *testing.T) {
 			svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TargetLength: 780}, nil)
 			now := time.Now()
 			pair := mint780Pair(now.Add(time.Hour), "unified-88")
-			svc.openaiCodexTickets.Store(openAICodexTicketKey(1, "gpt-6-astra"), &openAICodexTicket{AccountID: 1, Model: "gpt-6-astra", State: mint780State(now), Length: 780, Transport: "sse", Gateway: "unified-88", IssuedAt: now, ExpiresAt: now.Add(time.Minute), HarvestCookies: pair})
+			svc.openaiCodexTickets.Store(openAICodexTicketKey(1, "gpt-6-astra"), &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), AccountID: 1, Model: "gpt-6-astra", State: mint780State(now), Length: 780, Transport: "sse", Gateway: "unified-88", IssuedAt: now, ExpiresAt: now.Add(time.Minute), HarvestCookies: pair})
 			svc.httpUpstream = &harvestProxyUpstream{do: func(req *http.Request, _ string) (*http.Response, error) {
 				if req.Header.Get(openAICodexTurnStateHeader) == "" {
 					require.Empty(t, req.Header.Get("Cookie"))
@@ -138,4 +142,16 @@ func TestCodex780SeedPairCannotMaskPartialRotation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBindCodexHarvestEgressReplacesLegacyNodeMetadata(t *testing.T) {
+	t.Setenv("OPENAI_WARP_PROXY_URL", "http://warp.invalid:8080")
+	bindCodexHarvestEgress(nil, codexHarvestAttempt{}, "ignored")
+	ticket := &openAICodexTicket{HarvestProxyURL: "http://old.invalid", HarvestNodeID: "old-id", HarvestNodeName: "old-name", HarvestNodeProvider: "managed"}
+	bindCodexHarvestEgress(ticket, codexHarvestAttempt{proxy: "http://other.invalid"}, "  session-1  ")
+	require.Equal(t, "http://warp.invalid:8080", ticket.HarvestProxyURL)
+	require.Empty(t, ticket.HarvestNodeID)
+	require.Empty(t, ticket.HarvestNodeName)
+	require.Empty(t, ticket.HarvestNodeProvider)
+	require.Equal(t, "session-1", ticket.HarvestSessionID)
 }

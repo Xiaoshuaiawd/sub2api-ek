@@ -147,13 +147,13 @@ func TestExcelBPS403RecoveryEmptyScopeNeverProbesAnotherModel(t *testing.T) {
 	require.Empty(t, upstream.bodies)
 }
 
-func TestExcelBPS403RecoveryKeepsProxyPoolWarm(t *testing.T) {
+func TestExcelBPS403RecoveryDoesNotWarmLegacyProxyPool(t *testing.T) {
 	a := recoveryTestAccount(time.Now())
 	a.Extra["openai_excel_bps_mihomo"] = true
 	a.Extra[ExcelBPSProxySourceKey] = ExcelBPSProxySourceIPPool
 	managed, static := excelBPSWarmTargets([]Account{*a})
 	require.Zero(t, managed)
-	require.Equal(t, 1, static)
+	require.Zero(t, static)
 	require.False(t, a.IsExcelBPSEnabled())
 	a.Extra[ExcelBPSAutoRecoverOn403Key] = false
 	_, static = excelBPSWarmTargets([]Account{*a})
@@ -201,14 +201,17 @@ func TestExcelBPS403RecoveryWorkerLifecycle(t *testing.T) {
 	svc.StopBPS403Recovery()
 }
 
-func TestExcelBPS403RecoveryEmptyProxyPoolNeverFallsBackToDirect(t *testing.T) {
+func TestExcelBPS403RecoveryIgnoresEmptyLegacyProxyPool(t *testing.T) {
 	a := recoveryTestAccount(time.Now())
 	a.Extra["openai_excel_bps_mihomo"] = true
 	a.Extra[ExcelBPSProxySourceKey] = ExcelBPSProxySourceIPPool
 	upstream := &bpsProbeUpstream{}
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
-	require.Error(t, svc.probeExcelBPS403Recovery(t.Context(), a))
-	require.Empty(t, upstream.bodies)
+	require.NoError(t, svc.probeExcelBPS403Recovery(t.Context(), a))
+	require.NotEmpty(t, upstream.bodies)
+	for _, proxy := range upstream.proxies {
+		require.Equal(t, OpenAIWarpProxyURL(), proxy)
+	}
 }
 
 func TestExcelBPS403RecoveryPolicyRequiresAutomaticShutdown(t *testing.T) {

@@ -43,6 +43,14 @@ func rotationFixture(t *testing.T, limit int, successNode string) (*astraRouting
 	}
 	wrapper.delegate = gatewayPinDelegate{call: func(r *http.Request, proxy string, id int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
 		node, ok := active[proxy]
+		if proxy == service.OpenAIWarpProxyURL() {
+			// State probes always use WARP. In this raw rotation-algorithm
+			// fixture the sole active lease supplies the simulated node identity.
+			require.Len(t, active, 1)
+			for _, leasedNode := range active {
+				node, ok = leasedNode, true
+			}
+		}
 		require.True(t, ok, "lease must outlive probe and business response")
 		require.Equal(t, service.HTTPUpstreamProfileOpenAIHarvest, service.HTTPUpstreamProfileFromContext(r.Context()))
 		calls = append(calls, fmt.Sprintf("%s:%d", node, id))
@@ -70,7 +78,17 @@ func rotationFixture(t *testing.T, limit int, successNode string) (*astraRouting
 		_, err = io.Copy(io.Discard, resp.Body)
 		return err
 	})
+	enableRawTestRotation(t, wrapper)
 	return wrapper, &calls, &leases
+}
+
+// Exercise the retained rotation algorithm in isolation; current() disables it
+// for production OpenAI routing.
+func enableRawTestRotation(t *testing.T, wrapper *astraRoutingUpstream) {
+	t.Helper()
+	pool := wrapper.current(t.Context())
+	require.NotNil(t, pool)
+	pool.config.RotateNodes = true
 }
 func rotationTarget(t *testing.T) *http.Request {
 	r := pinRequest(t)

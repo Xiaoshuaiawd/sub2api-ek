@@ -206,8 +206,10 @@ func TestOpenAIQuotaRecoveryQueryUsage(t *testing.T) {
 				_, _ = w.Write([]byte(recoveredQuotaBody))
 			}))
 			defer srv.Close()
+			proxyCalls := useCodexModelsTestWARP(t, srv)
 			svc := NewOpenAIQuotaService(repo, nil, NewOpenAITokenProvider(repo, cache, nil), newQuotaRedirectingFactory(srv), nil)
 			_, err := svc.QueryUsage(context.Background(), 123)
+			require.Positive(t, proxyCalls.Load(), "quota requests must use WARP")
 			if mode == "429" {
 				require.Error(t, err)
 			} else {

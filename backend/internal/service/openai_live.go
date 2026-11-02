@@ -496,7 +496,19 @@ func (s *OpenAIGatewayService) releaseLiveLeaseAccount(accountID int64, leaseID 
 	}
 }
 
+type liveCreateAcceptedError struct{ error }
+
+func (e *liveCreateAcceptedError) Unwrap() error { return e.error }
+
 func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(account *Account, err error) bool {
+	var readErr *liveCreateAcceptedError
+	if errors.As(err, &readErr) {
+		return false // The SDP was accepted; replay could create a second call.
+	}
+	var egressErr *runtimeProxyEgressError
+	if account != nil && account.Platform == PlatformOpenAI && errors.As(err, &egressErr) && egressErr.target.proxyName == "warp" {
+		return false
+	}
 	var upstreamErr *UpstreamFailoverError
 	if !errors.As(err, &upstreamErr) {
 		// 凭证读取和网络传输错误都可能只影响当前账号或代理。
@@ -563,10 +575,17 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	defer func() { _ = resp.Body.Close() }()
 	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, liveUpstreamBodyLimit+1))
 	if readErr != nil {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil, &liveCreateAcceptedError{error: readErr}
+		}
 		return nil, readErr
 	}
 	if len(responseBody) > liveUpstreamBodyLimit {
-		return nil, errors.New("live upstream response is too large")
+		err := errors.New("live upstream response is too large")
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil, &liveCreateAcceptedError{error: err}
+		}
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		logLiveUpstreamFailure(ctx, account.ID, resp.StatusCode, resp.Header, responseBody)
@@ -578,7 +597,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	}
 	callID, err := liveCallIDFromLocation(resp.Header.Get("Location"))
 	if err != nil {
-		return nil, err
+		return nil, &liveCreateAcceptedError{error: err}
 	}
 	return &LiveCallCreated{
 		SDP:      responseBody,
@@ -702,7 +721,11 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 		return nil, err
 	}
 	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(record.CallID)
-	conn, status, _, err := s.getOpenAIWSPassthroughDialer().Dial(ctx, target, headers, resolveAccountProxyURL(account))
+	proxyURL := resolveAccountProxyURL(account)
+	if account.Platform == PlatformOpenAI {
+		proxyURL = OpenAIWarpProxyURL()
+	}
+	conn, status, _, err := s.getOpenAIWSPassthroughDialer().Dial(ctx, target, headers, proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("dial live sideband (status %d): %w", status, err)
 	}

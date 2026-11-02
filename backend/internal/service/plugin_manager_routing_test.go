@@ -101,7 +101,7 @@ func TestOpenAIGatewayPluginRoutingPreservesAPIKeyAndFailsClosedForOAuth(t *test
 	})
 	require.Error(t, err)
 	assert.Nil(t, oauthResponse)
-	assert.Contains(t, err.Error(), "插件不可用")
+	assert.Contains(t, err.Error(), "cannot guarantee WARP-only egress")
 	assert.Equal(t, 1, upstream.doCalls)
 }
 

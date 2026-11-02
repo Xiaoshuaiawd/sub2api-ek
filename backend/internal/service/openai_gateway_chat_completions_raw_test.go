@@ -738,7 +738,7 @@ func TestForwardAsRawChatCompletions_TruncatedStreamAfterOutputFailsRequest(t *t
 	require.Len(t, events, 1)
 	require.Equal(t, "http_error", events[0].Kind)
 	require.Nil(t, events[0].ProxyID)
-	require.Equal(t, opsProxyNameDirect, events[0].ProxyName)
+	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
 }
 
 // 截断 failover 事件必须带上本次传输真实使用的托管代理快照。
@@ -765,16 +765,15 @@ func TestForwardAsRawChatCompletions_TruncationFailoverAttributesManagedProxy(t 
 	_, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, proxy.URL(), upstream.lastProxyURL)
+	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
 
 	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
 	events := rawEvents.([]*OpsUpstreamErrorEvent)
 	require.Len(t, events, 1)
 	require.Equal(t, "failover", events[0].Kind)
-	require.NotNil(t, events[0].ProxyID)
-	require.Equal(t, proxy.ID, *events[0].ProxyID)
-	require.Equal(t, proxy.Name, events[0].ProxyName)
+	require.Nil(t, events[0].ProxyID)
+	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
 }
 
 // 上游 200 但一个 SSE 字节都没发：响应头尚未提交，应换号重试而不是回 200 空流。
@@ -1281,4 +1280,22 @@ func TestForwardAsRawChatCompletions_RestoresMappedResponseModel(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestGrokRawChatKeepsItsProxyWithOpenAITransportProfile(t *testing.T) {
+	t.Setenv("OPENAI_WARP_PROXY_URL", "http://warp.invalid:1080")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: http.NoBody}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+	account := rawChatCompletionsTestAccount()
+	account.Platform = PlatformGrok
+	account.Proxy = &Proxy{ID: 27, Protocol: "http", Host: "grok-proxy.invalid", Port: 8080}
+	account.ProxyID = &account.Proxy.ID
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp, err := svc.sendCCUpstreamRequest(context.Background(), c, account, "http://upstream.example/v1/chat/completions", []byte(`{"model":"grok-4","messages":[]}`), false, "test-token", "", "")
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, account.Proxy.URL(), upstream.lastProxyURL)
+	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
+	require.False(t, OpenAIWarpApplies(upstream.lastReq.Context(), HTTPUpstreamProfileFromContext(upstream.lastReq.Context())))
 }

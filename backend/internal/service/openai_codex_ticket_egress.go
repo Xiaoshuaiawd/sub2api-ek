@@ -251,6 +251,9 @@ func (s *OpenAIGatewayService) applyCodexAccountIdentityOrHarvestPinRaw(ctx cont
 }
 
 func openAIAccountProxyURL(account *Account) string {
+	if account != nil && account.Platform == PlatformOpenAI {
+		return OpenAIWarpProxyURL()
+	}
 	if account != nil && account.ProxyID != nil && account.Proxy != nil {
 		return account.Proxy.URL()
 	}
@@ -343,10 +346,15 @@ func (s *OpenAIGatewayService) pinStoredCodexTicketEgress(ctx context.Context, t
 	noop := func() {}
 	pinned := strings.TrimSpace(ticket.HarvestProxyURL)
 	if pinned == "" {
-		pinned = s.openAICodexTicketHarvestFixedProxyURL(ctx)
+		return "", noop, ErrOpenAICodexTicketUnavailable
 	}
-	if pinned == "" {
-		return proxyURL, noop, nil
+	if pinned != "" && pinned != OpenAIWarpProxyURL() {
+		// A ticket harvested on a different exit cannot safely be replayed
+		// through WARP. Require a fresh ticket rather than switch exits.
+		return "", noop, ErrOpenAICodexTicketUnavailable
+	}
+	if strings.TrimSpace(ticket.HarvestNodeID) != "" || strings.TrimSpace(ticket.HarvestNodeName) != "" {
+		return "", noop, ErrOpenAICodexTicketUnavailable
 	}
 	if strings.TrimSpace(ticket.HarvestNodeID) == "" && strings.TrimSpace(ticket.HarvestNodeName) == "" {
 		return pinned, noop, nil

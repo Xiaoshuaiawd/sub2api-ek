@@ -118,3 +118,13 @@ func TestTOTPRotationRequiresCapableWorker(t *testing.T) {
 	_, err = svc.CreateTOTPRotation(context.Background(), 42)
 	require.NoError(t, err)
 }
+
+func TestTOTPRotationClaimUsesWARP(t *testing.T) {
+	t.Setenv("OPENAI_WARP_WORKER_PROXY_URL", "socks5h://worker-reachable-warp:1080")
+	svc, repo := newRotationService(t)
+	repo.rotation.ConfigUpdatedAt = repo.config.UpdatedAt
+	claim, err := svc.ClaimTOTPRotation(context.Background(), "worker")
+	require.NoError(t, err)
+	require.NotNil(t, claim)
+	require.Equal(t, "socks5h://worker-reachable-warp:1080", claim.ProxyURL)
+}

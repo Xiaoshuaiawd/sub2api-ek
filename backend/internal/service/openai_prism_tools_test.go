@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -126,13 +126,9 @@ func TestPrismCallerIdentityCannotBeSpoofed(t *testing.T) {
 }
 
 func TestPrismClientToolGatewayForward(t *testing.T) {
-	response := prismToolResponse("function_call")
-	sse := encodePrismEvents(prismToolEvents(t, response))
-	var caller string
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		caller = r.Header.Get("X-Prism-Caller-ID")
-		_, _ = io.Copy(io.Discard, r.Body)
-		_, _ = w.Write(sse)
+		requests.Add(1)
 	}))
 	defer server.Close()
 	s, account := prismTestService(server.URL)
@@ -143,10 +139,8 @@ func TestPrismClientToolGatewayForward(t *testing.T) {
 	c.Set("api_key", &APIKey{ID: 7})
 	body := []byte(`{"model":"gpt-6.1-sol","stream":true,"input":"fixture","tools":[{"type":"namespace","name":"client","tools":[{"type":"function","name":"lookup"}]}]}`)
 	result, err := s.forwardPrismBrowser(context.Background(), c, account, body, time.Now())
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, string(sse), w.Body.String())
-	require.Equal(t, prismBrowserCallerID(c, account.ID), caller)
-	require.NotEqual(t, "external-spoof", caller)
-	require.True(t, result.UsageUnavailable)
+	require.ErrorContains(t, err, "cannot guarantee WARP-only egress")
+	require.Nil(t, result)
+	require.Equal(t, http.StatusBadGateway, w.Code)
+	require.Zero(t, requests.Load(), "Prism must not receive credentials or request data")
 }
