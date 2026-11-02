@@ -1181,6 +1181,17 @@ export async function getSettings(): Promise<SystemSettings> {
   return data;
 }
 
+export interface OpenAIWarpStatus {
+  connected: boolean;
+  ip: string;
+  checked_at: string;
+}
+
+export async function getOpenAIWarpStatus(): Promise<OpenAIWarpStatus> {
+  const { data } = await apiClient.get<OpenAIWarpStatus>("/admin/settings/openai-warp-status");
+  return data;
+}
+
 /**
  * Update system settings
  * @param settings - Partial settings to update
@@ -1688,6 +1699,7 @@ export async function resetWebSearchUsage(payload: {
 
 export const settingsAPI = {
   getSettings,
+  getOpenAIWarpStatus,
   updateSettings,
   testSmtpConnection,
   sendTestEmail,

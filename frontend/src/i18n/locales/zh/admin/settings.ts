@@ -630,6 +630,11 @@ export default {
       gatewayForwarding: {
         openAIWarp: 'OpenAI 账号使用 WARP 出口',
         openAIWarpHint: '开启后本服务的 OpenAI 账号请求强制通过 WARP，代理不可用时返回错误；关闭后恢复账号原有代理或直连路由。独立部署的重登服务需单独配置。',
+        openAIWarpConnected: '节点正常',
+        openAIWarpUnavailable: '节点不可用',
+        openAIWarpChecking: '正在检查节点…',
+        openAIWarpIP: '出口 IP：{ip}',
+        openAIWarpRefresh: '刷新节点状态',
         title: '请求转发行为',
         description: '控制请求转发到上游 OAuth 账号时的行为',
         grokDefaultTextModel: '默认 Grok 文本模型',
