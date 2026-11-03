@@ -66,5 +66,5 @@ COPY --from=runtime /out/ /runtime/
 RUN addgroup -g 10001 worker && adduser -D -u 10001 -G worker worker \
     && mkdir -p /runtime-data && chown worker:worker /runtime-data
 USER worker
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TOSUB2_ROOT=/runtime/tosub2 NODE_EXECUTABLE=/runtime/node OPENAI_TOTP_JOURNAL_DIR=/runtime-data/totp
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TOSUB2_ROOT=/runtime/tosub2 TOSUB2_PYTHON=/runtime/python NODE_EXECUTABLE=/runtime/node OPENAI_TOTP_JOURNAL_DIR=/runtime-data/totp
 ENTRYPOINT ["/runtime/python", "/runtime/worker.py"]
