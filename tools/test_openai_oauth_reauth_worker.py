@@ -15,6 +15,7 @@ from tools.openai_oauth_reauth_worker import (
     ProtocolHTTPError,
     WorkerConfig,
     WorkerError,
+    allow_private_worker_http,
     _auth_session_flow,
     _checked_bootstrap_authorize,
     _email_submission_state,
@@ -638,6 +639,13 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(previous)
+
+    def test_private_app_http_requires_isolated_worker(self):
+        with patch.dict(os.environ, {"OPENAI_REAUTH_ALLOW_PRIVATE_HTTP": "true", "OPENAI_WARP_WORKER_NETWORK_ISOLATED": "true"}):
+            self.assertTrue(allow_private_worker_http("sub2api"))
+            self.assertFalse(allow_private_worker_http("other-service"))
+        with patch.dict(os.environ, {"OPENAI_REAUTH_ALLOW_PRIVATE_HTTP": "true", "OPENAI_WARP_WORKER_NETWORK_ISOLATED": "false"}):
+            self.assertFalse(allow_private_worker_http("sub2api"))
 
     def test_rejects_private_https_and_non_loopback_http_mailboxes(self):
         with patch.dict(os.environ, {"OPENAI_REAUTH_TRUSTED_OTP_HOSTS": ""}):

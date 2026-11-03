@@ -322,6 +322,14 @@ def validate_otp_url(url: str) -> None:
             raise WorkerError("OTP mailbox hostname resolves to a non-public address")
 
 
+def allow_private_worker_http(host: str) -> bool:
+    return (
+        host == "sub2api"
+        and os.getenv("OPENAI_REAUTH_ALLOW_PRIVATE_HTTP", "").strip().lower() == "true"
+        and os.getenv("OPENAI_WARP_WORKER_NETWORK_ISOLATED", "").strip().lower() == "true"
+    )
+
+
 @dataclass(frozen=True)
 class WorkerConfig:
     base_url: str
@@ -340,7 +348,8 @@ class WorkerConfig:
         host = (parsed.hostname or "").lower()
         if parsed.scheme not in {"http", "https"} or not host or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise WorkerError("SUB2API_BASE_URL must be an absolute HTTP(S) URL")
-        if parsed.scheme == "http" and host not in {"localhost", "127.0.0.1", "::1"}:
+        private_http = allow_private_worker_http(host)
+        if parsed.scheme == "http" and host not in {"localhost", "127.0.0.1", "::1"} and not private_http:
             raise WorkerError("SUB2API_BASE_URL must use HTTPS unless it targets localhost")
 
         worker_token = os.getenv("OPENAI_REAUTH_WORKER_TOKEN", "").strip()
