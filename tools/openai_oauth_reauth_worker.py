@@ -355,6 +355,9 @@ class WorkerConfig:
         worker_token = os.getenv("OPENAI_REAUTH_WORKER_TOKEN", "").strip()
         if len(worker_token) < 32:
             raise WorkerError("OPENAI_REAUTH_WORKER_TOKEN must contain at least 32 characters")
+        codex_pool_url = os.getenv("OPENAI_REAUTH_CODEX_POOL_URL", "").strip()
+        if codex_pool_url and codex_pool_url != "http://relogin:8787/api/v1/relogin":
+            raise WorkerError("OPENAI_REAUTH_CODEX_POOL_URL must point to the internal relogin service")
 
         worker_id = os.getenv("OPENAI_REAUTH_WORKER_ID", "").strip()
         if not worker_id:
@@ -1297,6 +1300,46 @@ def _siwc_password_failure(output: str, exit_code: int) -> str:
     return f"SIWC authorization failed (stage={stage}, reason={reason}, exit={exit_code}); credentials retained{guidance}"
 
 
+def process_codex_pool_claim(api: WorkerAPI, claim: dict[str, Any], endpoint: str) -> None:
+    if endpoint != "http://relogin:8787/api/v1/relogin":
+        raise WorkerError("codex_pool_cli endpoint is invalid")
+    task_id = int(claim.get("task_id") or 0)
+    email = str(claim.get("login_email") or "").strip()
+    password = str(claim.get("password") or "")
+    if task_id <= 0 or not email or not password:
+        raise WorkerError("claimed password task is missing required fields")
+    _best_effort_progress(api, task_id, "starting")
+    _best_effort_progress(api, task_id, "protocol_connecting")
+    request = Request(endpoint, method="POST", headers={"Content-Type": "application/json", "Accept": "application/json"}, data=json.dumps({
+        "email": email, "password": password, "mfa_secret": str(claim.get("totp_secret") or ""),
+    }).encode("utf-8"))
+    try:
+        with NO_REDIRECT_OPENER.open(request, timeout=180) as response:
+            body = response.read(MAX_RESPONSE_BYTES + 1)
+    except (HTTPError, URLError, TimeoutError, OSError):
+        raise OperationWorkerError("transport_error") from None
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise WorkerError("codex_pool_cli response is too large")
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        raise WorkerError("codex_pool_cli returned invalid JSON") from None
+    if not isinstance(payload, dict):
+        raise WorkerError("codex_pool_cli returned invalid response")
+    if isinstance(payload.get("error"), dict):
+        raise OperationWorkerError(str(payload["error"].get("code") or "unknown"))
+    credentials = payload.get("credential")
+    if not isinstance(credentials, dict) or not all(
+        isinstance(credentials.get(key), str) and credentials[key].strip()
+        for key in ("access_token", "refresh_token", "id_token")
+    ):
+        raise WorkerError("codex_pool_cli returned incomplete OAuth credentials")
+    _best_effort_progress(api, task_id, "applying_credentials")
+    result = api.credentials(task_id, credentials, {})
+    if not result or result.get("status") != "succeeded":
+        raise WorkerError("codex_pool_cli credentials were not accepted")
+
+
 def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
     require_warp_worker_egress(claim)
     if claim.get("engine") == "session_studio" and claim.get("warp_required") is not False:
@@ -1312,6 +1355,10 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
         return
     if engine != "local_worker":
         raise WorkerError("unsupported password re-login engine")
+    codex_pool_url = os.getenv("OPENAI_REAUTH_CODEX_POOL_URL", "").strip()
+    if oauth_profile == "codex" and claim.get("warp_required") is not False and codex_pool_url:
+        process_codex_pool_claim(api, claim, codex_pool_url)
+        return
     task_id = int(claim.get("task_id") or 0)
     account_id = int(claim.get("account_id") or 0)
     email = str(claim.get("login_email") or "").strip()
