@@ -61,6 +61,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	ctx = s.withOpenAIHTTPBudget(ctx, c)
 	admittedCtx, admissionErr := s.beginPriorityLatencyTurn(ctx, c, account, gjson.GetBytes(body, "model").String())
 	if admissionErr != nil {
 		return nil, admissionErr
@@ -416,6 +417,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(resp)
+		if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+			return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+		}
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
@@ -719,7 +723,10 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, priorModels, err := s.readOpenAICompatBufferedTerminal(resp, c, account, "openai chat_completions buffered", requestID)
+	finalResponse, usage, acc, priorModels, err := s.readOpenAICompatBufferedTerminal(resp, c, account, "openai chat_completions buffered", requestID, true)
+	if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+		return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+	}
 	if err != nil {
 		return nil, s.newOpenAICompatBufferedReadFailoverError(c, account, resp, requestID, err)
 	}
@@ -1124,6 +1131,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if firstTokenMs == nil {
 			for _, chunk := range chunks {
 				if openAIChatChunkHasOutput(chunk) {
+					observeCCHTTPProgress(resp)
 					ms := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &ms
 					break
@@ -1329,6 +1337,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		}
 		if err := scanner.Err(); err != nil {
 			handleScanErr(err)
+			if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+				return resultWithUsage(), handleOpenAIHTTPPhaseError(c, account, phaseErr)
+			}
 			if clientDisconnected || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
 			}
@@ -1404,6 +1415,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 			if ev.err != nil {
 				handleScanErr(ev.err)
+				if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+					return resultWithUsage(), handleOpenAIHTTPPhaseError(c, account, phaseErr)
+				}
 				if clientDisconnected || errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
 					return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 				}

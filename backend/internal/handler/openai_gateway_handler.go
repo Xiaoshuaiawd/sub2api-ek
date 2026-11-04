@@ -4249,6 +4249,12 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		h.handleFailoverExhaustedSimple(c, http.StatusBadGateway, streamStarted)
 		return
 	}
+	if failoverErr.Reason == service.OpenAIFirstWordProtectionReason {
+		message := "Upstream produced no output within 180 seconds"
+		service.SetOpsUpstreamError(c, http.StatusGatewayTimeout, message, "")
+		h.handleStreamingAwareErrorWithCode(c, http.StatusGatewayTimeout, "timeout_error", string(service.OpenAIFirstWordProtectionReason), message, streamStarted, false)
+		return
+	}
 	copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
 	// Local BPS image admission rejection: nothing reached the upstream, so
 	// keep the fixed code and message of the image relay limit.

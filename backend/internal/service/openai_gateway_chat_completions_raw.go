@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
@@ -72,6 +74,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletionsWithStartTime(
 	defaultMappedModel string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	ctx = s.withOpenAIHTTPBudget(ctx, c)
 
 	// 1. Parse minimal fields needed for routing/billing
 	originalModel := gjson.GetBytes(body, "model").String()
@@ -239,6 +242,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletionsWithStartTime(
 	// 7. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+			return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+		}
 		if account.Platform == PlatformGrok {
 			kind := "http_error"
 			if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
@@ -339,6 +345,8 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	var firstTokenMs *int
 	clientDisconnected := false
 	clientOutputStarted := false
+	semanticOutputSeen := false
+	holdMetadata := account.Platform == PlatformOpenAI && s.firstWordProtectionEnabled()
 	pendingLines := make([]string, 0, 8)
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var terminal openAIRawStreamTerminalState
@@ -354,7 +362,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		if clientDisconnected {
 			return
 		}
-		if !clientOutputStarted && !refusalDetector.ShouldReleaseClientOutput() {
+		if !clientOutputStarted && ((holdMetadata && !semanticOutputSeen) || !refusalDetector.ShouldReleaseClientOutput()) {
 			pendingLines = append(pendingLines, line)
 			return
 		}
@@ -393,6 +401,11 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			}
 			if trimmedPayload != "[DONE]" {
 				observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
+				var chunk apicompat.ChatCompletionsChunk
+				if json.Unmarshal([]byte(payload), &chunk) == nil && openAIChatChunkHasOutput(chunk) {
+					semanticOutputSeen = true
+					observeCCHTTPProgress(resp)
+				}
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
 				if u := extractCCStreamUsage(payload); u != nil {
 					regionalUsagePayload = []byte(payload)
@@ -450,6 +463,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 
 	scanErr := scanner.Err()
+	if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+		return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+	}
 	if scanErr != nil && !errors.Is(scanErr, context.Canceled) && !errors.Is(scanErr, context.DeadlineExceeded) {
 		logger.L().Warn("openai chat_completions raw: stream read error",
 			zap.Error(scanErr),
@@ -580,6 +596,9 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	requestID := resp.Header.Get("x-request-id")
 
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+	if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+		return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+	}
 	if err != nil {
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
@@ -598,6 +617,9 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	var usage OpenAIUsage
 	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage
+	}
+	if len(gjson.GetBytes(respBody, "choices").Array()) > 0 {
+		observeCCHTTPProgress(resp)
 	}
 	responseModel := gjson.GetBytes(respBody, "model").String()
 	if requiresBillableGrokChatUsage(account, billingModel, upstreamModel, responseModel) && !hasBillableGrokChatUsage(usage) {

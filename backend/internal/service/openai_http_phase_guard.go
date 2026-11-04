@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -23,6 +24,7 @@ type openAIHTTPBudget struct {
 	mu             sync.Mutex
 	started        time.Time
 	preOutputLimit time.Duration
+	preOutputPhase string
 	uploadDeadline time.Time
 	progress       chan struct{}
 	progressOnce   sync.Once
@@ -42,6 +44,10 @@ func (s *OpenAIGatewayService) withOpenAIHTTPBudget(ctx context.Context, c *gin.
 		budget = &openAIHTTPBudget{started: time.Now(), progress: make(chan struct{})}
 		if s != nil && s.cfg != nil {
 			budget.preOutputLimit = time.Duration(s.cfg.Gateway.OpenAIPreOutputBudgetSeconds) * time.Second
+			if s.firstWordProtectionEnabled() {
+				budget.preOutputLimit = 180 * time.Second
+				budget.preOutputPhase = "first_word_protection"
+			}
 		}
 		if c != nil {
 			c.Set(openAIHTTPBudgetGinKey, budget)
@@ -85,13 +91,14 @@ func (e *openAIHTTPPhaseTimeout) Error() string {
 func (e *openAIHTTPPhaseTimeout) Unwrap() error { return context.DeadlineExceeded }
 
 type openAIHTTPPhaseGuard struct {
-	ctx        context.Context
-	cancel     context.CancelCauseFunc
-	uploaded   chan struct{}
-	stop       chan struct{}
-	done       chan struct{}
-	uploadOnce sync.Once
-	stopOnce   sync.Once
+	ctx            context.Context
+	cancel         context.CancelCauseFunc
+	uploaded       chan struct{}
+	stop           chan struct{}
+	done           chan struct{}
+	uploadOnce     sync.Once
+	stopOnce       sync.Once
+	preOutputPhase string
 }
 
 // The guard is installed after upstream cancellation detachment, immediately
@@ -127,9 +134,13 @@ func (s *OpenAIGatewayService) guardOpenAIHTTPRequest(req *http.Request, account
 	}
 	ctx, cancel := context.WithCancelCause(req.Context())
 	g := &openAIHTTPPhaseGuard{ctx: ctx, cancel: cancel, uploaded: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{})}
+	g.preOutputPhase = budget.preOutputPhase
+	if g.preOutputPhase == "" {
+		g.preOutputPhase = "pre_output_budget"
+	}
 	// Reject an already expired budget before another upstream submission.
 	if (!uploadDeadline.IsZero() && !time.Now().Before(uploadDeadline)) || (!totalDeadline.IsZero() && !time.Now().Before(totalDeadline)) {
-		phase := "pre_output_budget"
+		phase := g.preOutputPhase
 		if !uploadDeadline.IsZero() && !time.Now().Before(uploadDeadline) {
 			phase = "upload_timeout"
 		}
@@ -196,7 +207,7 @@ func (g *openAIHTTPPhaseGuard) watch(uploadDeadline, totalDeadline time.Time, pr
 				continue
 			default:
 			}
-			g.cancel(&openAIHTTPPhaseTimeout{phase: "pre_output_budget"})
+			g.cancel(&openAIHTTPPhaseTimeout{phase: g.preOutputPhase})
 			return
 		}
 	}
@@ -273,7 +284,21 @@ func handleOpenAIHTTPPhaseError(c *gin.Context, account *Account, err error) err
 	if !IsResponseCommitted(c) {
 		if c.Writer.Written() {
 			if strings.Contains(c.Writer.Header().Get("Content-Type"), "text/event-stream") {
-				writeOpenAICompactSSEFailureMessage(c, http.StatusGatewayTimeout, phaseErr.phase, phaseErr.Error())
+				path := ""
+				if c.Request != nil && c.Request.URL != nil {
+					path = c.Request.URL.Path
+				}
+				switch {
+				case strings.HasSuffix(path, "/messages"):
+					_, _ = c.Writer.WriteString(buildAnthropicStreamErrorSSE("api_error", phaseErr.Error()))
+					c.Writer.Flush()
+				case strings.HasSuffix(path, "/chat/completions"):
+					payload, _ := json.Marshal(gin.H{"error": gin.H{"type": "timeout_error", "code": phaseErr.phase, "message": phaseErr.Error()}})
+					_, _ = c.Writer.WriteString("data: " + string(payload) + "\n\n")
+					c.Writer.Flush()
+				default:
+					writeOpenAICompactSSEFailureMessage(c, http.StatusGatewayTimeout, phaseErr.phase, phaseErr.Error())
+				}
 			}
 		} else {
 			c.JSON(http.StatusGatewayTimeout, gin.H{"error": gin.H{"type": phaseErr.phase, "message": phaseErr.Error()}})
