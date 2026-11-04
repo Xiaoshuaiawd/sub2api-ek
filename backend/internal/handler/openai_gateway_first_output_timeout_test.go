@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -10,6 +11,20 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFirstWordProtectionExhaustedReturns504(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	h := &OpenAIGatewayHandler{}
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:        http.StatusGatewayTimeout,
+		Reason:            service.OpenAIFirstWordProtectionReason,
+		NextAccountAction: service.NextAccountStop,
+	}, false)
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	require.Contains(t, rec.Body.String(), "first_word_protection")
+}
 
 func TestOpenAIForwardMayFailoverOnlyAfterNonSemanticWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)

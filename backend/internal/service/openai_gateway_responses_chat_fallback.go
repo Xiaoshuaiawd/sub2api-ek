@@ -31,6 +31,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	startTime time.Time,
 	responseModels ...string,
 ) (*OpenAIForwardResult, error) {
+	ctx = s.withOpenAIHTTPBudget(ctx, c)
 
 	// DeepSeek 原生 /responses 不认识 compaction_trigger：remote compaction v2 会得到
 	// reasoning+message 而非 compaction item，Codex 判 fatal。这里改写成普通总结回合
@@ -163,6 +164,9 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+			return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+		}
 		if compact {
 			logger.L().Warn("openai responses chat fallback: deepseek compact upstream error",
 				zap.Int64("account_id", account.ID),
@@ -181,9 +185,17 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		toolTextDecoder = apicompat.NewDeepSeekToolTextDecoder(chatReq.Tools)
 	}
 	if clientStream {
-		return s.streamChatCompletionsAsResponses(c, resp, responseModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, toolTextDecoder)
+		result, forwardErr := s.streamChatCompletionsAsResponses(c, resp, responseModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, toolTextDecoder)
+		if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+			return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+		}
+		return result, forwardErr
 	}
-	return s.bufferChatCompletionsAsResponses(c, resp, responseModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, compact, toolTextDecoder)
+	result, forwardErr := s.bufferChatCompletionsAsResponses(c, resp, responseModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, compact, toolTextDecoder)
+	if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
+		return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+	}
+	return result, forwardErr
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(

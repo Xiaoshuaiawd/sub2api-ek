@@ -124,6 +124,62 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
 }
 
+func TestForwardAsRawChatCompletions_FirstWordDeadlineIgnoresRoleOnlyChunk(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	stream := newContextBoundBlockingReadCloser([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"))
+	t.Cleanup(stream.forceUnblock)
+	stopFallback := time.AfterFunc(250*time.Millisecond, stream.forceUnblock)
+	defer stopFallback.Stop()
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Gateway.OpenAIFirstWordProtectionEnabled = true
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &contextBoundHTTPUpstream{body: stream}}
+	c.Set(openAIHTTPBudgetGinKey, &openAIHTTPBudget{started: time.Now(), preOutputLimit: 80 * time.Millisecond, preOutputPhase: "first_word_protection", progress: make(chan struct{})})
+
+	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
+	var phaseErr *openAIHTTPPhaseTimeout
+	require.ErrorAs(t, err, &phaseErr)
+	require.Equal(t, "first_word_protection", phaseErr.phase)
+	require.Nil(t, result)
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	require.NotContains(t, rec.Body.String(), `"role":"assistant"`)
+}
+
+func TestForwardAsRawChatCompletions_FirstWordDisarmsDeadlineAfterContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	go func() {
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n")
+		time.Sleep(180 * time.Millisecond)
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+		_ = writer.Close()
+	}()
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Gateway.OpenAIFirstWordProtectionEnabled = true
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       reader,
+	}}}
+	c.Set(openAIHTTPBudgetGinKey, &openAIHTTPBudget{started: time.Now(), preOutputLimit: 80 * time.Millisecond, preOutputPhase: "first_word_protection", progress: make(chan struct{})})
+
+	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"content":"hello"`)
+	require.Contains(t, rec.Body.String(), "data: [DONE]")
+}
+
 func TestForwardAsChatCompletions_OpenAICompatibleGrokRawMissingUsageFailsBeforeWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

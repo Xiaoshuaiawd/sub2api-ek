@@ -866,6 +866,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	account *Account,
 	logPrefix string,
 	requestID string,
+	observeChatFirstWord ...bool,
 ) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, openAICompatPriorModelAudit, error) {
 	acc := apicompat.NewBufferedResponseAccumulator()
 	var usage OpenAIUsage
@@ -950,6 +951,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 					payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
+						if len(observeChatFirstWord) > 0 && observeChatFirstWord[0] && openAIStreamDataStartsVisibleOutput(payload, event.Type) {
+							observeCCHTTPProgress(resp)
+						}
 						s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 						acc.ProcessEvent(&event)
 						recordPrior(&event)
@@ -997,6 +1001,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 					zap.String("request_id", requestID),
 				)
 				continue
+			}
+			if len(observeChatFirstWord) > 0 && observeChatFirstWord[0] && openAIStreamDataStartsVisibleOutput(payload, event.Type) {
+				observeCCHTTPProgress(resp)
 			}
 			s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 
