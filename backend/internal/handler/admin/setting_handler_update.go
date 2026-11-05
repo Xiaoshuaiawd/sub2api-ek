@@ -272,6 +272,7 @@ type UpdateSettingsRequest struct {
 	OpenAICodexUserAgent                   *string   `json:"openai_codex_user_agent"`
 	OpenAICodexClientVersion               *string   `json:"openai_codex_client_version"`
 	OpenAICodexVersionAutoSyncEnabled      *bool     `json:"openai_codex_version_auto_sync_enabled"`
+	OpenAIFirstWordProtectionEnabled       *bool     `json:"openai_first_word_protection_enabled"`
 	OpenAIRequestTimezoneEnabled           *bool     `json:"openai_request_timezone_enabled"`
 	OpenAIRequestTimezoneAuto              *bool     `json:"openai_request_timezone_auto"`
 	OpenAICodexTicketEnabled               *bool     `json:"openai_codex_ticket_enabled"`
@@ -627,6 +628,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	auditReq := settingsAuditRequest(req)
 	omitted := omittedSettingKeys(sentFields)
+	if req.OpenAIFirstWordProtectionEnabled == nil {
+		omitted[service.SettingKeyOpenAIFirstWordProtectionEnabled] = struct{}{}
+	}
 
 	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
@@ -2076,6 +2080,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAICodexVersionAutoSyncEnabled
 		}(),
+		OpenAIFirstWordProtectionEnabled: func() bool {
+			if req.OpenAIFirstWordProtectionEnabled != nil {
+				return *req.OpenAIFirstWordProtectionEnabled
+			}
+			return previousSettings.OpenAIFirstWordProtectionEnabled
+		}(),
 		OpenAIRequestTimezoneEnabled: func() bool {
 			if req.OpenAIRequestTimezoneEnabled != nil {
 				return *req.OpenAIRequestTimezoneEnabled
@@ -2760,6 +2770,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexClientVersion:                               updatedSettings.OpenAICodexClientVersion,
 		OpenAICodexClientVersionSynced:                         updatedSettings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled:                      updatedSettings.OpenAICodexVersionAutoSyncEnabled,
+		OpenAIFirstWordProtectionEnabled:                       updatedSettings.OpenAIFirstWordProtectionEnabled,
 		OpenAIRequestTimezoneEnabled:                           updatedSettings.OpenAIRequestTimezoneEnabled,
 		OpenAIRequestTimezoneAuto:                              updatedSettings.OpenAIRequestTimezoneAuto,
 		OpenAICodexTicketEnabled:                               updatedSettings.OpenAICodexTicketEnabled,

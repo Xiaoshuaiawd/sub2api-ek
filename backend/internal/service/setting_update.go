@@ -585,6 +585,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
 	updates[SettingKeyOpenAICodexClientVersion] = NormalizeCodexClientVersion(settings.OpenAICodexClientVersion)
 	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
+	updates[SettingKeyOpenAIFirstWordProtectionEnabled] = strconv.FormatBool(settings.OpenAIFirstWordProtectionEnabled)
 	updates[SettingKeyOpenAIRequestTimezoneEnabled] = strconv.FormatBool(settings.OpenAIRequestTimezoneEnabled)
 	updates[SettingKeyOpenAIRequestTimezoneAuto] = strconv.FormatBool(settings.OpenAIRequestTimezoneAuto)
 	updates[SettingKeyOpenAICodexTicketEnabled] = strconv.FormatBool(settings.OpenAICodexTicketEnabled)
@@ -918,6 +919,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	s.InvalidateOpenAIRequestTimezoneEnabledCache()
 	s.InvalidateOpenAIRequestTimezoneAutoCache()
 	s.InvalidateOpenAICodexTicketEnabledCache()
+	s.openAIFirstWordProtectionSF.Forget(SettingKeyOpenAIFirstWordProtectionEnabled)
+	s.openAIFirstWordProtectionCache.Store(&cachedOpenAIFirstWordProtection{
+		value:     settings.OpenAIFirstWordProtectionEnabled,
+		expiresAt: time.Now().Add(openAIFirstWordProtectionCacheTTL).UnixNano(),
+	})
 	s.InvalidateOpenAICodexTicketFailClosedCache()
 	s.InvalidateOpenAICodexTicketModelsCache()
 	s.InvalidateOpenAICodexTicketHarvestProxyCache()

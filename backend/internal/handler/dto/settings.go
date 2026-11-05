@@ -230,6 +230,7 @@ type SystemSettings struct {
 	OpenAICodexClientVersion                string   `json:"openai_codex_client_version"`
 	OpenAICodexClientVersionSynced          string   `json:"openai_codex_client_version_synced"`
 	OpenAICodexVersionAutoSyncEnabled       bool     `json:"openai_codex_version_auto_sync_enabled"`
+	OpenAIFirstWordProtectionEnabled        bool     `json:"openai_first_word_protection_enabled"`
 	OpenAIRequestTimezoneEnabled            bool     `json:"openai_request_timezone_enabled"`
 	OpenAIRequestTimezoneAuto               bool     `json:"openai_request_timezone_auto"`
 	OpenAICodexTicketEnabled                bool     `json:"openai_codex_ticket_enabled"`

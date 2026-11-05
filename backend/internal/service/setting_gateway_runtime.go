@@ -318,6 +318,63 @@ type cachedOpenAICodexTicketEnabled struct {
 	expiresAt int64
 }
 
+type cachedOpenAIFirstWordProtection struct {
+	value     bool
+	expiresAt int64
+}
+
+const openAIFirstWordProtectionCacheTTL = 30 * time.Second
+
+// GetOpenAIFirstWordProtectionEnabled uses the saved admin switch when present;
+// otherwise the deployment configuration remains the initial value.
+func (s *SettingService) GetOpenAIFirstWordProtectionEnabled(ctx context.Context, fallback bool) bool {
+	if s == nil || s.settingRepo == nil {
+		return fallback
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cached, ok := s.openAIFirstWordProtectionCache.Load().(*cachedOpenAIFirstWordProtection); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+		return cached.value
+	}
+	result, _, _ := s.openAIFirstWordProtectionSF.Do(SettingKeyOpenAIFirstWordProtectionEnabled, func() (any, error) {
+		snapshot := s.openAIFirstWordProtectionCache.Load()
+		if cached, ok := snapshot.(*cachedOpenAIFirstWordProtection); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+			return cached.value, nil
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		raw, err := s.settingRepo.GetValue(dbCtx, SettingKeyOpenAIFirstWordProtectionEnabled)
+		value := fallback
+		if err == nil && strings.TrimSpace(raw) != "" {
+			value = raw == "true"
+		} else if err != nil && !errors.Is(err, ErrSettingNotFound) {
+			if cached, ok := snapshot.(*cachedOpenAIFirstWordProtection); ok && cached != nil {
+				value = cached.value
+			}
+		}
+		s.openAIFirstWordProtectionCache.CompareAndSwap(snapshot, &cachedOpenAIFirstWordProtection{value: value, expiresAt: time.Now().Add(openAIFirstWordProtectionCacheTTL).UnixNano()})
+		return value, nil
+	})
+	value, ok := result.(bool)
+	if ok {
+		return value
+	}
+	return fallback
+}
+
+func (s *SettingService) InvalidateOpenAIFirstWordProtectionCache() {
+	if s == nil {
+		return
+	}
+	s.openAIFirstWordProtectionSF.Forget(SettingKeyOpenAIFirstWordProtectionEnabled)
+	value := false
+	if cached, ok := s.openAIFirstWordProtectionCache.Load().(*cachedOpenAIFirstWordProtection); ok && cached != nil {
+		value = cached.value
+	}
+	s.openAIFirstWordProtectionCache.Store(&cachedOpenAIFirstWordProtection{value: value})
+}
+
 const openAICodexTicketEnabledCacheTTL = 5 * time.Second
 
 // GetOpenAICodexTicketEnabled 返回后台 292 打票总开关。

@@ -248,7 +248,13 @@ func (s *OpenAIGatewayService) openAIFirstOutputTimeout(reasoningEffort string) 
 }
 
 func (s *OpenAIGatewayService) firstWordProtectionEnabled() bool {
-	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIFirstWordProtectionEnabled
+	if s == nil || s.cfg == nil {
+		return false
+	}
+	if s.settingService != nil {
+		return s.settingService.GetOpenAIFirstWordProtectionEnabled(context.Background(), s.cfg.Gateway.OpenAIFirstWordProtectionEnabled)
+	}
+	return s.cfg.Gateway.OpenAIFirstWordProtectionEnabled
 }
 
 // newOpenAIFirstOutputTimeoutError records the timeout as an upstream attempt

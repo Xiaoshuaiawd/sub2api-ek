@@ -161,11 +161,13 @@ type SettingService struct {
 	openAICodexVersionCache            atomic.Value // *cachedOpenAICodexClientVersion
 	openAICodexVersionSF               singleflight.Group
 	openAICodexTicketEnabledCache      atomic.Value // *cachedOpenAICodexTicketEnabled
+	openAIFirstWordProtectionCache     atomic.Value // *cachedOpenAIFirstWordProtection
 	openAIRequestTimezoneEnabledCache  atomic.Value // *cachedOpenAIRequestTimezoneEnabled
 	openAIRequestTimezoneAutoCache     atomic.Value // *cachedOpenAIRequestTimezoneAuto
 	openAIRequestTimezoneEnabledSF     singleflight.Group
 	openAIRequestTimezoneAutoSF        singleflight.Group
 	openAICodexTicketEnabledSF         singleflight.Group
+	openAIFirstWordProtectionSF        singleflight.Group
 	openAICodexTicketFailClosedCache   atomic.Value // *cachedOpenAICodexTicketFailClosed
 	openAICodexTicketFailClosedSF      singleflight.Group
 	openAICodexTicketModelsCache       atomic.Value // *cachedOpenAICodexTicketModels

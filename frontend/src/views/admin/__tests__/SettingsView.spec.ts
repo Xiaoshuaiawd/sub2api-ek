@@ -2300,6 +2300,19 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(Array.isArray(receivedProviders[0].supported_types)).toBe(true);
     expect(receivedProviders[0].supported_types).toEqual([]);
   });
+  it("shows and saves the OpenAI first-word protection switch", async () => {
+    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, openai_first_word_protection_enabled: false });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    const toggle = wrapper.get('[data-testid="openai-first-word-protection-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+    await toggle.setValue(true);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0]).toMatchObject({ openai_first_word_protection_enabled: true });
+    wrapper.unmount();
+  });
 });
 
 describe("admin SettingsView wechat connect controls", () => {

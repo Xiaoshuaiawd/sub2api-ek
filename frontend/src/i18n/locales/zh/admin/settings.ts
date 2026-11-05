@@ -628,6 +628,8 @@ export default {
         saveFailed: '保存 OpenCode Go 用量刷新设置失败'
       },
       gatewayForwarding: {
+        firstWordProtection: '首字保护（180 秒）',
+        firstWordProtectionHint: 'OpenAI 请求在 180 秒内没有首个有效输出时终止并报超时；已开始的流会以流内错误结束。关闭后恢复原有超时行为。',
         title: '请求转发行为',
         description: '控制请求转发到上游 OAuth 账号时的行为',
         grokDefaultTextModel: '默认 Grok 文本模型',

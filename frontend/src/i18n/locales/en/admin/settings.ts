@@ -635,6 +635,8 @@ export default {
         saveFailed: 'Failed to save OpenCode Go usage refresh settings'
       },
       gatewayForwarding: {
+        firstWordProtection: 'First-output protection (180 seconds)',
+        firstWordProtectionHint: 'Stops an OpenAI request if no meaningful output arrives within 180 seconds. An active stream ends with an in-stream error. Disable to restore the previous timeout behavior.',
         title: 'Request Forwarding',
         description: 'Control how requests are forwarded to upstream OAuth accounts',
         grokDefaultTextModel: 'Default Grok text model',

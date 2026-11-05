@@ -978,6 +978,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else {
 		result.OpenAICodexVersionAutoSyncEnabled = true
 	}
+	if s != nil && s.cfg != nil {
+		result.OpenAIFirstWordProtectionEnabled = s.cfg.Gateway.OpenAIFirstWordProtectionEnabled
+	}
+	if v, ok := settings[SettingKeyOpenAIFirstWordProtectionEnabled]; ok && strings.TrimSpace(v) != "" {
+		result.OpenAIFirstWordProtectionEnabled = v == "true"
+	}
 	result.OpenAIRequestTimezoneEnabled = strings.TrimSpace(settings[SettingKeyOpenAIRequestTimezoneEnabled]) == "" || settings[SettingKeyOpenAIRequestTimezoneEnabled] == "true"
 	result.OpenAIRequestTimezoneAuto = strings.TrimSpace(settings[SettingKeyOpenAIRequestTimezoneAuto]) == "" || settings[SettingKeyOpenAIRequestTimezoneAuto] == "true"
 	if v, ok := settings[SettingKeyOpenAICodexTicketEnabled]; ok && v != "" {
