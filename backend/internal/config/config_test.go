@@ -492,17 +492,6 @@ func TestLoadDefaultOpenAIFirstOutputTimeoutsDisabled(t *testing.T) {
 	require.Zero(t, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
 }
 
-func TestLoadOpenAIFirstWordProtectionEnabledByDefault(t *testing.T) {
-	resetViperWithJWTSecret(t)
-	cfg, err := Load()
-	require.NoError(t, err)
-	require.True(t, cfg.Gateway.OpenAIFirstWordProtectionEnabled)
-	t.Setenv("GATEWAY_OPENAI_FIRST_WORD_PROTECTION_ENABLED", "false")
-	cfg, err = Load()
-	require.NoError(t, err)
-	require.False(t, cfg.Gateway.OpenAIFirstWordProtectionEnabled)
-}
-
 func TestLoadOpenAIFirstOutputTimeoutsFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_FIRST_OUTPUT_TIMEOUT_SECONDS", "90")

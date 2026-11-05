@@ -120,14 +120,18 @@ func learningHarvestFixture(t *testing.T, budget int) (*OpenAIGatewayService, *h
 	return s, memory, func() string { mu.Lock(); defer mu.Unlock(); return selected }
 }
 
-func TestHarvestWarpRetriesRespectActualBudget(t *testing.T) {
-	for _, tc := range []struct{ budget, successOn, want int }{{2, 3, 1}, {6, 1, 1}, {6, 99, 1}} {
+func TestHarvestDirectedRetriesRespectActualBudget(t *testing.T) {
+	for _, tc := range []struct{ budget, successOn, want int }{{2, 3, 2}, {6, 3, 3}, {6, 99, 3}} {
 		t.Run(string(rune('0'+tc.budget))+"-"+string(rune('0'+tc.want)), func(t *testing.T) {
 			s, memory, node := learningHarvestFixture(t, tc.budget)
+			seen := map[string]bool{}
 			calls := 0
 			s.httpUpstream = &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
 				calls++
-				require.Empty(t, node(), "OpenAI harvest must not select a legacy node")
+				selected := node()
+				require.NotEmpty(t, selected, "directed probing must select an identifiable provider node")
+				require.False(t, seen[selected], "node repeated in one hunt")
+				seen[selected] = true
 				response := codexTicketResponse()
 				if calls != tc.successOn {
 					response.Header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
@@ -136,7 +140,11 @@ func TestHarvestWarpRetriesRespectActualBudget(t *testing.T) {
 			}}
 			s.probeOnceOpenAICodexTicket(context.Background(), ticketTestAccount(1), "gpt-6-astra")
 			require.Equal(t, tc.want, calls)
-			require.Empty(t, memory.feedback, "WARP attempts must not record legacy node feedback")
+			require.Len(t, memory.feedback, tc.want)
+			require.Equal(t, "invalid_state", memory.feedback[0].Result)
+			if tc.successOn <= tc.want {
+				require.Equal(t, "success", memory.feedback[tc.want-1].Result)
+			}
 		})
 	}
 }
@@ -166,7 +174,7 @@ func TestHarvestAccountErrorsStopRetriesAndHonorRetryAfter(t *testing.T) {
 			}}
 			s.probeOnceOpenAICodexTicket(context.Background(), ticketTestAccount(1), "gpt-6-astra")
 			require.Equal(t, 1, calls)
-			require.Empty(t, memory.feedback)
+			require.Len(t, memory.feedback, 1)
 			until, ok := s.openaiCodexTicketProbeCooldown.Load(openAICodexTicketKey(1, "gpt-6-astra"))
 			require.True(t, ok)
 			untilTime, ok := until.(time.Time)
@@ -176,7 +184,7 @@ func TestHarvestAccountErrorsStopRetriesAndHonorRetryAfter(t *testing.T) {
 	}
 }
 
-func TestHarvestWarpDoesNotSelectLegacyNodes(t *testing.T) {
+func TestHarvestSuccessfulNodePreferredNextRound(t *testing.T) {
 	s, _, node := learningHarvestFixture(t, 6)
 	var selected []string
 	s.httpUpstream = &codexTicketFuncUpstream{do: func(*http.Request) (*http.Response, error) {
@@ -188,8 +196,7 @@ func TestHarvestWarpDoesNotSelectLegacyNodes(t *testing.T) {
 		s.probeOnceOpenAICodexTicket(context.Background(), ticketTestAccount(1), "gpt-6-astra")
 	}
 	require.Len(t, selected, 2)
-	require.Empty(t, selected[0])
-	require.Empty(t, selected[1])
+	require.Equal(t, selected[0], selected[1])
 }
 
 func TestHarvestRechecksSkipImmediatelyBeforeRequest(t *testing.T) {
@@ -246,11 +253,11 @@ func TestHarvestCancellationReleasesLeaseWithoutPenalty(t *testing.T) {
 	second, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
 	s.probeOnceOpenAICodexTicket(second, ticketTestAccount(1), "gpt-6-astra")
-	require.Empty(t, memory.feedback)
-	require.True(t, s.lookupOpenAICodexTicket(ticketTestAccount(1), "gpt-6-astra").valid(time.Now(), 292))
+	require.Len(t, memory.feedback, 1)
+	require.Equal(t, "success", memory.feedback[0].Result)
 }
 
-func TestHarvestWarpIgnoresMissingControllerAndRespectsRoundBudget(t *testing.T) {
+func TestHarvestControllerFallbackStillUsesRoundBudget(t *testing.T) {
 	s, memory, _ := learningHarvestFixture(t, 1)
 	t.Setenv("DATA_DIR", t.TempDir())
 	s.cfg.Gateway.OpenAICodexTicket.Models = []string{"gpt-6-astra", "gpt-5.6-sol"}
@@ -262,7 +269,7 @@ func TestHarvestWarpIgnoresMissingControllerAndRespectsRoundBudget(t *testing.T)
 	s.refreshOpenAICodexTickets(context.Background())
 	require.Equal(t, 1, calls)
 	require.Empty(t, memory.feedback)
-	require.Empty(t, s.codexHarvest.Runtime().DegradedReason)
+	require.NotEmpty(t, s.codexHarvest.Runtime().DegradedReason)
 }
 
 func TestHarvestDisabledMemoryPreservesLearningRecords(t *testing.T) {
@@ -335,7 +342,7 @@ func (u *harvestProxyUpstream) Do(req *http.Request, proxy string, _ int64, _ in
 	return u.do(req, proxy)
 }
 
-func TestHarvestRefreshUsesWarpAndNewSession(t *testing.T) {
+func TestHarvestRefreshPinsIssuingNodeAndSession(t *testing.T) {
 	s, _, node := learningHarvestFixture(t, 6)
 	var selected []string
 	var sessions []string
@@ -348,24 +355,21 @@ func TestHarvestRefreshUsesWarpAndNewSession(t *testing.T) {
 	s.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
 	ticket := s.lookupOpenAICodexTicket(account, "gpt-6-astra")
 	require.NotNil(t, ticket)
-	require.Empty(t, ticket.HarvestNodeID)
-	require.Empty(t, ticket.HarvestNodeName)
-	require.Empty(t, ticket.HarvestNodeProvider)
-	require.Equal(t, OpenAIWarpProxyURL(), ticket.HarvestProxyURL)
+	require.NotEmpty(t, ticket.HarvestNodeID)
+	require.Equal(t, "http://127.0.0.1:3102", ticket.HarvestProxyURL)
 	require.NotEmpty(t, ticket.HarvestSessionID)
 	require.NoError(t, s.codexHarvest.ResetNodes(context.Background(), 0))
 	ticket.ExpiresAt = time.Now().Add(time.Second)
 	s.openaiCodexTicketProbeCooldown.Delete(openAICodexTicketKey(account.ID, "gpt-6-astra"))
 	s.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
 	require.Len(t, selected, 2)
-	require.Empty(t, selected[0])
-	require.Empty(t, selected[1])
+	require.Equal(t, selected[0], selected[1])
 	require.NotEqual(t, sessions[0], sessions[1])
 	require.NotEmpty(t, sessions[0])
-	require.NotEqual(t, "ticket_sticky", s.codexHarvest.Runtime().SelectionReason)
+	require.Equal(t, "ticket_sticky", s.codexHarvest.Runtime().SelectionReason)
 }
 
-func TestDoOpenAIUpstream_BoundTicketUsesWarpWithoutReacquiringNode(t *testing.T) {
+func TestDoOpenAIUpstream_BoundTicketReacquiresHarvestNode(t *testing.T) {
 	s, _, node := learningHarvestFixture(t, 6)
 	s.httpUpstream = &codexTicketFuncUpstream{do: func(*http.Request) (*http.Response, error) {
 		return codexTicketResponse(), nil
@@ -374,11 +378,7 @@ func TestDoOpenAIUpstream_BoundTicketUsesWarpWithoutReacquiringNode(t *testing.T
 	s.probeOnceOpenAICodexTicket(context.Background(), account, "gpt-6-astra")
 	ticket := s.lookupOpenAICodexTicket(account, "gpt-6-astra")
 	require.NotNil(t, ticket)
-	require.Empty(t, ticket.HarvestNodeID)
-	require.Empty(t, ticket.HarvestNodeName)
-	require.Empty(t, ticket.HarvestNodeProvider)
-	require.Equal(t, OpenAIWarpProxyURL(), ticket.HarvestProxyURL)
-	previousNode := node()
+	require.NotEmpty(t, ticket.HarvestNodeID)
 	var usedProxy, usedNode string
 	s.httpUpstream = &harvestProxyUpstream{do: func(req *http.Request, proxy string) (*http.Response, error) {
 		usedProxy = proxy
@@ -392,46 +392,6 @@ func TestDoOpenAIUpstream_BoundTicketUsesWarpWithoutReacquiringNode(t *testing.T
 	resp, err := s.doOpenAIUpstream(req, "http://account.example:8080", account)
 	require.NoError(t, err)
 	require.Equal(t, ticket.HarvestProxyURL, usedProxy)
-	require.Equal(t, previousNode, usedNode, "business request must not select a legacy node")
+	require.Equal(t, ticket.HarvestNodeName, usedNode)
 	require.NoError(t, resp.Body.Close())
-}
-
-func TestPrepareHarvestAttemptOpenAIIgnoresLegacyProxyAndNode(t *testing.T) {
-	t.Setenv("OPENAI_WARP_PROXY_URL", "http://warp.invalid:8080")
-	s, _, selected := learningHarvestFixture(t, 6)
-	account := ticketTestAccount(1)
-	account.Proxy = &Proxy{ID: 9, Protocol: "http", Host: "account.invalid", Port: 8080, Status: StatusActive}
-	oldTicket := &openAICodexTicket{HarvestProxyURL: "http://old.invalid:8080", HarvestNodeID: "old-node", HarvestNodeName: "old-name", HarvestNodeProvider: "managed"}
-	s.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, "gpt-6-astra"), oldTicket)
-	tried := map[string]bool{"old-node": true}
-	attempt, ok := s.prepareHarvestAttempt(t.Context(), account, "gpt-6-astra", account.Proxy.URL(), tried, CodexHarvestControls{NodeMemoryEnabled: true})
-	require.True(t, ok)
-	require.Equal(t, "http://warp.invalid:8080", attempt.proxy)
-	require.Nil(t, attempt.sidecar)
-	require.Empty(t, attempt.node.ID)
-	require.Equal(t, map[string]bool{"old-node": true}, tried)
-	require.Empty(t, selected())
-	require.NotNil(t, attempt.release)
-	attempt.release()
-}
-
-func TestPrepareHarvestAttemptNonOpenAISelectsUntriedNodes(t *testing.T) {
-	s, _, selected := learningHarvestFixture(t, 6)
-	account := ticketTestAccount(1)
-	account.Platform = PlatformAnthropic
-	tried := map[string]bool{}
-	controls := CodexHarvestControls{NodeMemoryEnabled: true}
-	first, ok := s.prepareHarvestAttempt(t.Context(), account, "gpt-6-astra", "http://127.0.0.1:3101", tried, controls)
-	require.True(t, ok)
-	require.NotNil(t, first.sidecar)
-	require.NotEmpty(t, first.node.ID)
-	require.Equal(t, first.node.Name, selected())
-	require.True(t, tried[first.node.ID])
-	first.release()
-	second, ok := s.prepareHarvestAttempt(t.Context(), account, "gpt-6-astra", "http://127.0.0.1:3101", tried, controls)
-	require.True(t, ok)
-	require.NotEqual(t, first.node.ID, second.node.ID)
-	require.Equal(t, second.node.Name, selected())
-	require.True(t, tried[second.node.ID])
-	second.release()
 }

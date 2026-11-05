@@ -434,7 +434,6 @@ func TestOpenAIGatewayService_Forward_WSv2Dial426FallbackHTTP(t *testing.T) {
 		_, _ = w.Write([]byte(`upgrade required`))
 	}))
 	defer ws426Server.Close()
-	setLocalWarpProxy(t, ws426Server.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -838,7 +837,6 @@ func TestOpenAIGatewayService_Forward_WSv2RetryFiveTimesThenFallbackHTTP(t *test
 		_ = conn.WriteControl(websocket.CloseMessage, closePayload, time.Now().Add(time.Second))
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -924,7 +922,6 @@ func TestOpenAIGatewayService_Forward_WSv2PolicyViolationFastFallbackHTTP(t *tes
 		_ = conn.WriteControl(websocket.CloseMessage, closePayload, time.Now().Add(time.Second))
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1015,7 +1012,6 @@ func TestOpenAIGatewayService_Forward_WSv2ConnectionLimitReachedRetryThenFallbac
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1126,7 +1122,6 @@ func TestOpenAIGatewayService_Forward_WSv2PreviousResponseNotFoundRecoversByDrop
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1230,7 +1225,6 @@ func TestOpenAIGatewayService_Forward_WSv2PreviousResponseNotFoundSkipsRecoveryF
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1332,7 +1326,6 @@ func TestOpenAIGatewayService_Forward_WSv2PreviousResponseNotFoundSkipsRecoveryW
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1433,7 +1426,6 @@ func TestOpenAIGatewayService_Forward_WSv2PreviousResponseNotFoundOnlyRecoversOn
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1552,7 +1544,6 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentRecoversOnce(t 
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1659,7 +1650,6 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentSkipsRecoveryWi
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1779,7 +1769,6 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentRecoversSingleO
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -1901,7 +1890,6 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentKeepsPreviousRe
 		})
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

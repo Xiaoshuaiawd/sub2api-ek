@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,56 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
-
-// setLocalWarpProxy routes the production proxy transport only to this test's
-// local WebSocket upstream and verifies that the proxy was actually used.
-func setLocalWarpProxy(t *testing.T, upstreamURL string) {
-	t.Helper()
-	target, err := url.Parse(upstreamURL)
-	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1", target.Hostname())
-	var requests atomic.Int32
-	reverse := httputil.NewSingleHostReverseProxy(target)
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodConnect {
-			if r.Host != target.Host {
-				http.Error(w, "unexpected proxy target", http.StatusForbidden)
-				return
-			}
-			upstream, err := net.DialTimeout("tcp", target.Host, time.Second)
-			if err != nil {
-				http.Error(w, "upstream unavailable", http.StatusBadGateway)
-				return
-			}
-			client, buffered, err := w.(http.Hijacker).Hijack()
-			if err != nil {
-				_ = upstream.Close()
-				return
-			}
-			requests.Add(1)
-			_, _ = buffered.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
-			if err := buffered.Flush(); err != nil {
-				_ = client.Close()
-				_ = upstream.Close()
-				return
-			}
-			go func() { _, _ = io.Copy(upstream, buffered); _ = upstream.Close() }()
-			go func() { _, _ = io.Copy(client, upstream); _ = client.Close() }()
-			return
-		}
-		if r.URL.Host != target.Host {
-			http.Error(w, "unexpected proxy target", http.StatusForbidden)
-			return
-		}
-		requests.Add(1)
-		reverse.ServeHTTP(w, r)
-	}))
-	t.Setenv("OPENAI_WARP_PROXY_URL", proxy.URL)
-	t.Cleanup(func() {
-		proxy.Close()
-		require.Positive(t, requests.Load(), "WebSocket must pass through the configured WARP proxy")
-	})
-}
 
 func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -140,7 +87,6 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 		}
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -266,7 +212,6 @@ func TestOpenAIGatewayService_Forward_WSv2_UsesPatchedBodyAfterValidationDecode(
 		}
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -370,7 +315,6 @@ func TestOpenAIGatewayService_Forward_WSv2_ImageGenerationCountsOutputs(t *testi
 		}
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -727,7 +671,6 @@ func TestOpenAIGatewayService_Forward_WSv2_PoolReuseNotOneToOne(t *testing.T) {
 		}
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
@@ -1423,7 +1366,6 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 		}
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
@@ -1742,7 +1684,6 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseSessionConnIsolation(t *test
 		}
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
@@ -1850,7 +1791,6 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseDisableForceNewConnAllowsReu
 		}
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false

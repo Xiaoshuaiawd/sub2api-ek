@@ -142,7 +142,6 @@ func (s *OpenAIGatewayService) huntCodexHarvestTicket(ctx context.Context, accou
 		if result.Kind == "success" {
 			s.openaiCodexTicketProbeCooldown.Delete(openAICodexTicketKey(account.ID, model))
 			ticket := codexHarvestTicket(account, model, result, cfg, attempts)
-			attempt.proxy = result.ProxyURL
 			bindCodexHarvestEgress(ticket, attempt, session)
 			if err := s.storeOpenAICodexTicket(ctx, account, ticket); err != nil && s.codexHarvest != nil {
 				s.codexHarvest.degrade("ticket persisted in memory only; database write failed")

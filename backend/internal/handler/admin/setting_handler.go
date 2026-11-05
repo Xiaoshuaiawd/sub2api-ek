@@ -312,7 +312,6 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAICodexClientVersion:                               settings.OpenAICodexClientVersion,
 		OpenAICodexClientVersionSynced:                         settings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled:                      settings.OpenAICodexVersionAutoSyncEnabled,
-		OpenAIWarpEnabled:                                      settings.OpenAIWarpEnabled,
 		OpenAIRequestTimezoneEnabled:                           settings.OpenAIRequestTimezoneEnabled,
 		OpenAIRequestTimezoneAuto:                              settings.OpenAIRequestTimezoneAuto,
 		OpenAICodexTicketEnabled:                               settings.OpenAICodexTicketEnabled,

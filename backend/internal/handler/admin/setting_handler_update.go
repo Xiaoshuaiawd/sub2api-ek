@@ -272,7 +272,6 @@ type UpdateSettingsRequest struct {
 	OpenAICodexUserAgent                   *string   `json:"openai_codex_user_agent"`
 	OpenAICodexClientVersion               *string   `json:"openai_codex_client_version"`
 	OpenAICodexVersionAutoSyncEnabled      *bool     `json:"openai_codex_version_auto_sync_enabled"`
-	OpenAIWarpEnabled                      *bool     `json:"openai_warp_enabled"`
 	OpenAIRequestTimezoneEnabled           *bool     `json:"openai_request_timezone_enabled"`
 	OpenAIRequestTimezoneAuto              *bool     `json:"openai_request_timezone_auto"`
 	OpenAICodexTicketEnabled               *bool     `json:"openai_codex_ticket_enabled"`
@@ -2077,12 +2076,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAICodexVersionAutoSyncEnabled
 		}(),
-		OpenAIWarpEnabled: func() bool {
-			if req.OpenAIWarpEnabled != nil {
-				return *req.OpenAIWarpEnabled
-			}
-			return previousSettings.OpenAIWarpEnabled
-		}(),
 		OpenAIRequestTimezoneEnabled: func() bool {
 			if req.OpenAIRequestTimezoneEnabled != nil {
 				return *req.OpenAIRequestTimezoneEnabled
@@ -2767,7 +2760,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexClientVersion:                               updatedSettings.OpenAICodexClientVersion,
 		OpenAICodexClientVersionSynced:                         updatedSettings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled:                      updatedSettings.OpenAICodexVersionAutoSyncEnabled,
-		OpenAIWarpEnabled:                                      updatedSettings.OpenAIWarpEnabled,
 		OpenAIRequestTimezoneEnabled:                           updatedSettings.OpenAIRequestTimezoneEnabled,
 		OpenAIRequestTimezoneAuto:                              updatedSettings.OpenAIRequestTimezoneAuto,
 		OpenAICodexTicketEnabled:                               updatedSettings.OpenAICodexTicketEnabled,

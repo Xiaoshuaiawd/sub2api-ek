@@ -508,9 +508,11 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 	}
 	fedRAMP = account.IsChatGPTAccountFedRAMP()
 
-	if OpenAIWarpEnabled() {
-		return accessToken, chatGPTAccountID, OpenAIWarpProxyURL(), fedRAMP, nil
-	}
+	// account.Proxy is eager-loaded by accountRepo.GetByID (see
+	// repository.accountsToService), so we can read the proxy URL directly
+	// instead of round-tripping the DB again. Fall back to proxyRepo only
+	// when Proxy isn't pre-populated (defensive — e.g. callers that built
+	// the Account by hand).
 	if account.ProxyID != nil {
 		switch {
 		case account.Proxy != nil:
@@ -521,6 +523,7 @@ func (s *OpenAIQuotaService) prepareUpstreamCall(ctx context.Context, accountID 
 			}
 		}
 	}
+
 	return accessToken, chatGPTAccountID, proxyURL, fedRAMP, nil
 }
 

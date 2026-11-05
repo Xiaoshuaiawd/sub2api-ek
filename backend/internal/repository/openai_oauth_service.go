@@ -71,7 +71,7 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 	resp, err := request.Post(s.tokenURLForClient(clientID))
 
 	if err != nil {
-		if !service.OpenAIWarpEnabled() && shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
+		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
 			return nil, newOpenAINoProxyHintError(err)
 		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "request failed: %v", err)
@@ -127,7 +127,7 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 	resp, err := request.Post(s.tokenURLForClient(clientID))
 
 	if err != nil {
-		if !service.OpenAIWarpEnabled() && shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
+		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
 			return nil, newOpenAINoProxyHintError(err)
 		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "request failed: %v", err)
@@ -141,9 +141,6 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 }
 
 func createOpenAIReqClient(proxyURL string) (*req.Client, error) {
-	if service.OpenAIWarpEnabled() {
-		proxyURL = service.OpenAIWarpProxyURL()
-	}
 	return getSharedReqClient(reqClientOptions{
 		ProxyURL: proxyURL,
 		Timeout:  120 * time.Second,
@@ -161,5 +158,9 @@ func shouldReturnOpenAINoProxyHint(ctx context.Context, proxyURL string, err err
 }
 
 func newOpenAINoProxyHintError(cause error) error {
-	return infraerrors.New(http.StatusBadGateway, "OPENAI_OAUTH_PROXY_REQUIRED", "OpenAI OAuth request failed: no proxy is configured and this server could not reach OpenAI directly. Select a proxy that can access OpenAI, then retry; if the authorization code has expired, regenerate the authorization URL.").WithCause(cause)
+	return infraerrors.New(
+		http.StatusBadGateway,
+		"OPENAI_OAUTH_PROXY_REQUIRED",
+		"OpenAI OAuth request failed: no proxy is configured and this server could not reach OpenAI directly. Select a proxy that can access OpenAI, then retry; if the authorization code has expired, regenerate the authorization URL.",
+	).WithCause(cause)
 }

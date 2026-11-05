@@ -438,7 +438,7 @@ func TestOpenAIOAuthReauthRejectsDifferentUserInSameWorkspace(t *testing.T) {
 	require.Zero(t, runtimeBlocker.clearedAccountID)
 }
 
-func TestOpenAIOAuthReauthUsesWARPEvenWhenAccountProxyMissing(t *testing.T) {
+func TestOpenAIOAuthReauthDoesNotBypassMissingConfiguredProxy(t *testing.T) {
 	svc, reader, repo, _, _, _ := newReauthTestService("acct-1")
 	ctx := context.Background()
 	proxyID := int64(9)
@@ -449,13 +449,12 @@ func TestOpenAIOAuthReauthUsesWARPEvenWhenAccountProxyMissing(t *testing.T) {
 
 	claim, err := svc.ClaimTask(ctx, "worker-a")
 	require.NoError(t, err)
-	require.NotNil(t, claim)
-	require.Equal(t, OpenAIWarpProxyURL(), claim.ProxyURL)
+	require.Nil(t, claim)
+	require.Equal(t, OpenAIOAuthReauthStatusFailed, repo.task.Status)
+	require.Equal(t, "configured account proxy is unavailable", repo.task.Error)
 }
 
-func TestOpenAIOAuthReauthOverridesManagedProxyWithWARP(t *testing.T) {
-	t.Setenv("OPENAI_WARP_PROXY_URL", "socks5h://server-warp:1080")
-	t.Setenv("OPENAI_WARP_WORKER_PROXY_URL", "socks5h://remote-warp:1080")
+func TestOpenAIOAuthReauthUsesManagedProxyOverrideForWorkerAndTokenExchange(t *testing.T) {
 	svc, reader, _, _, oauthClient, _ := newReauthTestService("acct-1")
 	ctx := context.Background()
 	accountProxyID := int64(4)
@@ -478,15 +477,15 @@ func TestOpenAIOAuthReauthOverridesManagedProxyWithWARP(t *testing.T) {
 	require.NoError(t, err)
 	claim, err := svc.ClaimTask(ctx, "worker-a")
 	require.NoError(t, err)
-	require.Equal(t, "socks5h://remote-warp:1080", claim.ProxyURL)
+	require.Equal(t, "socks5h://203.0.113.9:1080", claim.ProxyURL)
 
 	state := reauthStateFromURL(t, claim.AuthURL)
 	_, err = svc.SubmitCallback(ctx, claim.TaskID, "worker-a", "http://localhost:1455/auth/callback?code=test-code&state="+url.QueryEscape(state))
 	require.NoError(t, err)
-	require.Equal(t, "socks5h://server-warp:1080", oauthClient.proxyURL)
+	require.Equal(t, claim.ProxyURL, oauthClient.proxyURL)
 }
 
-func TestOpenAIOAuthReauthOverridesMihomoWithWARP(t *testing.T) {
+func TestOpenAIOAuthReauthUsesMihomoProxyForWorkerAndTokenExchange(t *testing.T) {
 	svc, _, _, _, oauthClient, _ := newReauthTestService("acct-1")
 	ctx := context.Background()
 	released := false
@@ -506,18 +505,18 @@ func TestOpenAIOAuthReauthOverridesMihomoWithWARP(t *testing.T) {
 	require.NoError(t, err)
 	claim, err := svc.ClaimTask(ctx, "worker-a")
 	require.NoError(t, err)
-	require.Equal(t, OpenAIWarpProxyURL(), claim.ProxyURL)
+	require.Equal(t, "http://127.0.0.1:19017", claim.ProxyURL)
 	require.False(t, released)
 	oauthClient.onExchange = func() { require.False(t, released) }
 
 	state := reauthStateFromURL(t, claim.AuthURL)
 	_, err = svc.SubmitCallback(ctx, claim.TaskID, "worker-a", "http://localhost:1455/auth/callback?code=test-code&state="+url.QueryEscape(state))
 	require.NoError(t, err)
-	require.False(t, released)
+	require.True(t, released)
 	require.Equal(t, claim.ProxyURL, oauthClient.proxyURL)
 }
 
-func TestOpenAIOAuthReauthDoesNotLeaseMihomoForCredentials(t *testing.T) {
+func TestOpenAIOAuthReauthKeepsMihomoProxyUntilDirectCredentialsComplete(t *testing.T) {
 	svc, _, _, _, _, _ := newReauthTestService("acct-1")
 	ctx := context.Background()
 	released := false
@@ -537,10 +536,10 @@ func TestOpenAIOAuthReauthDoesNotLeaseMihomoForCredentials(t *testing.T) {
 
 	_, err = svc.SubmitCredentials(ctx, claim.TaskID, "worker-a", directReauthCredentials("acct-1", "user-1", "user@example.com"), nil)
 	require.NoError(t, err)
-	require.False(t, released)
+	require.True(t, released)
 }
 
-func TestOpenAIOAuthReauthDoesNotLeaseMihomoOnWorkerFailure(t *testing.T) {
+func TestOpenAIOAuthReauthReleasesMihomoProxyWhenWorkerFails(t *testing.T) {
 	svc, _, _, _, _, _ := newReauthTestService("acct-1")
 	ctx := context.Background()
 	released := false
@@ -559,7 +558,7 @@ func TestOpenAIOAuthReauthDoesNotLeaseMihomoOnWorkerFailure(t *testing.T) {
 	require.False(t, released)
 
 	require.NoError(t, svc.FailTask(ctx, claim.TaskID, "worker-a", "worker timeout"))
-	require.False(t, released)
+	require.True(t, released)
 }
 
 func TestOpenAIOAuthReauthRejectsInvalidProxySourceCombinations(t *testing.T) {

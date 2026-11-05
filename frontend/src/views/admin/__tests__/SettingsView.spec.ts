@@ -26,7 +26,6 @@ beforeEach(() => {
 
 const {
   getSettings,
-  getOpenAIWarpStatus,
   updateSettings,
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
@@ -55,7 +54,6 @@ const {
   showSuccess,
 } = vi.hoisted(() => ({
   getSettings: vi.fn(),
-  getOpenAIWarpStatus: vi.fn(),
   updateSettings: vi.fn(),
   getWebSearchEmulationConfig: vi.fn(),
   updateWebSearchEmulationConfig: vi.fn(),
@@ -103,7 +101,6 @@ vi.mock("@/api", () => ({
   adminAPI: {
     settings: {
       getSettings,
-      getOpenAIWarpStatus,
       updateSettings,
       getWebSearchEmulationConfig,
       updateWebSearchEmulationConfig,
@@ -167,9 +164,6 @@ vi.mock("@/utils/apiError", () => ({
 vi.mock("vue-i18n", async () => {
   const actual = await vi.importActual<typeof import("vue-i18n")>("vue-i18n");
   const translations: Record<string, string> = {
-    'admin.settings.gatewayForwarding.openAIWarpConnected': '节点正常',
-    'admin.settings.gatewayForwarding.openAIWarpUnavailable': '节点不可用',
-    'admin.settings.gatewayForwarding.openAIWarpIP': '出口 IP：{ip}',
     "admin.settings.wechatConnect.title": "微信登录",
     "admin.settings.wechatConnect.description": "用于微信开放平台或公众号/小程序的第三方登录配置。",
     "admin.settings.wechatConnect.enabledLabel": "启用微信登录",
@@ -670,7 +664,6 @@ describe("admin SettingsView email domain quota copy", () => {
 describe("admin SettingsView payment visible method controls", () => {
   beforeEach(() => {
     getSettings.mockReset();
-    getOpenAIWarpStatus.mockReset();
     updateSettings.mockReset();
     getWebSearchEmulationConfig.mockReset();
     updateWebSearchEmulationConfig.mockReset();
@@ -698,7 +691,6 @@ describe("admin SettingsView payment visible method controls", () => {
     localeRef.value = "zh-CN";
 
     getSettings.mockResolvedValue({ ...baseSettingsResponse });
-    getOpenAIWarpStatus.mockResolvedValue({ connected: true, ip: '104.28.195.192', checked_at: '2026-11-02T00:00:00Z' });
     updateSettings.mockImplementation(async (payload) => ({
       ...baseSettingsResponse,
       ...payload,
@@ -762,7 +754,6 @@ describe("admin SettingsView payment visible method controls", () => {
     fetchPublicSettings.mockResolvedValue(undefined);
     adminSettingsFetch.mockResolvedValue(undefined);
   });
-
 
   it("keeps the IP risk form on IP Audit without loading or saving it from Settings", async () => {
     settingsRoute.query = { tab: 'security' };
@@ -2309,27 +2300,6 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(Array.isArray(receivedProviders[0].supported_types)).toBe(true);
     expect(receivedProviders[0].supported_types).toEqual([]);
   });
-  it("shows and saves the OpenAI WARP gateway switch", async () => {
-    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, openai_warp_enabled: true });
-    const wrapper = mountView();
-    await flushPromises();
-    await openGatewayTab(wrapper);
-    expect(wrapper.get('[data-testid="openai-warp-status"]').text()).toBe('节点正常');
-    expect(wrapper.get('[data-testid="openai-warp-ip"]').text()).toContain('104.28.195.192');
-    getOpenAIWarpStatus.mockResolvedValueOnce({ connected: false, ip: '', checked_at: '2026-11-02T00:01:00Z' });
-    await wrapper.get('[data-testid="openai-warp-refresh"]').trigger('click');
-    await flushPromises();
-    expect(wrapper.get('[data-testid="openai-warp-status"]').text()).toBe('节点不可用');
-    expect(wrapper.find('[data-testid="openai-warp-ip"]').exists()).toBe(false);
-    const toggle = wrapper.get('[data-testid="openai-warp-toggle"]');
-    expect((toggle.element as HTMLInputElement).checked).toBe(true);
-    await toggle.setValue(false);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-    expect(updateSettings.mock.calls[0]?.[0]).toMatchObject({ openai_warp_enabled: false });
-    wrapper.unmount();
-  });
-
 });
 
 describe("admin SettingsView wechat connect controls", () => {

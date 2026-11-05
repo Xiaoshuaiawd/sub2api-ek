@@ -68,7 +68,7 @@ func TestExcelBPSNativeAttachmentForward(t *testing.T) {
 					calls++
 					require.Equal(t, account.ID, id)
 					require.Equal(t, 1, concurrency)
-					require.Equal(t, OpenAIWarpProxyURL(), proxy)
+					require.Equal(t, account.Proxy.URL(), proxy)
 					require.Equal(t, "Bearer test-token", req.Header.Get("Authorization"))
 					require.Equal(t, "test-account", req.Header.Get("Chatgpt-Account-Id"))
 					require.True(t, HTTPUpstreamRedirectsDisabled(req.Context()))
@@ -258,7 +258,7 @@ func TestExcelBPSAttachmentUsesResolvedSessionProxy(t *testing.T) {
 	calls := 0
 	svc.httpUpstream = &nativeAttachmentUpstream{do: func(req *http.Request, proxy string, id int64, concurrency int) (*http.Response, error) {
 		calls++
-		require.Equal(t, OpenAIWarpProxyURL(), proxy)
+		require.Equal(t, selected, proxy)
 		require.Equal(t, account.ID, id)
 		require.Equal(t, basispoints.AttachmentsURL, req.URL.String())
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("{\"openai_file_id\":\"file-selected-proxy\"}"))}, nil

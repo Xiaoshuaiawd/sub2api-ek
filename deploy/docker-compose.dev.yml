@@ -9,36 +9,6 @@
 # =============================================================================
 
 services:
-  warp-proxy:
-    entrypoint: ["/bin/bash", "/etc/sub2api-warp-entrypoint.sh"]
-    dns:
-      - 1.1.1.1
-    image: caomingjun/warp:2026.6.880.0-2.12.0@sha256:98d048b8996ca2e621d29887169c5c48a4f6878e2a2c647b7ea82d69540420da
-    restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-    device_cgroup_rules:
-      - "c 10:200 rwm"
-    environment:
-      WARP_SLEEP: "2"
-      WARP_LICENSE_KEY: "${WARP_LICENSE_KEY:-}"
-    sysctls:
-      net.ipv6.conf.all.disable_ipv6: "0"
-      net.ipv4.conf.all.src_valid_mark: "1"
-    volumes:
-      - warp-data:/var/lib/cloudflare-warp
-      - ./warp-entrypoint.sh:/etc/sub2api-warp-entrypoint.sh:ro
-      - ./warp-dns.py:/etc/sub2api-warp-dns.py:ro
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS --socks5-hostname 127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | grep -Eq '^warp=(on|plus)$'"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 45s
-    networks:
-      - sub2api-network
-
-
   sub2api:
     build:
       context: ..
@@ -54,9 +24,6 @@ services:
     volumes:
       - ./data:/app/data:Z
     environment:
-      - OPENAI_WARP_PROXY_URL=${OPENAI_WARP_PROXY_URL:-socks5h://warp-proxy:1080}
-      - OPENAI_WARP_WORKER_PROXY_URL=${OPENAI_WARP_WORKER_PROXY_URL:-}
-      - OPENAI_WARP_WORKER_NETWORK_ISOLATED=${OPENAI_WARP_WORKER_NETWORK_ISOLATED:-false}
       - AUTO_SETUP=true
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8080
@@ -212,6 +179,3 @@ services:
 networks:
   sub2api-network:
     driver: bridge
-
-volumes:
-  warp-data:

@@ -123,9 +123,6 @@ func (m *Manager) run() {
 	if concurrency := os.Getenv("OPENAI_REAUTH_CONCURRENCY"); concurrency != "" {
 		cmd.Env = append(cmd.Env, "OPENAI_REAUTH_CONCURRENCY="+concurrency)
 	}
-	if isolated := os.Getenv("OPENAI_WARP_WORKER_NETWORK_ISOLATED"); isolated != "" {
-		cmd.Env = append(cmd.Env, "OPENAI_WARP_WORKER_NETWORK_ISOLATED="+isolated)
-	}
 	cmd.Dir = dir
 	// Worker/external runner output must never reach the application journal.
 	cmd.Stdout = io.Discard

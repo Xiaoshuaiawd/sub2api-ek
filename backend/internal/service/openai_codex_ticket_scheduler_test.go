@@ -36,7 +36,7 @@ func ticketSchedulerFixture(t *testing.T, advanced, loadBatch bool) (*OpenAIGate
 	account.Credentials["email"] = "fixture@example.invalid"
 	account.Credentials["plan_type"] = "pro"
 	account.Extra = map[string]any{
-		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
+		openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
 			AccountID: account.ID, Model: "gpt-6-astra",
 			State: fakeCodexTicketState(292), Length: 292,
 			CapturedAt: time.Now(), IssuedAt: time.Now(),

@@ -124,62 +124,6 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
 }
 
-func TestForwardAsRawChatCompletions_FirstWordDeadlineIgnoresRoleOnlyChunk(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-	stream := newContextBoundBlockingReadCloser([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"))
-	t.Cleanup(stream.forceUnblock)
-	stopFallback := time.AfterFunc(250*time.Millisecond, stream.forceUnblock)
-	defer stopFallback.Stop()
-	cfg := rawChatCompletionsTestConfig()
-	cfg.Gateway.OpenAIFirstWordProtectionEnabled = true
-	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &contextBoundHTTPUpstream{body: stream}}
-	c.Set(openAIHTTPBudgetGinKey, &openAIHTTPBudget{started: time.Now(), preOutputLimit: 80 * time.Millisecond, preOutputPhase: "first_word_protection", progress: make(chan struct{})})
-
-	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
-	var phaseErr *openAIHTTPPhaseTimeout
-	require.ErrorAs(t, err, &phaseErr)
-	require.Equal(t, "first_word_protection", phaseErr.phase)
-	require.Nil(t, result)
-	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
-	require.NotContains(t, rec.Body.String(), `"role":"assistant"`)
-}
-
-func TestForwardAsRawChatCompletions_FirstWordDisarmsDeadlineAfterContent(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-	reader, writer := io.Pipe()
-	defer reader.Close()
-	defer writer.Close()
-	go func() {
-		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n")
-		time.Sleep(180 * time.Millisecond)
-		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
-		_ = writer.Close()
-	}()
-	cfg := rawChatCompletionsTestConfig()
-	cfg.Gateway.OpenAIFirstWordProtectionEnabled = true
-	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       reader,
-	}}}
-	c.Set(openAIHTTPBudgetGinKey, &openAIHTTPBudget{started: time.Now(), preOutputLimit: 80 * time.Millisecond, preOutputPhase: "first_word_protection", progress: make(chan struct{})})
-
-	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), `"content":"hello"`)
-	require.Contains(t, rec.Body.String(), "data: [DONE]")
-}
-
 func TestForwardAsChatCompletions_OpenAICompatibleGrokRawMissingUsageFailsBeforeWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -794,7 +738,7 @@ func TestForwardAsRawChatCompletions_TruncatedStreamAfterOutputFailsRequest(t *t
 	require.Len(t, events, 1)
 	require.Equal(t, "http_error", events[0].Kind)
 	require.Nil(t, events[0].ProxyID)
-	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
+	require.Equal(t, opsProxyNameDirect, events[0].ProxyName)
 }
 
 // 截断 failover 事件必须带上本次传输真实使用的托管代理快照。
@@ -821,15 +765,16 @@ func TestForwardAsRawChatCompletions_TruncationFailoverAttributesManagedProxy(t 
 	_, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
+	require.Equal(t, proxy.URL(), upstream.lastProxyURL)
 
 	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
 	events := rawEvents.([]*OpsUpstreamErrorEvent)
 	require.Len(t, events, 1)
 	require.Equal(t, "failover", events[0].Kind)
-	require.Nil(t, events[0].ProxyID)
-	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
+	require.NotNil(t, events[0].ProxyID)
+	require.Equal(t, proxy.ID, *events[0].ProxyID)
+	require.Equal(t, proxy.Name, events[0].ProxyName)
 }
 
 // 上游 200 但一个 SSE 字节都没发：响应头尚未提交，应换号重试而不是回 200 空流。
@@ -1336,22 +1281,4 @@ func TestForwardAsRawChatCompletions_RestoresMappedResponseModel(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestGrokRawChatKeepsItsProxyWithOpenAITransportProfile(t *testing.T) {
-	t.Setenv("OPENAI_WARP_PROXY_URL", "http://warp.invalid:1080")
-	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: http.NoBody}}
-	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
-	account := rawChatCompletionsTestAccount()
-	account.Platform = PlatformGrok
-	account.Proxy = &Proxy{ID: 27, Protocol: "http", Host: "grok-proxy.invalid", Port: 8080}
-	account.ProxyID = &account.Proxy.ID
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	resp, err := svc.sendCCUpstreamRequest(context.Background(), c, account, "http://upstream.example/v1/chat/completions", []byte(`{"model":"grok-4","messages":[]}`), false, "test-token", "", "")
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Equal(t, account.Proxy.URL(), upstream.lastProxyURL)
-	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
-	require.False(t, OpenAIWarpApplies(upstream.lastReq.Context(), HTTPUpstreamProfileFromContext(upstream.lastReq.Context())))
 }

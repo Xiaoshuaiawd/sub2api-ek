@@ -703,7 +703,6 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		adminSettings.POST("/ip-risk/unban", h.Admin.Setting.UnbanIPRisk)
 		adminSettings.POST("/ip-risk/check", h.Admin.Setting.CheckIPRisk)
 		adminSettings.GET("/astra-routing", h.Admin.Setting.GetAstraRouting)
-		adminSettings.GET("/openai-warp-status", h.Admin.Setting.GetOpenAIWarpStatus)
 		adminSettings.PUT("/astra-routing", h.Admin.Setting.UpdateAstraRouting)
 		adminSettings.GET("/intelligence-rules", h.Admin.Setting.GetIntelligenceRules)
 		adminSettings.PATCH("/intelligence-rules", h.Admin.Setting.PatchIntelligenceRules)

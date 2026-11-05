@@ -37,38 +37,6 @@ def parallel_probe(config, stop=None):
 
 
 class ReauthEngineTests(unittest.TestCase):
-    def setUp(self):
-        self.enterContext(patch.dict(os.environ, {"OPENAI_WARP_WORKER_NETWORK_ISOLATED": "true"}))
-        # These historical tests exercise the retained Session Studio parser in
-        # isolation. Production dispatch rejects the engine; see WarpWorkerTests.
-        legacy = {
-            'test_operation_fixtures_pass_existing_worker_failure_boundary',
-            'test_duplicate_fields_cannot_overwrite_terminal_failure',
-            'test_offline_fixture_result_and_failure_are_not_interchangeable',
-            'test_run_once_reports_only_observed_allowlisted_phase',
-            'test_http_rejection_never_reads_body_or_retries',
-            'test_submission_failure_remains_failed_and_private',
-            'test_progress_and_null_errors_do_not_complete_login',
-            'test_terminal_failure_cannot_be_replaced_by_later_success',
-            'test_terminal_success_requires_complete_oauth_credentials',
-            'test_legacy_json_results_keep_existing_validation',
-            'test_malformed_terminal_payload_is_private_and_never_skipped',
-            'test_unknown_typed_event_is_private_and_never_skipped',
-            'test_session_engine_request_and_cas_submission',
-            'test_redirect_response_not_followed',
-            'test_rejected_cas_is_not_reported_successful',
-        }
-        if self._testMethodName in legacy:
-            original_claim = worker.process_claim
-            def parser_only(api, claim):
-                claim = dict(claim)
-                claim.pop('proxy_url', None)
-                return worker.process_session_studio_claim(api, claim)
-            def claim_for_parser(api, protocol, claim):
-                return original_claim(api, protocol, dict(claim, proxy_url='socks5h://warp:1080'))
-            self.enterContext(patch.object(worker, 'process_password_claim', side_effect=parser_only))
-            self.enterContext(patch.object(worker, 'process_claim', side_effect=claim_for_parser))
-
     def test_operation_fixtures_pass_existing_worker_failure_boundary(self):
         cases = json.loads((Path(__file__).parent / 'fixtures' / 'credential-operation-errors.json').read_text())
         for case in cases:
@@ -127,7 +95,7 @@ class ReauthEngineTests(unittest.TestCase):
                     resend_email_otp=Mock(), AccountUnusableError=type('ExternalAccountError', (Exception,), {}))
                 api = SimpleNamespace(progress=Mock(), callback=Mock())
                 claim = dict(task_id=7, account_id=42, credential_mode='email_otp_url', login_email='fixture',
-                    proxy_url='socks5h://warp:1080', otp_url='https://fixture.invalid/code', auth_url='https://auth.openai.com/oauth/authorize?state=synthetic')
+                    otp_url='https://fixture.invalid/code', auth_url='https://auth.openai.com/oauth/authorize?state=synthetic')
                 with patch.object(worker, 'OTPURLProvider'), patch.object(worker, '_wait_for_otp', return_value='000001'), self.assertRaises(worker.OperationWorkerError):
                     worker.process_claim(api, protocol, claim)
                 self.assertEqual(protocol.submit_email_otp.call_count, attempts)

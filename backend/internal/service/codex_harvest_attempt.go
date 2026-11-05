@@ -137,11 +137,6 @@ func pinnedHarvestNode(nodes []mihomo.HarvestNode, ticket *openAICodexTicket, tr
 }
 
 func (s *OpenAIGatewayService) prepareHarvestAttempt(ctx context.Context, account *Account, model, proxy string, tried map[string]bool, controls CodexHarvestControls) (codexHarvestAttempt, bool) {
-	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
-		// A previously pinned account proxy or a learned Mihomo node must not
-		// decide whether a mandatory WARP harvest is admitted.
-		return codexHarvestAttempt{proxy: OpenAIWarpProxyURL(), release: func() {}}, true
-	}
 	a := codexHarvestAttempt{proxy: proxy, release: func() {}}
 	pinned := s.lookupOpenAICodexTicket(account, model)
 	if pinned != nil && strings.TrimSpace(pinned.HarvestProxyURL) != "" && (!controls.NodeMemoryEnabled || s.codexHarvest == nil) {

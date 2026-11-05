@@ -1977,10 +1977,6 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstreamForRequest(reques
 }
 
 func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, request openAIModelsRequest, ifNoneMatch string) (*OpenAIModelsResponse, error) {
-	warpEgress := OpenAIWarpEnabled() && request.credentialAccount != nil && request.credentialAccount.Platform == PlatformOpenAI
-	if warpEgress {
-		request.proxyURL = OpenAIWarpProxyURL()
-	}
 	reqCtx, cancel := context.WithTimeout(ctx, codexModelsManifestRequestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, request.url, nil)
@@ -2019,7 +2015,7 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 	if err != nil {
 		return nil, &codexModelsManifestUpstreamError{
 			err:       infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "模型列表请求失败，请稍后重试"),
-			retryable: !warpEgress && isRetryableCodexModelsManifestTransportError(err),
+			retryable: isRetryableCodexModelsManifestTransportError(err),
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -2062,7 +2058,7 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 	if err != nil {
 		return nil, &codexModelsManifestUpstreamError{
 			err:       infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "无法读取模型列表响应"),
-			retryable: !warpEgress && isRetryableCodexModelsManifestTransportError(err),
+			retryable: isRetryableCodexModelsManifestTransportError(err),
 		}
 	}
 	if int64(len(body)) > bodyLimit {

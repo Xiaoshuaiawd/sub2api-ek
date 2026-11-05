@@ -35,7 +35,7 @@ func TestAccountTestStoredTicketBundle(t *testing.T) {
 			account := ticketTestAccount(71)
 			account.Credentials["model_mapping"] = map[string]any{"test-alias": "gpt-6-astra"}
 			now := time.Now().Truncate(time.Second)
-			ticket := &openAICodexTicket{AccountID: account.ID, Model: "gpt-6-astra", State: mint780State(now), Length: 780, ProbeVerified: true, Transport: "sse", Gateway: "unified-42", IssuedAt: now, CapturedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-42"), HarvestProxyURL: OpenAIWarpProxyURL()}
+			ticket := &openAICodexTicket{AccountID: account.ID, Model: "gpt-6-astra", State: mint780State(now), Length: 780, ProbeVerified: true, Transport: "sse", Gateway: "unified-42", IssuedAt: now, CapturedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-42"), HarvestProxyURL: "http://ticket.invalid:8080"}
 			gateway := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TargetLength: 780, Models: []string{"gpt-6-astra"}}, nil)
 			require.NoError(t, gateway.storeOpenAICodexTicket(t.Context(), account, ticket))
 			calls := 0
@@ -80,7 +80,7 @@ func accountTestTicketFixture(t *testing.T) (*AccountTestService, *Account, *ope
 	account := ticketTestAccount(71)
 	gateway := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TargetLength: 780, Models: []string{"gpt-6-astra"}}, nil)
 	now := time.Now().Truncate(time.Second)
-	ticket := &openAICodexTicket{AccountID: account.ID, Model: "gpt-6-astra", State: mint780State(now), Length: 780, ProbeVerified: true, Transport: "sse", Gateway: "unified-42", IssuedAt: now, CapturedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-42"), HarvestProxyURL: OpenAIWarpProxyURL()}
+	ticket := &openAICodexTicket{AccountID: account.ID, Model: "gpt-6-astra", State: mint780State(now), Length: 780, ProbeVerified: true, Transport: "sse", Gateway: "unified-42", IssuedAt: now, CapturedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-42"), HarvestProxyURL: "http://ticket.invalid:8080"}
 	require.NoError(t, gateway.storeOpenAICodexTicket(t.Context(), account, ticket))
 	return &AccountTestService{openaiGatewayService: gateway}, account, ticket
 }
@@ -138,7 +138,7 @@ func TestAccountTestStoredTicketPolicy(t *testing.T) {
 				} else {
 					require.Empty(t, req.Header.Get(openAICodexTurnStateHeader))
 					require.Empty(t, req.Header.Get("Cookie"))
-					require.Equal(t, OpenAIWarpProxyURL(), proxy)
+					require.Equal(t, "http://business.invalid:8080", proxy)
 				}
 				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
 			}}

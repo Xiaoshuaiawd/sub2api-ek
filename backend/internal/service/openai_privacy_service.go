@@ -45,7 +45,7 @@ func disableOpenAITraining(ctx context.Context, clientFactory PrivacyClientFacto
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	client, err := clientFactory(openAIWarpOrProxyURL(proxyURL))
+	client, err := clientFactory(proxyURL)
 	if err != nil {
 		slog.Warn("openai_privacy_client_error", "error", err.Error())
 		return PrivacyModeFailed
@@ -123,7 +123,7 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	client, err := clientFactory(openAIWarpOrProxyURL(proxyURL))
+	client, err := clientFactory(proxyURL)
 	if err != nil {
 		slog.Debug("chatgpt_account_check_client_error", "error", err.Error())
 		return nil
@@ -234,7 +234,7 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	client, err := clientFactory(openAIWarpOrProxyURL(proxyURL))
+	client, err := clientFactory(proxyURL)
 	if err != nil {
 		slog.Debug("chatgpt_subscription_client_error", "error", err.Error())
 		return ""

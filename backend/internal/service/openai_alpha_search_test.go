@@ -207,7 +207,6 @@ func TestForwardAlphaSearchPATBackfillsMissingChatGPTAccountMetadata(t *testing.
 	}))
 	defer whoamiServer.Close()
 	oldWhoamiURL := openAICodexPATWhoamiURL
-	useCodexModelsTestWARP(t, whoamiServer)
 	openAICodexPATWhoamiURL = whoamiServer.URL
 	defer func() { openAICodexPATWhoamiURL = oldWhoamiURL }()
 

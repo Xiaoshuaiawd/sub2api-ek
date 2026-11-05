@@ -1121,9 +1121,6 @@ type openAIWSAcquireQueueWait struct {
 }
 
 func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConnLease, error) {
-	if OpenAIWarpEnabled() && req.Account != nil && req.Account.Platform == PlatformOpenAI {
-		req.ProxyURL = OpenAIWarpProxyURL()
-	}
 	if ctx != nil {
 		req.timezoneBinding, _ = ctx.Value(requestTimezoneEgressKey{}).(*requestTimezoneBinding)
 	}

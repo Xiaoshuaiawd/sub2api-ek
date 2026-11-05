@@ -47,45 +47,6 @@ func TestOpenAIUploadDeadlineSurvivesDetachAndDoesNotAuthorizeReplay(t *testing.
 	})
 }
 
-func TestFirstWordProtectionStopsOpenAIAt180SecondsWithoutRetry(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAIFirstWordProtectionEnabled: true}}}
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		account := &Account{ID: 1, Platform: PlatformOpenAI}
-		req, guard := svc.guardOpenAIHTTPRequest(phaseGuardTestRequest(t, svc, c), account)
-		defer guard.close()
-		time.Sleep(181 * time.Second)
-		synctest.Wait()
-		_, err := guard.finish(nil, req.Context().Err())
-		var phaseErr *openAIHTTPPhaseTimeout
-		require.ErrorAs(t, err, &phaseErr)
-		require.Equal(t, "first_word_protection", phaseErr.phase)
-		require.NotErrorIs(t, handleOpenAIHTTPPhaseError(c, account, err), context.Canceled)
-		require.Equal(t, http.StatusGatewayTimeout, c.Writer.Status())
-	})
-}
-
-func TestFirstWordProtectionKeepsCommittedStreamProtocol(t *testing.T) {
-	for _, tc := range []struct{ path, prelude, want string }{
-		{"/v1/messages", "event: message_start\ndata: {}\n\n", "event: error"},
-		{"/v1/chat/completions", ": keepalive\n\n", `"type":"timeout_error"`},
-	} {
-		t.Run(tc.path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(rec)
-			c.Request = httptest.NewRequest(http.MethodPost, tc.path, nil)
-			c.Header("Content-Type", "text/event-stream")
-			_, err := c.Writer.WriteString(tc.prelude)
-			require.NoError(t, err)
-			phaseErr := &openAIHTTPPhaseTimeout{phase: "first_word_protection"}
-			require.ErrorAs(t, handleOpenAIHTTPPhaseError(c, &Account{ID: 1, Platform: PlatformOpenAI}, phaseErr), &phaseErr)
-			require.Equal(t, http.StatusOK, rec.Code, "headers were already sent")
-			require.Contains(t, rec.Body.String(), tc.want)
-			require.NotContains(t, rec.Body.String(), "response.failed")
-		})
-	}
-}
-
 func TestOpenAIHTTPDeadlinesAreSharedAcrossAccountAttempts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAIUploadTimeoutSeconds: 2, OpenAIPreOutputBudgetSeconds: 3}}}

@@ -585,7 +585,6 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
 	updates[SettingKeyOpenAICodexClientVersion] = NormalizeCodexClientVersion(settings.OpenAICodexClientVersion)
 	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
-	updates[SettingKeyOpenAIWarpEnabled] = strconv.FormatBool(settings.OpenAIWarpEnabled)
 	updates[SettingKeyOpenAIRequestTimezoneEnabled] = strconv.FormatBool(settings.OpenAIRequestTimezoneEnabled)
 	updates[SettingKeyOpenAIRequestTimezoneAuto] = strconv.FormatBool(settings.OpenAIRequestTimezoneAuto)
 	updates[SettingKeyOpenAICodexTicketEnabled] = strconv.FormatBool(settings.OpenAICodexTicketEnabled)
@@ -867,11 +866,6 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	if settings == nil {
 		return
-	}
-	if openAIWarpSettingsOwner.Load() == s {
-		// Re-read the committed value on the next request. Concurrent saves may
-		// complete out of order after their own database writes.
-		openAIWarpSettingsExpires.Store(0)
 	}
 
 	// 先使 inflight singleflight 失效，再刷新缓存，缩小旧值覆盖新值的竞态窗口

@@ -23,9 +23,8 @@ import (
 )
 
 type blockingOpenAIResponseHeaderUpstream struct {
-	canceled           chan struct{}
-	once               sync.Once
-	blockUntilCanceled bool
+	canceled chan struct{}
+	once     sync.Once
 }
 
 type firstOutputCloseTrackingBody struct {
@@ -40,11 +39,6 @@ func (b *firstOutputCloseTrackingBody) Close() error {
 }
 
 func (u *blockingOpenAIResponseHeaderUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	if u.blockUntilCanceled {
-		<-req.Context().Done()
-		u.once.Do(func() { close(u.canceled) })
-		return nil, req.Context().Err()
-	}
 	select {
 	case <-req.Context().Done():
 		u.once.Do(func() { close(u.canceled) })
@@ -61,14 +55,12 @@ func (u *blockingOpenAIResponseHeaderUpstream) DoWithTLS(req *http.Request, _ st
 func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := &blockingOpenAIResponseHeaderUpstream{canceled: make(chan struct{})}
-	repo := &bridgeTransportAccountRepo{}
 	svc := &OpenAIGatewayService{
 		cfg: &config.Config{Gateway: config.GatewayConfig{
 			OpenAIFirstOutputTimeoutSeconds: 1,
 			MaxLineSize:                     defaultMaxLineSize,
 		}},
 		httpUpstream: upstream,
-		accountRepo:  repo,
 	}
 	body := []byte(`{"model":"gpt-5.5","stream":true,"reasoning":{"effort":"low"},"input":"hello"}`)
 	rec := httptest.NewRecorder()
@@ -85,46 +77,17 @@ func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T)
 
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr))
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Zero(t, repo.unschedules)
-	require.Nil(t, account.TempUnschedulableUntil)
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusGatewayTimeout, failoverErr.StatusCode)
+	require.Contains(t, string(failoverErr.ResponseBody), "first_output_timeout")
+	require.True(t, failoverErr.SafeToFailoverAfterWrite)
 	require.Less(t, time.Since(started), 1300*time.Millisecond)
-	require.Equal(t, http.StatusBadGateway, rec.Code)
-	require.Contains(t, rec.Body.String(), "WARP proxy or upstream connection failed")
+	require.Empty(t, rec.Body.String())
 	select {
 	case <-upstream.canceled:
 	default:
 		t.Fatal("response-header timeout did not cancel the upstream request context")
 	}
-}
-
-func TestFirstWordProtectionResponseHeaderWaitReturns504(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		gin.SetMode(gin.TestMode)
-		upstream := &blockingOpenAIResponseHeaderUpstream{canceled: make(chan struct{}), blockUntilCanceled: true}
-		svc := &OpenAIGatewayService{
-			cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAIFirstWordProtectionEnabled: true, MaxLineSize: defaultMaxLineSize}},
-			httpUpstream: upstream,
-			accountRepo:  &bridgeTransportAccountRepo{},
-		}
-		body := []byte(`{"model":"gpt-5.5","stream":true,"input":"hello"}`)
-		rec := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(rec)
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-		account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
-			Concurrency: 1, Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"}}
-		_, err := svc.Forward(context.Background(), c, account, body)
-		var phaseErr *openAIHTTPPhaseTimeout
-		require.ErrorAs(t, err, &phaseErr)
-		require.Equal(t, "first_word_protection", phaseErr.phase)
-		require.Equal(t, http.StatusGatewayTimeout, rec.Code)
-		select {
-		case <-upstream.canceled:
-		default:
-			t.Fatal("upstream request was not canceled")
-		}
-	})
 }
 
 func TestOpenAINativeFirstOutputTimeoutDisabledPreservesSynchronousStream(t *testing.T) {
@@ -212,8 +175,9 @@ func TestNewOpenAIFirstOutputTimeoutErrorRecordsCallerProxyAttribution(t *testin
 	require.Equal(t, "first_output_timeout", events[0].Kind)
 	require.Nil(t, events[0].ProxyID)
 	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
-	require.Nil(t, events[1].ProxyID)
-	require.Equal(t, opsProxyNameUnknown, events[1].ProxyName)
+	require.NotNil(t, events[1].ProxyID)
+	require.Equal(t, proxyID, *events[1].ProxyID)
+	require.Equal(t, "ws-proxy", events[1].ProxyName)
 }
 
 func TestOpenAIFirstOutputTimeoutForReasoningEffort(t *testing.T) {
@@ -226,24 +190,6 @@ func TestOpenAIFirstOutputTimeoutForReasoningEffort(t *testing.T) {
 	require.Equal(t, 300*time.Second, svc.openAIFirstOutputTimeout("high"))
 	require.Equal(t, 300*time.Second, svc.openAIFirstOutputTimeout("xhigh"))
 	require.Equal(t, 300*time.Second, svc.openAIFirstOutputTimeout("max"))
-}
-
-func TestOpenAIFirstWordProtectionClampsAllEffortsTo180Seconds(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
-		OpenAIFirstWordProtectionEnabled:          true,
-		OpenAIHighEffortFirstOutputTimeoutSeconds: 300,
-	}}}
-	require.Equal(t, 180*time.Second, svc.openAIFirstOutputTimeout("low"))
-	require.Equal(t, 180*time.Second, svc.openAIFirstOutputTimeout("high"))
-}
-
-func TestFirstWordProtectionTimeoutNeverSwitchesAccounts(t *testing.T) {
-	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{OpenAIFirstWordProtectionEnabled: true}}}
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	account := &Account{ID: 1, Platform: PlatformOpenAI}
-	err := svc.newOpenAIFirstOutputTimeoutError(context.Background(), c, account, nil, "", time.Now().Add(-180*time.Second), "gpt-6-sol", "high", 180*time.Second, "semantic_output", nil)
-	require.Equal(t, http.StatusGatewayTimeout, err.StatusCode)
-	require.Equal(t, NextAccountStop, err.NextAccountAction)
 }
 
 func TestOpenAIFirstOutputStageDefaultLimitIsIndependentFromScannerLimit(t *testing.T) {

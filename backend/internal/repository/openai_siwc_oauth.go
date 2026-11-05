@@ -9,7 +9,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
-// Tokens and signing keys use the same mandatory WARP proxy. No credentials
+// Tokens and signing keys use the same selected account proxy. No credentials
 // or token endpoint response bodies are included in errors.
 func (s *openaiOAuthService) SIWCToken(ctx context.Context, form url.Values, proxyURL, nonce string) (*openai.TokenResponse, *openai.SIWCIdentity, error) {
 	client, err := createOpenAIReqClient(proxyURL)

@@ -141,16 +141,15 @@ func (s *OpenAIOAuthReauthService) CreateTOTPRotation(ctx context.Context, id in
 }
 
 type OpenAITOTPRotationClaim struct {
-	WarpRequired bool   `json:"warp_required"`
-	Operation    string `json:"operation"`
-	TaskID       int64  `json:"task_id"`
-	AccountID    int64  `json:"account_id"`
-	Action       string `json:"action"`
-	LoginEmail   string `json:"login_email"`
-	Password     string `json:"password"`
-	TOTPSecret   string `json:"totp_secret"`
-	Candidate    string `json:"candidate_secret,omitempty"`
-	ProxyURL     string `json:"proxy_url,omitempty"`
+	Operation  string `json:"operation"`
+	TaskID     int64  `json:"task_id"`
+	AccountID  int64  `json:"account_id"`
+	Action     string `json:"action"`
+	LoginEmail string `json:"login_email"`
+	Password   string `json:"password"`
+	TOTPSecret string `json:"totp_secret"`
+	Candidate  string `json:"candidate_secret,omitempty"`
+	ProxyURL   string `json:"proxy_url,omitempty"`
 }
 
 func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker string) (*OpenAITOTPRotationClaim, error) {
@@ -161,7 +160,7 @@ func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker
 	if worker == "" || len(worker) > 128 {
 		return nil, infraerrors.BadRequest("TOTP_WORKER_INVALID", "Invalid worker ID")
 	}
-	s.RecordWorkerHeartbeat(worker, true)
+	s.workerLastSeen.Store(time.Now().UnixNano())
 	s.totpWorkerLastSeen.Store(time.Now().UnixNano())
 	record, err := repo.ClaimTOTPRotation(ctx, worker)
 	if err != nil {
@@ -175,7 +174,7 @@ func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker
 	if err == nil && !record.ConfigUpdatedAt.Equal(cfg.UpdatedAt) {
 		err = errors.New("configuration changed")
 	}
-	claim := &OpenAITOTPRotationClaim{Operation: "totp_rotation", TaskID: record.TaskID, AccountID: record.AccountID, Action: record.Action, WarpRequired: OpenAIWarpEnabled()}
+	claim := &OpenAITOTPRotationClaim{Operation: "totp_rotation", TaskID: record.TaskID, AccountID: record.AccountID, Action: record.Action}
 	if err == nil {
 		claim.LoginEmail = cfg.LoginEmail
 		claim.Password, err = s.decryptReauthSecret(cfg.PasswordCiphertext, "Password cannot be decrypted")
@@ -187,29 +186,25 @@ func (s *OpenAIOAuthReauthService) ClaimTOTPRotation(ctx context.Context, worker
 		claim.Candidate, err = s.decryptReauthSecret(record.CandidateCiphertext, "Candidate TOTP cannot be decrypted")
 	}
 	if err == nil {
-		if OpenAIWarpEnabled() {
-			claim.ProxyURL = OpenAIWarpWorkerProxyURL()
-		} else {
-			var source string
-			source, err = normalizeReauthProxySource(cfg.ProxySource, cfg.ProxyID)
-			if err == nil {
-				switch source {
-				case OpenAIOAuthReauthProxySourceAccount:
-					claim.ProxyURL, err = s.reauthProxyURL(ctx, account.ProxyID)
-				case OpenAIOAuthReauthProxySourceManagedProxy:
-					claim.ProxyURL, err = s.reauthProxyURL(ctx, cfg.ProxyID)
-				case OpenAIOAuthReauthProxySourceMihomo:
-					if s.acquireMihomoProxy == nil {
-						err = errors.New("proxy unavailable")
-					} else {
-						var release func()
-						claim.ProxyURL, release, err = s.acquireMihomoProxy(ctx, fmt.Sprintf("openai-totp-task:%d", record.TaskID))
-						if release != nil {
-							if err != nil {
-								release()
-							} else {
-								s.replaceMihomoLease(-record.TaskID, release)
-							}
+		source, sourceErr := normalizeReauthProxySource(cfg.ProxySource, cfg.ProxyID)
+		err = sourceErr
+		if err == nil {
+			switch source {
+			case OpenAIOAuthReauthProxySourceAccount:
+				claim.ProxyURL, err = s.reauthProxyURL(ctx, account.ProxyID)
+			case OpenAIOAuthReauthProxySourceManagedProxy:
+				claim.ProxyURL, err = s.reauthProxyURL(ctx, cfg.ProxyID)
+			case OpenAIOAuthReauthProxySourceMihomo:
+				if s.acquireMihomoProxy == nil {
+					err = errors.New("proxy unavailable")
+				} else {
+					var release func()
+					claim.ProxyURL, release, err = s.acquireMihomoProxy(ctx, fmt.Sprintf("openai-totp-task:%d", record.TaskID))
+					if release != nil {
+						if err != nil {
+							release()
+						} else {
+							s.replaceMihomoLease(-record.TaskID, release)
 						}
 					}
 				}

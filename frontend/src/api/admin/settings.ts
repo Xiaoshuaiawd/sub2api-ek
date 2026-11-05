@@ -653,7 +653,6 @@ export interface SystemSettings {
   openai_codex_client_version: string;
   openai_codex_client_version_synced: string;
   openai_codex_version_auto_sync_enabled: boolean;
-  openai_warp_enabled: boolean;
   openai_request_timezone_enabled: boolean;
   openai_request_timezone_auto: boolean;
   openai_codex_ticket_enabled: boolean;
@@ -1031,7 +1030,6 @@ export interface UpdateSettingsRequest {
   openai_codex_user_agent?: string;
   openai_codex_client_version?: string;
   openai_codex_version_auto_sync_enabled?: boolean;
-  openai_warp_enabled?: boolean;
   openai_request_timezone_enabled?: boolean;
   openai_request_timezone_auto?: boolean;
   openai_codex_ticket_enabled?: boolean;
@@ -1178,17 +1176,6 @@ export interface UpdateSettingsRequest {
  */
 export async function getSettings(): Promise<SystemSettings> {
   const { data } = await apiClient.get<SystemSettings>("/admin/settings");
-  return data;
-}
-
-export interface OpenAIWarpStatus {
-  connected: boolean;
-  ip: string;
-  checked_at: string;
-}
-
-export async function getOpenAIWarpStatus(): Promise<OpenAIWarpStatus> {
-  const { data } = await apiClient.get<OpenAIWarpStatus>("/admin/settings/openai-warp-status");
   return data;
 }
 
@@ -1699,7 +1686,6 @@ export async function resetWebSearchUsage(payload: {
 
 export const settingsAPI = {
   getSettings,
-  getOpenAIWarpStatus,
   updateSettings,
   testSmtpConnection,
   sendTestEmail,

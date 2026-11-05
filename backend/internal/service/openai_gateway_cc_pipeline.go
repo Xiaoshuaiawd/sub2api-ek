@@ -42,12 +42,6 @@ func (s *OpenAIGatewayService) newUpstreamSSEScanner(r io.Reader) *bufio.Scanner
 	return scanner
 }
 
-func observeCCHTTPProgress(resp *http.Response) {
-	if resp != nil && resp.Request != nil {
-		observeOpenAIHTTPProgress(resp.Request.Context())
-	}
-}
-
 // newStreamHeaderWriter 返回幂等的 SSE 响应头写入闭包：首次调用时透传过滤后的
 // 上游响应头并写入标准 SSE 头 + 200 状态码，后续调用为 no-op。延迟到首个事件
 // 写出前才提交响应头，使上游早期失败仍可改走 failover 或非流式错误响应。
@@ -329,9 +323,6 @@ func (s *OpenAIGatewayService) scanCCStream(
 			)
 			continue
 		}
-		if openAIChatChunkHasOutput(chunk) {
-			observeCCHTTPProgress(resp)
-		}
 		if st.FirstTokenMs == nil && !isOpenAIChatUsageOnlyStreamChunk(payload) && chatChunkStartsResponsesOutput(&chunk) {
 			ms := int(time.Since(startTime).Milliseconds())
 			st.FirstTokenMs = &ms
@@ -340,10 +331,6 @@ func (s *OpenAIGatewayService) scanCCStream(
 	}
 
 	if err := scanner.Err(); err != nil {
-		if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
-			st.Err = phaseErr
-			return st
-		}
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			logger.L().Warn(logPrefix+": stream read error",
 				zap.Error(err),
@@ -370,9 +357,6 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	writeError compatErrorWriter,
 ) (*apicompat.ChatCompletionsResponse, OpenAIUsage, error) {
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
-	if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
-		return nil, OpenAIUsage{}, phaseErr
-	}
 	if err != nil {
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			writeError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")
@@ -389,9 +373,6 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	// CC JSON 无 type 字段，按 untyped payload 观察（上游约束）。
 	if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
 		observer.ObserveOpenAI(respBody, "")
-	}
-	if len(ccResp.Choices) > 0 {
-		observeCCHTTPProgress(resp)
 	}
 
 	usage := OpenAIUsage{}

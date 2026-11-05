@@ -14,15 +14,6 @@ func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
 // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
 func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL string, account *Account) (result *http.Response, resultErr error) {
-	if account != nil {
-		request = request.WithContext(WithUpstreamAccountPlatform(request.Context(), account.Platform))
-	}
-	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
-		if HTTPUpstreamProfileFromContext(request.Context()) == HTTPUpstreamProfileDefault {
-			request = request.WithContext(WithHTTPUpstreamProfile(request.Context(), HTTPUpstreamProfileOpenAI))
-		}
-		proxyURL = OpenAIWarpProxyURL()
-	}
 	var phaseGuard *openAIHTTPPhaseGuard
 	request, phaseGuard = s.guardOpenAIHTTPRequest(request, account)
 	defer func() {
@@ -54,9 +45,6 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		}
 		observeAttempt := s.observePriorityAttempt(request, account)
 		resp, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
-		if err != nil && OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
-			err = &runtimeProxyEgressError{error: err, target: runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"}}
-		}
 		observeAttempt(resp, err)
 		if err == nil && resp != nil && resp.StatusCode == http.StatusUnauthorized && s.excelOAuthReauth != nil {
 			var cache OpenAITokenCache
@@ -79,9 +67,6 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	if err != nil {
 		releaseChat()
 		return nil, err
-	}
-	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
-		proxyURL = OpenAIWarpProxyURL()
 	}
 	defer func() {
 		observe := resultErr == nil && result != nil && result.StatusCode == http.StatusOK
@@ -133,15 +118,6 @@ func (s *AccountTestService) doOpenAIAccountTestUpstream(
 	useTLSFallback bool,
 	body []byte,
 ) (*http.Response, error) {
-	if account != nil {
-		request = request.WithContext(WithUpstreamAccountPlatform(request.Context(), account.Platform))
-	}
-	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
-		if HTTPUpstreamProfileFromContext(request.Context()) == HTTPUpstreamProfileDefault {
-			request = request.WithContext(WithHTTPUpstreamProfile(request.Context(), HTTPUpstreamProfileOpenAI))
-		}
-		proxyURL = OpenAIWarpProxyURL()
-	}
 	gateway := s.openaiGatewayService
 	model := extractOpenAICodexTicketModel(body)
 	if gateway != nil && !IsAstraSourceAcquisition(request.Context()) && request.URL != nil && request.URL.String() == chatgptCodexAPIURL &&

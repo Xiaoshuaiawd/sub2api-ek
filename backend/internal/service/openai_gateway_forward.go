@@ -98,7 +98,6 @@ func (s *OpenAIGatewayService) ForwardWithOriginalModel(ctx context.Context, c *
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *OpenAIForwardResult, resultErr error) {
-	ctx = s.withOpenAIHTTPBudget(ctx, c)
 	clientModel, _ := ctx.Value(openAIClientModelContextKey{}).(string)
 	admittedCtx, admissionErr := s.beginPriorityLatencyTurn(ctx, c, account, gjson.GetBytes(body, "model").String())
 	if admissionErr != nil {
@@ -111,6 +110,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	ctx, errorScope := withPriorityAttemptScope(ctx, gjson.GetBytes(body, "model").String(), endpoint)
 	defer func() { errorScope.finish(result) }()
+	ctx = s.withOpenAIHTTPBudget(ctx, c)
 	var finishMeter func(*OpenAIForwardResult, error) error
 	var meterErr error
 	ctx, finishMeter, meterErr = s.beginRegionalMeter(ctx, c, account, body)
@@ -1357,7 +1357,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 		var headerGuard *openAIFirstOutputHeaderGuard
-		if firstOutputTimeout > 0 && !s.firstWordProtectionEnabled() {
+		if firstOutputTimeout > 0 {
 			upstreamCtx, headerGuard = newOpenAIFirstOutputHeaderGuard(
 				upstreamCtx, releaseUpstreamCtx, startTime.Add(firstOutputTimeout),
 			)
@@ -1412,13 +1412,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				_ = resp.Body.Close()
 			}
 			headerGuard.close()
-			if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
-				// Before response headers, a stalled shared WARP connection and
-				// a stalled upstream cannot be safely distinguished. Do not
-				// quarantine or rotate otherwise healthy accounts.
-				warpErr := &runtimeProxyEgressError{error: context.DeadlineExceeded, target: runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"}}
-				return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, warpErr, false)
-			}
 			return nil, s.newOpenAIFirstOutputTimeoutError(
 				ctx, c, account, opsUpstreamProxyID(account), opsUpstreamProxyName(account),
 				startTime, originalModel, reasoningEffortValue,

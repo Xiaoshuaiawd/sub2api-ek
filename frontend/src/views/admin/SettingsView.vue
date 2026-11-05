@@ -5330,29 +5330,6 @@
               </p>
             </div>
             <div class="space-y-5 p-6">
-              <div class="flex items-center justify-between gap-5 border-b border-gray-100 pb-5 dark:border-dark-700">
-                <div>
-                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t("admin.settings.gatewayForwarding.openAIWarp") }}</label>
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.settings.gatewayForwarding.openAIWarpHint") }}</p>
-                  <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-                    <span
-                      role="status"
-                      aria-live="polite"
-                      data-testid="openai-warp-status"
-                      :class="warpStatusLoading ? 'text-gray-500 dark:text-gray-400' : warpStatus?.connected ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'"
-                    >
-                      {{ t(warpStatusLoading ? 'admin.settings.gatewayForwarding.openAIWarpChecking' : warpStatus?.connected ? 'admin.settings.gatewayForwarding.openAIWarpConnected' : 'admin.settings.gatewayForwarding.openAIWarpUnavailable') }}
-                    </span>
-                    <span v-if="warpStatus?.connected && warpStatus.ip" class="font-mono text-xs text-gray-600 dark:text-gray-300" data-testid="openai-warp-ip">
-                      {{ t('admin.settings.gatewayForwarding.openAIWarpIP', { ip: warpStatus.ip }) }}
-                    </span>
-                    <button type="button" class="btn btn-secondary btn-sm" data-testid="openai-warp-refresh" :disabled="warpStatusLoading" @click="refreshOpenAIWarpStatus">
-                      {{ t('admin.settings.gatewayForwarding.openAIWarpRefresh') }}
-                    </button>
-                  </div>
-                </div>
-                <Toggle v-model="form.openai_warp_enabled" :aria-label="t('admin.settings.gatewayForwarding.openAIWarp')" data-testid="openai-warp-toggle" />
-              </div>
               <div class="grid gap-5 border-b border-gray-100 pb-5 dark:border-dark-700 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <div>
                   <label
@@ -9480,7 +9457,6 @@ import type {
   DefaultSubscriptionSetting,
   DefaultPlatformQuotasMap,
   OpenAIFastPolicyRule,
-  OpenAIWarpStatus,
   WeChatConnectMode,
   WebSearchEmulationConfig,
   WebSearchProviderConfig,
@@ -9585,24 +9561,6 @@ const paymentMethodsHref = computed(() =>
 const loading = ref(true);
 const loadFailed = ref(false);
 const { activeTab, selectSettingsTab } = useSettingsNavigation(loading, loadFailed);
-const warpStatus = ref<OpenAIWarpStatus | null>(null);
-const warpStatusLoading = ref(false);
-
-async function refreshOpenAIWarpStatus() {
-  if (warpStatusLoading.value) return;
-  warpStatusLoading.value = true;
-  try {
-    warpStatus.value = await adminAPI.settings.getOpenAIWarpStatus();
-  } catch {
-    warpStatus.value = { connected: false, ip: '', checked_at: new Date().toISOString() };
-  } finally {
-    warpStatusLoading.value = false;
-  }
-}
-
-watch(activeTab, (tab) => {
-  if (tab === 'gateway') void refreshOpenAIWarpStatus();
-}, { immediate: true });
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
   { key: "agreement" as SettingsTab, icon: "document" as const },
@@ -10544,7 +10502,6 @@ const form = reactive<SettingsForm>({
   // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
-  openai_warp_enabled: true,
   openai_request_timezone_enabled: true,
   openai_request_timezone_auto: true,
   claude_code_client_version: "",
@@ -12285,7 +12242,6 @@ async function saveSettings() {
         form.openai_codex_client_version?.trim() || "",
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
-      openai_warp_enabled: form.openai_warp_enabled,
       openai_request_timezone_enabled: form.openai_request_timezone_enabled,
       openai_request_timezone_auto: form.openai_request_timezone_auto,
       claude_code_client_version: form.claude_code_client_version?.trim() || "",

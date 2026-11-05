@@ -928,12 +928,6 @@ func ProvideSettingService(scopedKeys ScopedAdminKeyRepository, settingRepo Sett
 	svc.scopedAdminKeyRepo = scopedKeys
 	svc.SetDefaultSubscriptionGroupReader(groupRepo)
 	svc.SetProxyRepository(proxyRepo)
-	openAIWarpSettingsOwner.Store(svc)
-	if settings, err := svc.GetAllSettings(context.Background()); err == nil {
-		setOpenAIWarpEnabled(settings.OpenAIWarpEnabled)
-	} else {
-		logger.LegacyPrintf("service.setting", "Warning: load OpenAI WARP setting failed: %v", err)
-	}
 	if err := svc.LoadForwardedClientIPSettings(context.Background()); err != nil {
 		logger.LegacyPrintf("service.setting", "Warning: load forwarded client IP settings failed: %v", err)
 	}

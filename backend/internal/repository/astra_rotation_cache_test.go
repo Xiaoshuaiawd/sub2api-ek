@@ -31,7 +31,6 @@ func TestAstraRotationCacheSurvivesSaveAndSuppressesNetwork(t *testing.T) {
 	require.Zero(t, *leases)
 	// Target failure cache is intentionally not persisted; a new revision retries the route.
 	s.cfg.Gateway.CodexGatewayPin.TTLSeconds = 200
-	enableRawTestRotation(t, s)
 	_, err = s.Do(rotationTarget(t), "target", 300, 1)
 	require.ErrorContains(t, err, "astra_rotation_exhausted")
 	require.Len(t, *calls, 18)
@@ -69,7 +68,6 @@ func TestAstraSourceFailuresSkipUntilExpiryAcrossSave(t *testing.T) {
 	require.Equal(t, map[int64]int{299: 1, 298: 1}, calls)
 	require.Zero(t, *leases)
 	s.cfg.Gateway.CodexGatewayPin.TTLSeconds = 201
-	enableRawTestRotation(t, s)
 	require.ErrorContains(t, s.PrepareAstraGateway(t.Context()), "cooling")
 	require.Equal(t, map[int64]int{299: 1, 298: 1}, calls)
 	require.Zero(t, *leases)
@@ -106,7 +104,7 @@ func TestAstraSourceCancelledPreparationDoesNotPoisonCache(t *testing.T) {
 func TestRepeatedCoolingHostPausesSourceNetworkAcrossSaves(t *testing.T) {
 	s, _, leases := rotationFixture(t, 3, "never")
 	s.cfg.Gateway.CodexGatewayPin.SourceAccountIDs = []int64{299}
-	enableRawTestRotation(t, s)
+	s.current(t.Context())
 	host := "chat.gateway.unified-95.api.openai.com"
 	s.rotationCache.reject(300, "old-node", host, time.Now().Add(time.Hour), time.Now())
 	calls := 0
@@ -125,7 +123,6 @@ func TestRepeatedCoolingHostPausesSourceNetworkAcrossSaves(t *testing.T) {
 	require.Equal(t, 1, calls, "stop scanning other exits after duplicate cooling host")
 	require.Zero(t, *leases)
 	s.cfg.Gateway.CodexGatewayPin.TTLSeconds = 200
-	enableRawTestRotation(t, s)
 	require.ErrorContains(t, s.PrepareAstraGateway(ctx), "astra_rotation_cooling")
 	require.Equal(t, 1, calls, "a settings revision must not restart source traffic")
 	require.False(t, s.rotationCache.sourceSearchPaused(343, time.Now()))

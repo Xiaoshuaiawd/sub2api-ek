@@ -46,7 +46,6 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateBoundToExecutionScope(t *tes
 		}
 	}))
 	defer wsServer.Close()
-	setLocalWarpProxy(t, wsServer.URL)
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false

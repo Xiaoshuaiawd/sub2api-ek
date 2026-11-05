@@ -5,10 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
 	"net/url"
 	"testing"
-	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -21,7 +19,6 @@ type OpenAIOAuthServiceSuite struct {
 	suite.Suite
 	ctx      context.Context
 	srv      *httptest.Server
-	proxy    *httptest.Server
 	svc      *openaiOAuthService
 	received chan url.Values
 }
@@ -32,10 +29,6 @@ func (s *OpenAIOAuthServiceSuite) SetupTest() {
 }
 
 func (s *OpenAIOAuthServiceSuite) TearDownTest() {
-	if s.proxy != nil {
-		s.proxy.Close()
-		s.proxy = nil
-	}
 	if s.srv != nil {
 		s.srv.Close()
 		s.srv = nil
@@ -44,12 +37,6 @@ func (s *OpenAIOAuthServiceSuite) TearDownTest() {
 
 func (s *OpenAIOAuthServiceSuite) setupServer(handler http.HandlerFunc) {
 	s.srv = newLocalTestServer(s.T(), handler)
-	target, err := url.Parse(s.srv.URL)
-	require.NoError(s.T(), err)
-	forward := httputil.NewSingleHostReverseProxy(target)
-	forward.Transport = &http.Transport{Proxy: nil}
-	s.proxy = newLocalTestServer(s.T(), forward)
-	s.T().Setenv("OPENAI_WARP_PROXY_URL", s.proxy.URL)
 	s.svc = &openaiOAuthService{tokenURL: s.srv.URL}
 }
 
@@ -234,22 +221,22 @@ func (s *OpenAIOAuthServiceSuite) TestNonSuccessStatus_IncludesBody() {
 
 func (s *OpenAIOAuthServiceSuite) TestRequestError_ClosedServer() {
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	s.proxy.Close()
+	s.srv.Close()
 
 	_, err := s.svc.ExchangeCode(s.ctx, "code", "ver", openai.DefaultRedirectURI, "", "")
 	require.Error(s.T(), err)
 	require.ErrorContains(s.T(), err, "request failed")
 }
 
-func (s *OpenAIOAuthServiceSuite) TestExchangeCode_WARPFailureDoesNotReturnNoProxyHint() {
+func (s *OpenAIOAuthServiceSuite) TestExchangeCode_RequestErrorWithoutProxyReturnsProxyHint() {
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	s.proxy.Close()
+	s.srv.Close()
 
 	_, err := s.svc.ExchangeCode(s.ctx, "code", "ver", openai.DefaultRedirectURI, "", "")
 
 	require.Error(s.T(), err)
-	require.Equal(s.T(), "OPENAI_OAUTH_REQUEST_FAILED", infraerrors.Reason(err))
-	require.NotContains(s.T(), infraerrors.Message(err), "no proxy is configured")
+	require.Equal(s.T(), "OPENAI_OAUTH_PROXY_REQUIRED", infraerrors.Reason(err))
+	require.Contains(s.T(), infraerrors.Message(err), "no proxy is configured")
 }
 
 func (s *OpenAIOAuthServiceSuite) TestContextCancel() {
@@ -268,22 +255,12 @@ func (s *OpenAIOAuthServiceSuite) TestContextCancel() {
 		done <- err
 	}()
 
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		cancel()
-		close(block)
-		s.T().Fatal("request did not reach the upstream through WARP")
-	}
+	<-started
 	cancel()
 	close(block)
 
-	select {
-	case err := <-done:
-		require.Error(s.T(), err)
-	case <-time.After(5 * time.Second):
-		s.T().Fatal("canceled request did not return")
-	}
+	err := <-done
+	require.Error(s.T(), err)
 }
 
 func (s *OpenAIOAuthServiceSuite) TestExchangeCode_UsesProvidedRedirectURI() {

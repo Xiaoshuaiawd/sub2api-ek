@@ -1708,7 +1708,7 @@ func TestOpenAIGatewayService_OpenAIAccountSchedulerMetrics_DisabledNoOp(t *test
 	require.Equal(t, OpenAIAccountSchedulerMetricsSnapshot{}, snapshot)
 }
 
-func TestOpenAIGatewayService_SelectAccountWithScheduler_IgnoresUnusedAccountProxyQuarantine(t *testing.T) {
+func TestOpenAIGatewayService_SelectAccountWithScheduler_SkipsQuarantinedSharedProxy(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 
 	proxyA := int64(4698)
@@ -1739,7 +1739,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_IgnoresUnusedAccountPro
 	require.NoError(t, err)
 	require.NotNil(t, selection)
 	require.NotNil(t, selection.Account)
-	require.Contains(t, []int64{469801, 469802}, selection.Account.ID)
+	require.Equal(t, int64(469803), selection.Account.ID)
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_FailsOpenWhenAllProxiesQuarantined(t *testing.T) {

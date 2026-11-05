@@ -114,9 +114,6 @@ func (e *runtimeProxyEgressError) Unwrap() error { return e.error }
 
 func runtimeProxyErrorAttribution(account *Account, err error) (*int64, string) {
 	var attemptErr *runtimeProxyEgressError
-	if errors.As(err, &attemptErr) && attemptErr.target.proxyName == "warp" {
-		return nil, opsProxyNameUnknown
-	}
 	if !errors.As(err, &attemptErr) || attemptErr.target.proxyID < 0 {
 		return opsUpstreamProxyAttribution(account)
 	}
@@ -159,7 +156,7 @@ func (s *OpenAIGatewayService) doOpenAIProxyAttempt(req *http.Request, account *
 	req, timingTrace := requesttiming.StartAttempt(req, account.ID, target.proxyID)
 	defer func() { timingTrace.Response(resp, err) }()
 	defer func() {
-		if err != nil && (target.proxyID >= 0 || target.proxyName == "warp") {
+		if err != nil && target.proxyID >= 0 {
 			err = &runtimeProxyEgressError{error: err, target: target}
 		}
 	}()
@@ -178,9 +175,6 @@ func (s *OpenAIGatewayService) doOpenAIProxyAttempt(req *http.Request, account *
 // that HTTP never received a connection before another egress may be tried.
 // A response (including its later stream failures) always ends this loop.
 func (s *OpenAIGatewayService) doUpstreamWithProxyFallback(ctx context.Context, req *http.Request, account *Account, primaryProxyURL string) (*http.Response, error) {
-	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
-		return s.doOpenAIProxyAttempt(req, account, runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"})
-	}
 	primary := runtimeProxyEgress{url: primaryProxyURL, proxyID: -1}
 	if primaryProxyURL == "" {
 		primary.proxyID = 0

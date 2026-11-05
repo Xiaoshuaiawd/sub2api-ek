@@ -174,14 +174,12 @@ func TestQueryUsageResetCreditCountPrecedence(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			proxyCalls := useCodexModelsTestWARP(t, srv)
 
 			svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv), nil)
 			usage, err := svc.QueryUsage(context.Background(), 100)
 			require.NoError(t, err)
 			require.NotNil(t, usage)
 			require.Equal(t, 1, detailCalls)
-			require.EqualValues(t, 2, proxyCalls.Load(), "both quota requests must use WARP")
 			if tt.wantNil {
 				require.Nil(t, usage.RateLimitResetCredits)
 				return

@@ -211,7 +211,7 @@ func TestBackfillOpenAIImagesB64JSON_DownloadRequestShape(t *testing.T) {
 	req := upstream.requests[0]
 	require.Equal(t, http.MethodGet, req.Method)
 	require.Equal(t, "https://cdn.example.com/a.png?sig=abc", req.URL.String())
-	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
+	require.Equal(t, "http://127.0.0.1:7890", upstream.lastProxyURL)
 	_, hasDeadline := req.Context().Deadline()
 	require.True(t, hasDeadline)
 	// 目的地与重定向各跳都必须解析到公网地址；重定向本身保持跟随。

@@ -28,48 +28,75 @@ func quarantineFallbackFixture() (*OpenAIGatewayService, *Account) {
 	return s, account
 }
 
-func TestWarpAccountIgnoresBoundProxyQuarantine(t *testing.T) {
+func TestQuarantineFallbackKeepsAccountWithAuthorizedEgress(t *testing.T) {
 	s, account := quarantineFallbackFixture()
-	for _, mode := range []string{FallbackModeNone, FallbackModeDirect, FallbackModeProxy} {
-		account.Proxy.FallbackMode = mode
-		require.False(t, s.isOpenAIProxyStreamQuarantined(context.Background(), account))
-		require.False(t, s.isOpenAIProxyStreamQuarantined(
-			withOpenAIProxyQuarantineTransport(context.Background(), OpenAIUpstreamTransportResponsesWebsocketV2Ingress), account))
-	}
-	require.True(t, s.getOpenAIProxyStreamCircuit().isBlocked(account.Proxy.ID, time.Now()))
-}
-
-func TestWarpRequestsDoNotChangeAccountProxyCircuit(t *testing.T) {
-	t.Setenv("OPENAI_WARP_PROXY_URL", "http://warp.invalid:8080")
-	s, account := quarantineFallbackFixture()
-	account.Proxy.FallbackMode, account.Proxy.BackupProxyID = FallbackModeProxy, i64(92)
+	require.False(t, s.isOpenAIProxyStreamQuarantined(context.Background(), account))
+	require.True(t, s.isOpenAIProxyStreamQuarantined(
+		withOpenAIProxyQuarantineTransport(context.Background(), OpenAIUpstreamTransportResponsesWebsocketV2Ingress), account),
+		"native WebSocket selection must retain its existing circuit semantics")
+	require.True(t, s.getOpenAIProxyStreamCircuit().isBlocked(account.Proxy.ID, time.Now()),
+		"account eligibility must not heal the unhealthy egress")
+	account.Proxy.FallbackMode = FallbackModeNone
+	require.True(t, s.isOpenAIProxyStreamQuarantined(context.Background(), account))
+	account.Proxy.FallbackMode = FallbackModeProxy
+	account.Proxy.BackupProxyID = i64(92)
 	backup := proxyForTest(92, "backup.invalid", 8080)
 	s.proxyRepo = &fakeProxyLookup{byID: map[int64]*Proxy{92: backup}}
+	require.False(t, s.isOpenAIProxyStreamQuarantined(context.Background(), account))
+	s.getOpenAIProxyStreamCircuit().recordFailure(92, time.Now())
+	require.True(t, s.isOpenAIProxyStreamQuarantined(context.Background(), account),
+		"unusable backup must not bypass the scheduling gate")
+	backup.FallbackMode = FallbackModeDirect
+	require.False(t, s.isOpenAIProxyStreamQuarantined(context.Background(), account))
+}
+
+func TestQuarantineFallbackNewRequestsSkipPrimaryAndDoNotHealIt(t *testing.T) {
+	s, account := quarantineFallbackFixture()
 	var calls int
 	s.httpUpstream = &runtimeFallbackUpstream{do: func(req *http.Request, proxy string, id int64, _ int) (*http.Response, error) {
 		calls++
-		require.Equal(t, "http://warp.invalid:8080", proxy)
+		require.Empty(t, proxy, "the quarantined proxy must not receive even a connection attempt")
 		require.Equal(t, account.ID, id)
 		body, err := io.ReadAll(req.Body)
 		require.NoError(t, err)
 		require.Equal(t, "one-post", string(body))
 		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
 	}}
-	req, err := http.NewRequest(http.MethodPost, "https://example.invalid", strings.NewReader("one-post"))
-	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		req, err := http.NewRequest(http.MethodPost, "https://example.invalid", io.NopCloser(strings.NewReader("one-post")))
+		require.NoError(t, err)
+		require.Nil(t, req.GetBody, "preselection does not require replayable body")
+		resp, err := s.doOpenAIUpstream(req, account.Proxy.URL(), account)
+		require.NoError(t, err)
+		id, proxied := openAIResponseEgressProxyID(account, resp)
+		require.Zero(t, id)
+		require.False(t, proxied)
+		s.clearOpenAIProxyStreamDisconnect(account, resp)
+		require.True(t, s.getOpenAIProxyStreamCircuit().isBlocked(91, time.Now()))
+		require.Nil(t, account.TempUnschedulableUntil)
+	}
+	require.Equal(t, 3, calls)
+	require.Equal(t, int64(91), *account.ProxyID)
+}
+
+func TestQuarantineFallbackActualBackupReceivesHealthObservations(t *testing.T) {
+	s, account := quarantineFallbackFixture()
+	account.Proxy.FallbackMode, account.Proxy.BackupProxyID = FallbackModeProxy, i64(92)
+	backup := proxyForTest(92, "backup.invalid", 8080)
+	s.proxyRepo = &fakeProxyLookup{byID: map[int64]*Proxy{92: backup}}
+	s.httpUpstream = &runtimeFallbackUpstream{do: func(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
+		require.Equal(t, backup.URL(), proxy)
+		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+	}}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.invalid", strings.NewReader("test"))
 	resp, err := s.doOpenAIUpstream(req, account.Proxy.URL(), account)
 	require.NoError(t, err)
-	id, proxied := openAIResponseEgressProxyID(account, resp)
-	require.Negative(t, id)
-	require.False(t, proxied)
-	s.clearOpenAIProxyStreamDisconnect(account, resp)
-	require.True(t, s.getOpenAIProxyStreamCircuit().isBlocked(91, time.Now()), "WARP success must not heal the bound proxy")
-	s.getOpenAIProxyStreamCircuit().recordSuccess(91)
 	s.recordOpenAIProxyStreamDisconnect(account, errors.New("unexpected EOF"), "", resp)
-	require.False(t, s.getOpenAIProxyStreamCircuit().isBlocked(91, time.Now()), "WARP stream failure must not quarantine the bound proxy")
+	require.True(t, s.getOpenAIProxyStreamCircuit().isBlocked(91, time.Now()))
+	require.True(t, s.getOpenAIProxyStreamCircuit().isBlocked(92, time.Now()))
+	s.clearOpenAIProxyStreamDisconnect(account, resp)
 	require.False(t, s.getOpenAIProxyStreamCircuit().isBlocked(92, time.Now()))
-	require.Equal(t, 1, calls)
-	require.Equal(t, int64(91), *account.ProxyID)
+	require.True(t, s.getOpenAIProxyStreamCircuit().isBlocked(91, time.Now()))
 }
 
 func TestQuarantineFallbackDirectDisconnectDoesNotBlameBoundProxy(t *testing.T) {
@@ -124,4 +151,29 @@ func TestQuarantineFallbackConcurrentDirectSuccessDoesNotClearPrimary(t *testing
 	}
 	wg.Wait()
 	require.True(t, s.getOpenAIProxyStreamCircuit().isBlocked(91, time.Now()))
+}
+
+func TestQuarantineFallbackTTLAllowsPrimaryRecovery(t *testing.T) {
+	s, account := quarantineFallbackFixture()
+	circuit := s.getOpenAIProxyStreamCircuit()
+	circuit.mu.Lock()
+	e := circuit.entries[91]
+	e.blockedUntil = time.Now().Add(-time.Second)
+	circuit.entries[91] = e
+	circuit.mu.Unlock()
+	var calls int
+	s.httpUpstream = &runtimeFallbackUpstream{do: func(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
+		calls++
+		require.Equal(t, account.Proxy.URL(), proxy)
+		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+	}}
+	req, _ := http.NewRequest(http.MethodGet, "https://example.invalid", nil)
+	resp, err := s.doOpenAIUpstream(req, account.Proxy.URL(), account)
+	require.NoError(t, err)
+	id, ok := openAIResponseEgressProxyID(account, resp)
+	require.True(t, ok)
+	require.Equal(t, int64(91), id)
+	s.clearOpenAIProxyStreamDisconnect(account, resp)
+	require.Equal(t, 1, calls)
+	require.False(t, circuit.isBlocked(91, time.Now()))
 }

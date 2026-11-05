@@ -44,7 +44,7 @@ func (s *OpenAIOAuthService) ValidateCodexPersonalAccessToken(ctx context.Contex
 	}
 
 	client, err := httpclient.GetClient(httpclient.Options{
-		ProxyURL:              openAIWarpOrProxyURL(proxyURL),
+		ProxyURL:              proxyURL,
 		Timeout:               20 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
 	})

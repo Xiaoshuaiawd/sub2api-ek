@@ -12,9 +12,6 @@ from tools import openai_oauth_reauth_worker as worker
 
 
 class CodexDiagnosticTests(unittest.TestCase):
-    def setUp(self):
-        self.enterContext(patch.dict(os.environ, {"OPENAI_WARP_WORKER_NETWORK_ISOLATED": "true"}))
-
     def diagnostic(self, **changes):
         return {**dict(version=1, task_id=7, stage='token_exchange', reason='token_exchange_failed', elapsed_ms=120), **changes}
 
@@ -60,8 +57,7 @@ class CodexDiagnosticTests(unittest.TestCase):
         api = SimpleNamespace(config=SimpleNamespace(tosub2_root=Path('synthetic-runtime')),
                               progress=Mock(), credentials=Mock(return_value={'status': 'succeeded'}))
         claim = dict(task_id=7, account_id=42, oauth_profile='codex', credential_mode='password_totp',
-                     login_email='test@example.test', password='synthetic-private', totp_secret='synthetic-private',
-                     proxy_url='socks5h://warp:1080')
+                     login_email='test@example.test', password='synthetic-private', totp_secret='synthetic-private')
         def run(command, **kwargs):
             self.assertEqual(kwargs['stdout'], subprocess.DEVNULL)
             self.assertEqual(kwargs['stderr'], subprocess.DEVNULL)

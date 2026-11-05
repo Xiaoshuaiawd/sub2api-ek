@@ -40,7 +40,6 @@ func TestCodex780Validation(t *testing.T) {
 	require.Equal(t, "success", kind)
 	r.Shape = shape
 	ticket := codexHarvestTicket(ticketTestAccount(1), "gpt-6-astra", r, cfg, 1)
-	bindCodexHarvestEgress(ticket, codexHarvestAttempt{}, "session")
 	require.True(t, ticket.valid(now, 780))
 	require.False(t, ticket.valid(now.Add(221*time.Second), 780))
 	require.True(t, codexTicketCookiesFresh(ticket, now.Add(300*time.Second)))
@@ -88,7 +87,7 @@ func TestCodex780ProtocolIsolationAndRouteDeletion(t *testing.T) {
 	s := ticketTestService(t, cfg, nil)
 	now := time.Now()
 	state := mint780State(now)
-	ticket := &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), ProbeVerified: true, AccountID: 1, Model: "gpt-6-astra", State: state, Length: 780, Transport: "sse", Gateway: "unified-88", IssuedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-88"), HarvestSessionID: "mint-session"}
+	ticket := &openAICodexTicket{ProbeVerified: true, AccountID: 1, Model: "gpt-6-astra", State: state, Length: 780, Transport: "sse", Gateway: "unified-88", IssuedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-88"), HarvestSessionID: "mint-session"}
 	s.openaiCodexTickets.Store(openAICodexTicketKey(1, "gpt-6-astra"), ticket)
 	h := http.Header{}
 	require.NoError(t, s.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", h))

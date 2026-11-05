@@ -25,7 +25,7 @@ func TestFreshHarvestDoesNotReuseOldCookies(t *testing.T) {
 		require.False(t, gjson.GetBytes(data, "parallel_tool_calls").Bool())
 		return codexTicketResponse(), nil
 	}})
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), Model: "gpt-6-astra", State: fakeCodexTicketState(292), Length: 292, CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour), HarvestCookies: []string{"__cflb=old", "__oailb=old"}}))
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{Model: "gpt-6-astra", State: fakeCodexTicketState(292), Length: 292, CapturedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour), HarvestCookies: []string{"__cflb=old", "__oailb=old"}}))
 	result := svc.requestCodexHarvestProbe(context.Background(), account, "dummy", "gpt-6-astra", "", nil, "fresh")
 	require.NoError(t, result.Err)
 }

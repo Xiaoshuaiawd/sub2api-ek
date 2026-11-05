@@ -93,9 +93,8 @@ func (h *OpenAIOAuthReauthHandler) CreateTask(c *gin.Context) {
 }
 
 type reauthWorkerRequest struct {
-	WorkerID            string   `json:"worker_id"`
-	Engines             []string `json:"engines"`
-	WarpNetworkIsolated bool     `json:"warp_network_isolated"`
+	WorkerID string   `json:"worker_id"`
+	Engines  []string `json:"engines"`
 }
 
 type reauthWorkerProgressRequest struct {
@@ -120,9 +119,8 @@ type reauthWorkerFailureRequest struct {
 }
 
 type sessionExportClaimRequest struct {
-	WorkerID            string   `json:"worker_id"`
-	Capabilities        []string `json:"capabilities"`
-	WarpNetworkIsolated bool     `json:"warp_network_isolated"`
+	WorkerID     string   `json:"worker_id"`
+	Capabilities []string `json:"capabilities"`
 }
 
 type sessionExportProgressRequest struct {
@@ -167,18 +165,9 @@ func (h *OpenAIOAuthReauthHandler) Claim(c *gin.Context) {
 		response.BadRequest(c, "Invalid worker request")
 		return
 	}
-	if service.OpenAIWarpEnabled() && !req.WarpNetworkIsolated {
-		response.BadRequest(c, "WARP network isolation must be confirmed before claiming tasks")
-		return
-	}
 	claim, err := h.service.ClaimTaskWithEngines(c.Request.Context(), req.WorkerID, req.Engines)
-	h.service.RecordWorkerHeartbeat(req.WorkerID, req.WarpNetworkIsolated)
 	if err != nil {
 		response.ErrorFrom(c, err)
-		return
-	}
-	if service.OpenAIWarpEnabled() && !req.WarpNetworkIsolated {
-		response.BadRequest(c, "WARP network isolation must be confirmed before claiming tasks")
 		return
 	}
 	response.Success(c, claim)
@@ -193,18 +182,9 @@ func (h *OpenAIOAuthReauthHandler) ClaimSessionExport(c *gin.Context) {
 		response.BadRequest(c, "Invalid worker request")
 		return
 	}
-	if service.OpenAIWarpEnabled() && !req.WarpNetworkIsolated {
-		response.BadRequest(c, "WARP network isolation must be confirmed before claiming tasks")
-		return
-	}
 	claim, err := h.service.ClaimSessionExportTask(c.Request.Context(), req.WorkerID, req.Capabilities)
-	h.service.RecordWorkerHeartbeat(req.WorkerID, req.WarpNetworkIsolated)
 	if err != nil {
 		response.ErrorFrom(c, err)
-		return
-	}
-	if service.OpenAIWarpEnabled() && !req.WarpNetworkIsolated {
-		response.BadRequest(c, "WARP network isolation must be confirmed before claiming tasks")
 		return
 	}
 	response.Success(c, claim)
@@ -278,14 +258,7 @@ func (h *OpenAIOAuthReauthHandler) RuntimeSettings(c *gin.Context) {
 	if !h.requireWorker(c) {
 		return
 	}
-	var heartbeat struct {
-		WorkerID            string `json:"worker_id"`
-		WarpNetworkIsolated bool   `json:"warp_network_isolated"`
-	}
-	if err := c.ShouldBindJSON(&heartbeat); err != nil {
-		heartbeat.WarpNetworkIsolated = false
-	}
-	h.service.RecordWorkerHeartbeat(heartbeat.WorkerID, heartbeat.WarpNetworkIsolated)
+	h.service.MarkWorkerSeen()
 	cfg, err := h.service.GetRuntimeSettings(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)

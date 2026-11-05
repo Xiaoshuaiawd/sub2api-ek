@@ -121,7 +121,7 @@ func TestControlledExperimentGatewayWSUsesOneFrameAndNoHTTPFallback(t *testing.T
 	require.Empty(t, upstream.requests)
 }
 
-func TestControlledExperimentGatewayPrismFailsClosedWithoutVerifiedWarp(t *testing.T) {
+func TestControlledExperimentGatewayPrismKeepsAdapterEvidenceAndUnavailableUsage(t *testing.T) {
 	var submissions atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -140,9 +140,16 @@ func TestControlledExperimentGatewayPrismFailsClosedWithoutVerifiedWarp(t *testi
 	account.Status = StatusActive
 	account.Schedulable = true
 	executor, route, spec, body := controlledGatewayFixture(account, gateway, "prism", "gpt-6-luna")
-	_, d := executor.Execute(context.Background(), route, spec, body, "9d8ad823-69d3-4c0d-a0b2-23e4f9509e21")
-	require.NotEqual(t, "ok", d.Code, "%+v", d)
-	require.Zero(t, submissions.Load(), "unverified Prism adapter must not receive the request")
+	turn, d := executor.Execute(context.Background(), route, spec, body, "9d8ad823-69d3-4c0d-a0b2-23e4f9509e21")
+	require.Equal(t, "ok", d.Code, "%+v", d)
+	require.Equal(t, "OK", turn.Text)
+	require.EqualValues(t, 1, submissions.Load())
+	require.Equal(t, 1, d.Submissions)
+	require.Equal(t, "prism", d.ActualChannel)
+	require.Equal(t, "adapter_declared", d.EffortEvidence)
+	require.Equal(t, "unavailable", d.UsageSource)
+	require.Nil(t, d.CostUSD)
+	require.True(t, d.CostIncomplete)
 }
 
 func TestControlledExperimentGatewayRespectsProtocolSwitchesBeforeSend(t *testing.T) {

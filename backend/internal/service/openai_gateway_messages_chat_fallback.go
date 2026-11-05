@@ -35,7 +35,6 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	body []byte,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
-	ctx = s.withOpenAIHTTPBudget(ctx, c)
 	startTime := time.Now()
 
 	// 1. Parse Anthropic request
@@ -134,9 +133,6 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	// 4. Handle error responses
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
-		if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
-			return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
-		}
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
 			return nil, foErr
 		}
@@ -147,17 +143,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 
 	// 5. Convert response
 	if clientStream {
-		result, forwardErr := s.streamChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
-		if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
-			return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
-		}
-		return result, forwardErr
+		return s.streamChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	result, forwardErr := s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
-	if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
-		return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
-	}
-	return result, forwardErr
+	return s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(

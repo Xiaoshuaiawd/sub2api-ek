@@ -23,7 +23,7 @@ func TestCodexTicketFixedStrategyPreservesPrimaryAndCooldown(t *testing.T) {
 	svc.settingService = NewSettingService(repo, &config.Config{})
 	account := ticketTestAccount(41)
 	account.Status = StatusActive
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), Model: "gpt-6-astra", State: fakeCodexTicketState(292), Length: 292, ExpiresAt: time.Now().Add(time.Minute)}))
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{Model: "gpt-6-astra", State: fakeCodexTicketState(292), Length: 292, ExpiresAt: time.Now().Add(time.Minute)}))
 	svc.accountRepo = &codexTicketRefreshRepo{accounts: []Account{*account}}
 	svc.refreshOpenAICodexTickets(context.Background())
 	require.Empty(t, upstream.requests)
@@ -107,7 +107,7 @@ func TestCodexTicketEnabledRuntimeSettingOverridesYaml(t *testing.T) {
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: false, FailClosed: true}, nil)
 	svc.settingService = settings
 	account := ticketTestAccount(41)
-	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(),
+	require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
 		AccountID:  41,
 		Model:      "gpt-6-astra",
 		State:      fakeCodexTicketState(292),
@@ -155,20 +155,20 @@ func TestCodexTicketProxyRuntimeSettingAndFallback(t *testing.T) {
 	settings := NewSettingService(repo, &config.Config{})
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{HarvestProxyURL: "http://fallback.example.com:8080"}, nil)
 	svc.settingService = settings
-	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestProxyURL())
+	require.Equal(t, "http://fallback.example.com:8080", svc.openAICodexTicketHarvestProxyURL())
 	repo.values[SettingKeyOpenAICodexTicketHarvestProxyURL] = "socks5h://user:secret@first.example.com:1080"
 	settings.InvalidateOpenAICodexTicketHarvestProxyCache()
-	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestProxyURL())
+	require.Equal(t, repo.values[SettingKeyOpenAICodexTicketHarvestProxyURL], svc.openAICodexTicketHarvestProxyURL())
 	repo.values[SettingKeyOpenAICodexTicketHarvestProxyURL] = "http://second.example.com:8080"
 	settings.InvalidateOpenAICodexTicketHarvestProxyCache()
-	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestProxyURL())
+	require.Equal(t, "http://second.example.com:8080", svc.openAICodexTicketHarvestProxyURL())
 	// Simulate another instance's settings write after the local cache expires.
 	repo.values[SettingKeyOpenAICodexTicketHarvestProxyURL] = "https://third.example.com:443"
 	settings.openAICodexTicketHarvestProxyCache.Store(&cachedOpenAICodexTicketHarvestProxy{value: "http://second.example.com:8080", expiresAt: time.Now().Add(-time.Second).UnixNano()})
-	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestProxyURL())
+	require.Equal(t, "https://third.example.com:443", svc.openAICodexTicketHarvestProxyURL())
 	repo.err = errors.New("database unavailable")
 	settings.openAICodexTicketHarvestProxyCache.Store(&cachedOpenAICodexTicketHarvestProxy{value: "https://third.example.com:443", expiresAt: 0})
-	require.Equal(t, OpenAIWarpProxyURL(), svc.openAICodexTicketHarvestProxyURL())
+	require.Equal(t, "https://third.example.com:443", svc.openAICodexTicketHarvestProxyURL())
 }
 
 func TestCodexTicketProxyMaskAndValidation(t *testing.T) {

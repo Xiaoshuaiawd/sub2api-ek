@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestExcelBPSWarmTargetsIgnoreLegacyOpenAIProxySettings(t *testing.T) {
+func TestExcelBPSWarmTargetsUseConfiguredConcurrency(t *testing.T) {
 	makeAccount := func(n int, source string) Account {
 		a := *excelAccount()
 		a.Concurrency = n
@@ -27,22 +27,16 @@ func TestExcelBPSWarmTargetsIgnoreLegacyOpenAIProxySettings(t *testing.T) {
 	inactive.Status = "disabled"
 	paused := makeAccount(90, "mihomo")
 	paused.Schedulable = false
-	pending := makeAccount(90, "mihomo")
-	pending.Extra["openai_excel_bps"] = false
-	pending.Extra[ExcelBPSAutoRecoverOn403Key] = true
-	pending.Extra["openai_excel_bps_auto_disable_on_403"] = true
-	pending.Extra[ExcelBPS403DisabledAtKey] = time.Now().Format(time.RFC3339Nano)
-	require.True(t, pending.IsExcelBPS403RecoveryPending())
-	m, s := excelBPSWarmTargets([]Account{a, b, c, off, inactive, paused, pending})
-	require.Zero(t, m)
-	require.Zero(t, s)
+	m, s := excelBPSWarmTargets([]Account{a, b, c, off, inactive, paused})
+	require.Equal(t, 7, m)
+	require.Equal(t, 2, s)
 	a.Concurrency = 9
 	m, s = excelBPSWarmTargets([]Account{a, c})
-	require.Zero(t, m)
-	require.Zero(t, s)
+	require.Equal(t, 9, m)
+	require.Equal(t, 2, s)
 	large := makeAccount(100000, "mihomo")
 	m, _ = excelBPSWarmTargets([]Account{large, large})
-	require.Zero(t, m)
+	require.Equal(t, excelBPSWarmMaxTarget, m)
 }
 
 type warmProjectionRepo struct {

@@ -155,17 +155,6 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 		return err
 	}
 
-	var egressErr *runtimeProxyEgressError
-	if errors.As(err, &egressErr) && egressErr.target.proxyName == "warp" {
-		// WARP is shared by every OpenAI account on this node. Switching or
-		// suspending accounts cannot repair its transport and would penalize
-		// otherwise healthy credentials during a sidecar outage.
-		if c != nil && !c.Writer.Written() {
-			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "message": "WARP proxy or upstream connection failed"}})
-		}
-		return err
-	}
-
 	// Transport attempt reached the network path; count as Ollama Cloud / OpenCode Go activity.
 	if s != nil {
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)

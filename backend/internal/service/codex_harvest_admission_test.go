@@ -40,7 +40,7 @@ func TestCodex780AdmissionRequiresOriginalTicketContinuation(t *testing.T) {
 			calls, reserved := 0, 0
 			svc.httpUpstream = &harvestProxyUpstream{do: func(req *http.Request, proxy string) (*http.Response, error) {
 				calls++
-				require.Equal(t, OpenAIWarpProxyURL(), proxy)
+				require.Equal(t, "http://127.0.0.1:17893", proxy)
 				require.True(t, IsOpenAICodexStateProbeRequest(req.Context()), "must bypass gateway borrowing")
 				require.Equal(t, "Bearer target-token", req.Header.Get("Authorization"))
 				require.Equal(t, "same-session", req.Header.Get("session_id"))
@@ -86,7 +86,6 @@ func TestCodex780AdmissionRequiresOriginalTicketContinuation(t *testing.T) {
 			require.LessOrEqual(t, calls, tc.budget)
 			require.NotContains(t, safeCodexHarvestError(out.Err), "secret")
 			ticket := codexHarvestTicket(account, "gpt-6-astra", out, cfg, reserved)
-			bindCodexHarvestEgress(ticket, codexHarvestAttempt{proxy: OpenAIWarpProxyURL()}, "same-session")
 			require.Equal(t, tc.want == "success", ticket.valid(time.Now(), 780))
 			if tc.want == "success" {
 				require.Equal(t, 2, calls)
@@ -121,7 +120,7 @@ func TestCodex780ProbeStageDoesNotReuseOldSuccess(t *testing.T) {
 func TestCodex780FlowIgnoresLegacyHostFilter(t *testing.T) {
 	account := ticketTestAccount(1)
 	now := time.Now()
-	ticket := &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), ProbeVerified: true, AccountID: 1, Model: "gpt-6-astra", State: mint780State(now), Length: 780, Transport: "sse", Gateway: "unified-123", IssuedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-123")}
+	ticket := &openAICodexTicket{ProbeVerified: true, AccountID: 1, Model: "gpt-6-astra", State: mint780State(now), Length: 780, Transport: "sse", Gateway: "unified-123", IssuedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-123")}
 	account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-6-astra"): ticket}
 	controls := &CodexHarvestService{current: CodexHarvestControls{Transport: "sse", TargetGateway: "unified-88"}, loadedUntil: now.Add(time.Hour)}
 	snapshot := BuildCodexHarvestFlow(context.Background(), &config.Config{Gateway: config.GatewayConfig{OpenAICodexTicket: config.OpenAICodexTicketConfig{Enabled: true, TargetLength: 780, Models: []string{"gpt-6-astra"}}}}, nil, []Account{*account}, controls)
@@ -136,7 +135,7 @@ func TestCodex780BusinessReplacementRequiresFreshProbe(t *testing.T) {
 			svc := ticketTestService(t, cfg, nil)
 			now := time.Now().Add(-time.Second)
 			state := mint780State(now)
-			ticket := &openAICodexTicket{HarvestProxyURL: OpenAIWarpProxyURL(), ProbeVerified: true, AccountID: 1, Model: "gpt-6-astra", State: state, Length: 780, Transport: "sse", Gateway: "unified-123", IssuedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-123")}
+			ticket := &openAICodexTicket{ProbeVerified: true, AccountID: 1, Model: "gpt-6-astra", State: state, Length: 780, Transport: "sse", Gateway: "unified-123", IssuedAt: now, ExpiresAt: now.Add(240 * time.Second), HarvestCookies: mint780Pair(now.Add(time.Hour), "unified-123")}
 			require.NoError(t, svc.storeOpenAICodexTicket(context.Background(), account, ticket))
 			req, _ := http.NewRequest(http.MethodPost, chatgptCodexURL, nil)
 			req.Header.Set(openAICodexTurnStateHeader, state)

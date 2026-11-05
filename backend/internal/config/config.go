@@ -1174,8 +1174,6 @@ type GatewayConfig struct {
 	GrokResponseHeaderTimeout int `mapstructure:"grok_response_header_timeout"`
 	// OpenAIFirstOutputTimeoutSeconds: native HTTP Responses 首个语义输出超时（秒），0表示禁用。
 	OpenAIFirstOutputTimeoutSeconds int `mapstructure:"openai_first_output_timeout_seconds"`
-	// OpenAIFirstWordProtectionEnabled stops OpenAI turns without semantic output at 180s.
-	OpenAIFirstWordProtectionEnabled bool `mapstructure:"openai_first_word_protection_enabled"`
 	// HTTP submission deadline shared across retries; zero disables it.
 	OpenAIUploadTimeoutSeconds int `mapstructure:"openai_upload_timeout_seconds"`
 	// Shared HTTP budget before the first complete model output event; zero disables it.
@@ -2683,7 +2681,6 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_response_header_timeout", 0)
 	viper.SetDefault("gateway.grok_response_header_timeout", 120)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
-	viper.SetDefault("gateway.openai_first_word_protection_enabled", true)
 	viper.SetDefault("gateway.openai_upload_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_pre_output_budget_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)

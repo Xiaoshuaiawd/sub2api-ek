@@ -562,11 +562,6 @@ func opsUpstreamProxyAttribution(account *Account) (*int64, string) {
 	if account == nil {
 		return nil, opsProxyNameUnknown
 	}
-	// OpenAI WARP is not a managed proxy record; the account binding is not the
-	// egress used for the request and must never be reported as such.
-	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
-		return nil, opsProxyNameUnknown
-	}
 	if account.ProxyID == nil || account.Proxy == nil {
 		return nil, opsProxyNameDirect
 	}

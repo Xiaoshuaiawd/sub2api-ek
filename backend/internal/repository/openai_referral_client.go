@@ -25,11 +25,7 @@ func NewOpenAIReferralClient(factory service.PrivacyClientFactory) service.OpenA
 }
 
 func (c *openAIReferralClient) request(ctx context.Context, call service.OpenAIReferralCall) (*req.Request, error) {
-	proxyURL := call.ProxyURL
-	if service.OpenAIWarpEnabled() {
-		proxyURL = service.OpenAIWarpProxyURL()
-	}
-	client, err := c.clientFactory(proxyURL)
+	client, err := c.clientFactory(call.ProxyURL)
 	if err != nil {
 		return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_REFERRAL_CLIENT_ERROR", "failed to build referral client")
 	}

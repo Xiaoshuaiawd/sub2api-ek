@@ -263,7 +263,6 @@ func (s *OpenAIGatewayService) ExecuteManualHarvest(ctx context.Context, req Man
 			if result.Kind == "success" {
 				consecutiveFails = 0
 				ticket := codexHarvestTicket(account, model, result, cfg, attempt)
-				lease.proxy = result.ProxyURL
 				bindCodexHarvestEgress(ticket, lease, session)
 				if storeErr := s.storeOpenAICodexTicket(ctx, account, ticket); storeErr != nil {
 					persistPending[model] = true

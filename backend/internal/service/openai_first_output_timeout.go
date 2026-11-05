@@ -20,12 +20,11 @@ import (
 )
 
 const (
-	OpenAIFirstWordProtectionReason          GatewayFailureReason = "first_word_protection"
-	openAIFirstOutputStageMemoryLimit                             = 64 * 1024
-	openAIFirstOutputStageMaxBytes                                = 8 * 1024 * 1024
-	openAIFirstOutputScannerFramingAllowance                      = 64
-	openAIFirstOutputGuardQueueSize                               = 1
-	openAIDefaultStreamQueueSize                                  = 16
+	openAIFirstOutputStageMemoryLimit        = 64 * 1024
+	openAIFirstOutputStageMaxBytes           = 8 * 1024 * 1024
+	openAIFirstOutputScannerFramingAllowance = 64
+	openAIFirstOutputGuardQueueSize          = 1
+	openAIDefaultStreamQueueSize             = 16
 )
 
 var (
@@ -231,9 +230,6 @@ func (s *openAIFirstOutputStage) Close() error {
 }
 
 func (s *OpenAIGatewayService) openAIFirstOutputTimeout(reasoningEffort string) time.Duration {
-	if s.firstWordProtectionEnabled() {
-		return 180 * time.Second
-	}
 	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIFirstOutputTimeoutSeconds <= 0 {
 		return 0
 	}
@@ -245,10 +241,6 @@ func (s *OpenAIGatewayService) openAIFirstOutputTimeout(reasoningEffort string) 
 		}
 	}
 	return time.Duration(seconds) * time.Second
-}
-
-func (s *OpenAIGatewayService) firstWordProtectionEnabled() bool {
-	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIFirstWordProtectionEnabled
 }
 
 // newOpenAIFirstOutputTimeoutError records the timeout as an upstream attempt
@@ -287,19 +279,11 @@ func (s *OpenAIGatewayService) newOpenAIFirstOutputTimeoutError(
 	if s.rateLimitService != nil {
 		s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 	}
-	failure := &UpstreamFailoverError{
+	return &UpstreamFailoverError{
 		StatusCode:      http.StatusGatewayTimeout,
 		ResponseBody:    []byte(`{"error":{"type":"first_output_timeout","message":"Upstream produced no output before the deadline"}}`),
 		ResponseHeaders: responseHeaders.Clone(), SafeToFailoverAfterWrite: true,
 	}
-	if s.firstWordProtectionEnabled() {
-		failure.NextAccountAction = NextAccountStop
-		failure.SafeToFailoverAfterWrite = false
-		failure.Reason = OpenAIFirstWordProtectionReason
-		failure.ClientStatusCode = http.StatusGatewayTimeout
-		failure.ClientMessage = "Upstream produced no output within 180 seconds"
-	}
-	return failure
 }
 
 type openAIFirstOutputHeaderGuard struct {

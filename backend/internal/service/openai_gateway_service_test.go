@@ -1734,7 +1734,7 @@ func TestOpenAIStreamingReadErrorAfterOutputUsesResponsesErrorSchema(t *testing.
 	}
 }
 
-func TestOpenAIStreamingPostOutputDisconnectDoesNotQuarantineAccountProxy(t *testing.T) {
+func TestOpenAIStreamingPostOutputDisconnectQuarantinesSharedProxyWithoutSameStreamFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	proxyID := int64(4698)
 	account := &Account{
@@ -1785,8 +1785,8 @@ func TestOpenAIStreamingPostOutputDisconnectDoesNotQuarantineAccountProxy(t *tes
 
 	scheduler := &defaultOpenAIAccountScheduler{service: svc}
 	compatible, reason := scheduler.isAccountRequestCompatibleReason(context.Background(), account, OpenAIAccountScheduleRequest{})
-	require.True(t, compatible, "a WARP stream failure must not quarantine the unused account proxy")
-	require.Empty(t, reason)
+	require.False(t, compatible, "the next request must exclude accounts sharing the quarantined proxy")
+	require.Equal(t, "proxy_stream_quarantined", reason)
 }
 
 func TestOpenAIStreamingTerminalAndClientCancellationDoNotQuarantineProxy(t *testing.T) {
@@ -2568,8 +2568,7 @@ func TestOpenAIStreamingPassthroughPostOutputDisconnectQuarantinesSharedProxy(t 
 		require.Contains(t, rec.Body.String(), "partial")
 	}
 
-	require.False(t, svc.isOpenAIProxyStreamQuarantined(context.Background(), account))
-	require.False(t, svc.getOpenAIProxyStreamCircuit().isBlocked(proxyID, time.Now()))
+	require.True(t, svc.isOpenAIProxyStreamQuarantined(context.Background(), account))
 }
 
 func TestOpenAIStreamingPassthroughResponseFailedBeforeOutputReturnsFailover(t *testing.T) {

@@ -112,17 +112,9 @@ func TestGetSharedReqClient_ProxyURLMissingHost(t *testing.T) {
 
 func TestCreateOpenAIReqClient_Timeout120Seconds(t *testing.T) {
 	sharedReqClients = sync.Map{}
-	warp := "http://warp.local:1080"
-	t.Setenv("OPENAI_WARP_PROXY_URL", warp)
 	client, err := createOpenAIReqClient("http://proxy.local:8080")
 	require.NoError(t, err)
 	require.Equal(t, 120*time.Second, client.GetClient().Timeout)
-	warpClient, err := getSharedReqClient(reqClientOptions{ProxyURL: warp, Timeout: 120 * time.Second})
-	require.NoError(t, err)
-	require.Same(t, warpClient, client)
-	otherClient, err := createOpenAIReqClient("http://other-proxy.local:8080")
-	require.NoError(t, err)
-	require.Same(t, client, otherClient)
 }
 
 func TestCreateGeminiReqClient_ForceHTTP2Disabled(t *testing.T) {

@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/json"
-	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -46,7 +45,7 @@ func TestExcelBPSAccountOnlyUsesOAuth(t *testing.T) {
 }
 
 func TestExcelBPSManualTestSuppliesProxySessionIdentity(t *testing.T) {
-	upstream := &httpUpstreamRecorder{err: errors.New("WARP unavailable")}
+	upstream := &httpUpstreamRecorder{}
 	gateway := openAIClientToolsTestService(upstream)
 	svc := &AccountTestService{openaiGatewayService: gateway}
 	account := excelAccount()
@@ -54,15 +53,15 @@ func TestExcelBPSManualTestSuppliesProxySessionIdentity(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/api/v1/admin/accounts/300/test", nil)
 	err := svc.testExcelBPSAccountConnection(c, account, "gpt-6-astra", "Reply OK")
-	require.ErrorContains(t, err, "basispoints_transport_error")
+	// Missing managed proxy is expected in this fixture, but not a missing session.
+	require.ErrorContains(t, err, "basispoints_proxy_unavailable")
 	require.NotContains(t, err.Error(), "basispoints_session_required")
-	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
+	require.Nil(t, upstream.lastReq)
 	require.Empty(t, c.Request.Header.Get("Session-Id"), "test must not mutate the inbound request")
 }
 
 func TestExcelBPSBackgroundTestHandlesNilHeader(t *testing.T) {
-	upstream := &httpUpstreamRecorder{err: errors.New("WARP unavailable")}
+	upstream := &httpUpstreamRecorder{}
 	svc := &AccountTestService{openaiGatewayService: openAIClientToolsTestService(upstream)}
 	account := excelAccount()
 	account.Extra["openai_excel_bps_mihomo"] = true
@@ -70,11 +69,10 @@ func TestExcelBPSBackgroundTestHandlesNilHeader(t *testing.T) {
 	c.Request = &http.Request{}
 	require.NotPanics(t, func() {
 		err := svc.testExcelBPSAccountConnection(c, account, "gpt-6-astra", "Reply OK")
-		require.ErrorContains(t, err, "basispoints_transport_error")
+		require.ErrorContains(t, err, "basispoints_proxy_unavailable")
 	})
 	require.Nil(t, c.Request.Header, "the inbound request must remain unchanged")
-	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
+	require.Nil(t, upstream.lastReq)
 }
 
 func TestExcelBPSManualTestReportsRateLimit(t *testing.T) {

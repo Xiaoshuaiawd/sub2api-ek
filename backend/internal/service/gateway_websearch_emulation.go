@@ -221,9 +221,6 @@ func doWebSearch(ctx context.Context, account *Account, query string) (*websearc
 }
 
 func resolveAccountProxyURL(account *Account) string {
-	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
-		return OpenAIWarpProxyURL()
-	}
 	if account.ProxyID != nil && account.Proxy != nil {
 		return account.Proxy.URL()
 	}

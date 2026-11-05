@@ -278,7 +278,6 @@ func TestOpenAIGatewayService_Forward_WSv2Handshake502RecordsModelTransient(t *t
 		_, _ = w.Write([]byte(`{"error":{"type":"server_error","message":"bad gateway"}}`))
 	}))
 	defer server.Close()
-	setLocalWarpProxy(t, server.URL)
 
 	cfg := newOpenAIWSV2TestConfig()
 	cfg.Security.URLAllowlist.Enabled = false

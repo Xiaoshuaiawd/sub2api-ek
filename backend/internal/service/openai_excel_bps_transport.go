@@ -181,12 +181,6 @@ func (s *OpenAIGatewayService) doExcelBPSRequestTo(ctx context.Context, c *gin.C
 	if account.Proxy != nil {
 		proxy = account.Proxy.URL()
 	}
-	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
-		// All BPS attempts share WARP. Do not acquire or retry legacy proxy
-		// lanes: they are not the egress used by the physical transport.
-		managed = false
-		proxy = OpenAIWarpProxyURL()
-	}
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, proxy, err
@@ -220,9 +214,6 @@ func (s *OpenAIGatewayService) doExcelBPSRequestTo(ctx context.Context, c *gin.C
 		}
 		evidence := &excelBPSWriteEvidence{}
 		resp, err := s.doPriorityObservedHTTP(evidence.request(req), proxy, account)
-		if err == nil && resp == nil {
-			err = errors.New("empty BPS upstream response")
-		}
 		controlledHTTPResponse(ctx, resp)
 		s.rateLimitService.observeQualityResponse(req.Context(), account, resp, err)
 		if err == nil {

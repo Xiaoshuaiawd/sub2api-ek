@@ -47,7 +47,7 @@ func TestOpsUpstreamErrorEventKeepsExplicitProxySnapshotPerAttempt(t *testing.T)
 	oldAccount := &Account{
 		ID:       11,
 		Name:     "old-account",
-		Platform: PlatformAnthropic,
+		Platform: PlatformOpenAI,
 		ProxyID:  &oldProxyID,
 		Proxy:    oldProxy,
 	}
@@ -62,7 +62,7 @@ func TestOpsUpstreamErrorEventKeepsExplicitProxySnapshotPerAttempt(t *testing.T)
 	newAccount := &Account{
 		ID:       12,
 		Name:     "new-account",
-		Platform: PlatformAnthropic,
+		Platform: PlatformOpenAI,
 		ProxyID:  &newProxyID,
 		Proxy:    &Proxy{ID: newProxyID, Name: "oxylabs-uk-8001"},
 	}
@@ -108,11 +108,6 @@ func TestOpsUpstreamProxyFieldAccessors(t *testing.T) {
 		wantID   *int64
 		wantName string
 	}{
-		{
-			name:     "openai warp does not attribute account proxy",
-			account:  &Account{Platform: PlatformOpenAI, ProxyID: &boundID, Proxy: &Proxy{ID: boundID, Name: "bound"}},
-			wantName: opsProxyNameUnknown,
-		},
 		{
 			name:     "actual proxy object is authoritative",
 			account:  &Account{ProxyID: &boundID, Proxy: &Proxy{ID: backupID, Name: "backup-uk"}},

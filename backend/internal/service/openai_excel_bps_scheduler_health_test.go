@@ -54,10 +54,10 @@ func TestOpenAIAccountSchedulingIgnoresBPSProxyAcquisitionFailures(t *testing.T)
 	}
 }
 
-func TestExcelBPSWarpFailureReachesSchedulerAsTransportError(t *testing.T) {
+func TestExcelBPSProxyUnavailableReachesSchedulerWithoutPenalty(t *testing.T) {
 	for _, attachments := range []bool{false, true} {
 		t.Run(fmt.Sprintf("attachments_%t", attachments), func(t *testing.T) {
-			upstream := &httpUpstreamRecorder{err: io.EOF}
+			upstream := &httpUpstreamRecorder{}
 			svc := openAIClientToolsTestService(upstream)
 			now := time.Now()
 			svc.openaiAccountStats = newOpenAIAccountRuntimeStats()
@@ -79,13 +79,14 @@ func TestExcelBPSWarpFailureReachesSchedulerAsTransportError(t *testing.T) {
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 			_, err := svc.Forward(context.Background(), c, account, body)
-			require.Error(t, err)
-			require.Equal(t, http.StatusBadGateway, rec.Code)
-			require.Len(t, upstream.requests, 1)
-			require.Equal(t, OpenAIWarpProxyURL(), upstream.lastProxyURL)
+			require.ErrorIs(t, err, errExcelBPSProxyUnavailable)
+			require.EqualError(t, err, "excel BPS: basispoints_proxy_unavailable")
+			require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			require.Contains(t, rec.Body.String(), `"code":"basispoints_proxy_unavailable"`)
+			require.Nil(t, upstream.lastReq, "local acquisition failure must not send upstream")
 			svc.ReportOpenAIAccountScheduleResult(account, "gpt-6-astra", false, nil, fmt.Errorf("wrapped: %w", err))
 			rate, latency, known := svc.openaiAccountStats.snapshot(account.ID)
-			require.Greater(t, rate, float64(0))
+			require.Zero(t, rate)
 			require.Equal(t, float64(ttft), latency)
 			require.True(t, known)
 		})

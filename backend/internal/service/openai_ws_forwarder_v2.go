@@ -223,9 +223,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if pinErr != nil {
 		return nil, wrapOpenAIWSFallback("codex_ticket_unavailable", pinErr)
 	}
-	if OpenAIWarpEnabled() && account.Platform == PlatformOpenAI {
-		proxyURL = OpenAIWarpProxyURL()
-	}
 	defer releaseHarvest()
 	// A bound ticket already supplied the complete Cookie pair and pinned exit.
 	// Do not acquire a second lease or overlay a gateway cookie on that bundle.
@@ -541,27 +538,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if err != nil {
 		return nil, err
 	}
-	firstWordStartedAt := time.Now()
-	firstWordEffort := extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel)
-	firstWordEffortValue := ""
-	if firstWordEffort != nil {
-		firstWordEffortValue = *firstWordEffort
-	}
-	firstWordTimeout := time.Duration(0)
-	if s.firstWordProtectionEnabled() {
-		firstWordTimeout = s.openAIFirstOutputTimeout(firstWordEffortValue)
-	}
-	firstWordPending := firstWordTimeout > 0
-	firstWordTimeoutError := func() error {
-		lease.MarkBroken()
-		proxyID, proxyName := opsUpstreamWSProxyAttribution(account)
-		failoverErr := s.newOpenAIFirstOutputTimeoutError(
-			ctx, c, account, proxyID, proxyName, firstWordStartedAt,
-			originalModel, firstWordEffortValue, firstWordTimeout,
-			"websocket_first_semantic_output", lease.HandshakeHeaders(),
-		)
-		return failoverErr
-	}
 
 	if debugEnabled {
 		logOpenAIWSModeDebug(
@@ -737,13 +713,6 @@ readLoop:
 			pendingJSONDocuments = pendingJSONDocuments[1:]
 		} else {
 			currentReadTimeout := readTimeout
-			if firstWordPending {
-				remaining, expired := openAIWSFirstWordReadBudget(firstWordStartedAt, firstWordTimeout)
-				if expired {
-					return nil, firstWordTimeoutError()
-				}
-				currentReadTimeout = remaining
-			}
 			if clientDisconnected && !clientDisconnectDrainStartedAt.IsZero() {
 				remaining := readTimeout - time.Since(clientDisconnectDrainStartedAt)
 				if remaining <= 0 {
@@ -770,11 +739,6 @@ readLoop:
 			}
 		}
 		markClientRequestCanceled()
-		if firstWordPending {
-			if _, expired := openAIWSFirstWordReadBudget(firstWordStartedAt, firstWordTimeout); expired && !clientDisconnected {
-				return nil, firstWordTimeoutError()
-			}
-		}
 		if readErr == nil && !json.Valid(message) {
 			eventType, _, _ := parseOpenAIWSEventEnvelope(message)
 			if eventType == "" {
@@ -832,16 +796,6 @@ readLoop:
 		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
 		if eventType == "" {
 			continue
-		}
-		if firstWordPending && openAIWSPassthroughStartsSemanticOutput(message) {
-			if (eventType == "response.completed" || eventType == "response.done") &&
-				openAIResponsesCompletedEventIsEmpty(message, usage) {
-				lease.MarkBroken()
-				failure := newOpenAIResponsesEmptyCompletedFailoverError(c, account, lease.HandshakeHeaders().Get("x-request-id"))
-				failure.NextAccountAction = NextAccountStop
-				return nil, failure
-			}
-			firstWordPending = false
 		}
 		responseModelObserver.ObserveOpenAI(message, eventType)
 		eventCount++
@@ -1096,14 +1050,6 @@ readLoop:
 	result.ImageCount = imageCounter.Count()
 	result.ImageOutputSizes = imageCounter.Sizes()
 	return result, nil
-}
-
-func openAIWSFirstWordReadBudget(startedAt time.Time, timeout time.Duration) (time.Duration, bool) {
-	remaining := time.Until(startedAt.Add(timeout))
-	if remaining <= 0 {
-		return 0, true
-	}
-	return remaining, false
 }
 
 // ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。

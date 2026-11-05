@@ -127,13 +127,12 @@ func TestRegionalHTTPRedirectChangesEgressAndStripsCredentials(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 	require.EqualValues(t, 1, eu.Load())
 }
-func TestRegionalHTTPMissIsDirectAndOpenAIPathsUseWarp(t *testing.T) {
+func TestRegionalHTTPMissAndSpecialPathsRemainDirect(t *testing.T) {
 	var direct, egress atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { direct.Add(1); w.WriteHeader(204) }))
 	defer upstream.Close()
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { egress.Add(1); w.WriteHeader(201) }))
 	defer proxy.Close()
-	t.Setenv("OPENAI_WARP_PROXY_URL", proxy.URL)
 	cfg := regionalHTTPConfig(t, proxy.URL, "127.0.0.1")
 	up := NewHTTPUpstream(cfg)
 	for _, profile := range []service.HTTPUpstreamProfile{service.HTTPUpstreamProfileOpenAIHarvest, service.HTTPUpstreamProfileExcelBPS} {
@@ -141,7 +140,6 @@ func TestRegionalHTTPMissIsDirectAndOpenAIPathsUseWarp(t *testing.T) {
 		require.NoError(t, err)
 		resp, err := up.Do(req, "", 15, 2)
 		require.NoError(t, err)
-		require.Equal(t, 201, resp.StatusCode)
 		require.NoError(t, resp.Body.Close())
 	}
 	cfg.Gateway.UpstreamRouting.Rules[0].Domain = "unmatched.test"
@@ -151,8 +149,8 @@ func TestRegionalHTTPMissIsDirectAndOpenAIPathsUseWarp(t *testing.T) {
 	resp, err := up.Do(req, "", 15, 2)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
-	require.EqualValues(t, 1, direct.Load())
-	require.EqualValues(t, 2, egress.Load())
+	require.EqualValues(t, 3, direct.Load())
+	require.Zero(t, egress.Load())
 }
 func TestRegionalHTTPFailureDoesNotReplayOrGoDirect(t *testing.T) {
 	var direct, received atomic.Int32

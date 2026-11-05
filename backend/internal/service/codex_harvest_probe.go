@@ -17,7 +17,6 @@ import (
 )
 
 type codexHarvestProbeResult struct {
-	ProxyURL      string
 	ProbeVerified bool
 	EdgeIP        string
 	Transport     string
@@ -80,22 +79,15 @@ func bindCodexHarvestEgress(ticket *openAICodexTicket, attempt codexHarvestAttem
 	if ticket == nil {
 		return
 	}
-	// Bind the exit used by this attempt. The setting may change while the
-	// upstream request is in flight.
-	if strings.TrimSpace(attempt.proxy) == OpenAIWarpProxyURL() {
-		ticket.HarvestProxyURL = OpenAIWarpProxyURL()
-		ticket.HarvestNodeID = ""
-		ticket.HarvestNodeName = ""
-		ticket.HarvestNodeProvider = ""
-	} else {
-		ticket.HarvestProxyURL = strings.TrimSpace(attempt.proxy)
-		if attempt.node.Provider == "managed" {
-			ticket.HarvestProxyURL = mihomo.Endpoint
-		}
-		ticket.HarvestNodeID = strings.TrimSpace(attempt.node.ID)
-		ticket.HarvestNodeName = strings.TrimSpace(attempt.node.Name)
-		ticket.HarvestNodeProvider = strings.TrimSpace(attempt.node.Provider)
+	ticket.HarvestProxyURL = strings.TrimSpace(attempt.proxy)
+	if attempt.node.Provider == "managed" {
+		// Lane listeners are temporary leases; a stored ticket must reacquire
+		// its node through the manager before reusing the exit.
+		ticket.HarvestProxyURL = mihomo.Endpoint
 	}
+	ticket.HarvestNodeID = strings.TrimSpace(attempt.node.ID)
+	ticket.HarvestNodeName = strings.TrimSpace(attempt.node.Name)
+	ticket.HarvestNodeProvider = strings.TrimSpace(attempt.node.Provider)
 	ticket.HarvestSessionID = strings.TrimSpace(session)
 }
 
@@ -107,11 +99,6 @@ func (s *OpenAIGatewayService) harvestAttemptSession(account *Account, model str
 }
 
 func (s *OpenAIGatewayService) executeCodexHarvestProbe(ctx context.Context, account *Account, token, model, proxy string, timeout time.Duration, reserve func() bool, sessionID string) (result codexHarvestProbeResult) {
-	warpEnabled := OpenAIWarpEnabled()
-	if warpEnabled {
-		proxy = OpenAIWarpProxyURL()
-	}
-	ctx = WithOpenAIWarpPolicy(ctx, warpEnabled)
 	release, err := mihomo.Lease(ctx, proxy)
 	if err != nil {
 		return codexHarvestProbeResult{Err: err, Kind: "network_error"}
@@ -123,7 +110,6 @@ func (s *OpenAIGatewayService) executeCodexHarvestProbe(ctx context.Context, acc
 		sessionID = uuid.NewString()
 	}
 	result = s.requestCodexHarvestProbe(attempt, account, token, model, proxy, reserve, sessionID)
-	result.ProxyURL = proxy
 	result.Shape, result.Kind = classifyCodexHarvestProbe(ctx, account, s.openAICodexTicketConfig(), result)
 	if openAICodexTicketTargetLength(account, s.openAICodexTicketConfig()) == 780 && result.Kind == "success" && !result.ProbeVerified {
 		result.Kind = "probe_inconclusive"

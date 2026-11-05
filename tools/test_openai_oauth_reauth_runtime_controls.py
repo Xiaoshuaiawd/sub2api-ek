@@ -35,15 +35,6 @@ class RuntimeControlsTest(unittest.TestCase):
         with patch.object(api, '_post', return_value={'worker_concurrency': None}):
             self.assertEqual(api.runtime_concurrency(), 2)
 
-    def test_runtime_heartbeat_reports_isolation_without_blocking_settings(self):
-        api = worker.WorkerAPI(self.config())
-        for flag, expected in [('true', True), ('false', False), ('', False)]:
-            with self.subTest(flag=flag), patch.dict('os.environ', {'OPENAI_WARP_WORKER_NETWORK_ISOLATED': flag}), \
-                 patch.object(api, '_post', return_value={'worker_concurrency': None}) as post:
-                self.assertEqual(api.runtime_concurrency(), 2)
-                self.assertIs(post.call_args.args[1]['warp_network_isolated'], expected)
-                self.assertEqual(post.call_args.args[1]['worker_id'], 'probe')
-
     def test_retiring_worker_finishes_claim_and_never_claims_again(self):
         stop = threading.Event()
         def finish_current(*_):

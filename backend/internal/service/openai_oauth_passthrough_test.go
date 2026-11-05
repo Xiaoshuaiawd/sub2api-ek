@@ -1930,7 +1930,7 @@ func TestOpenAIGatewayService_OpenAIPassthrough_CompactNetworkErrorsTriggerFailo
 		{
 			name:           "request_error",
 			err:            errors.New("stream disconnected before completion"),
-			expectFailover: false,
+			expectFailover: true,
 		},
 		{
 			name: "read_error",
@@ -1976,10 +1976,6 @@ func TestOpenAIGatewayService_OpenAIPassthrough_CompactNetworkErrorsTriggerFailo
 				require.ErrorAs(t, err, &failoverErr)
 				require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 				require.False(t, c.Writer.Written(), "compact 网络错误应交给外层 failover，而不是直接写回客户端")
-			} else if tt.name == "request_error" {
-				require.False(t, errors.As(err, &failoverErr))
-				require.True(t, c.Writer.Written())
-				require.Equal(t, http.StatusBadGateway, rec.Code)
 			} else {
 				require.False(t, errors.As(err, &failoverErr))
 				require.ErrorIs(t, err, io.ErrUnexpectedEOF)

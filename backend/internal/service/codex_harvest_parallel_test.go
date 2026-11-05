@@ -108,10 +108,7 @@ func TestParallelHarvestBudgetAndFailedPersistence(t *testing.T) {
 			if kind == "hit" {
 				require.Equal(t, 1, last.TicketsStored)
 				ticket := svc.lookupOpenAICodexTicket(account, "gpt-6-astra")
-				require.Equal(t, OpenAIWarpProxyURL(), ticket.HarvestProxyURL)
-				require.Empty(t, ticket.HarvestNodeID)
-				require.Empty(t, ticket.HarvestNodeName)
-				require.Empty(t, ticket.HarvestNodeProvider)
+				require.Equal(t, "managed", ticket.HarvestNodeProvider)
 				require.NotEmpty(t, ticket.HarvestSessionID)
 			} else {
 				require.Zero(t, last.TicketsStored)

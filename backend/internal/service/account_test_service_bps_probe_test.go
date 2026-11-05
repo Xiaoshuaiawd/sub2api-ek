@@ -23,13 +23,11 @@ var bpsProbeTestNonce = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-
 type bpsProbeUpstream struct {
 	mode              string
 	bodies            [][]byte
-	proxies           []string
 	nonce             string
 	disableAfterFirst *Account
 }
 
-func (u *bpsProbeUpstream) Do(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
-	u.proxies = append(u.proxies, proxy)
+func (u *bpsProbeUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 	if req.URL.Host != "bps.openai.com" {
 		return nil, fmt.Errorf("probe used %s instead of BPS", req.URL.Host)
 	}
@@ -110,9 +108,6 @@ func TestExcelBPSToolProbeRoundtrip(t *testing.T) {
 	require.NoError(t, svc.testExcelBPSToolRoundtrip(c, excelAccount(), "gpt-6-astra"))
 	require.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
 	require.Len(t, upstream.bodies, 3)
-	for _, proxy := range upstream.proxies {
-		require.Equal(t, OpenAIWarpProxyURL(), proxy)
-	}
 	require.Contains(t, rec.Body.String(), `"type":"test_complete"`)
 	require.NotContains(t, rec.Body.String(), upstream.nonce)
 	require.Contains(t, string(upstream.bodies[1]), bpsAccountProbeTool)

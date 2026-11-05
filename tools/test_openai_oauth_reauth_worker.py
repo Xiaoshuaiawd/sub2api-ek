@@ -15,7 +15,6 @@ from tools.openai_oauth_reauth_worker import (
     ProtocolHTTPError,
     WorkerConfig,
     WorkerError,
-    allow_private_worker_http,
     _auth_session_flow,
     _checked_bootstrap_authorize,
     _email_submission_state,
@@ -50,9 +49,6 @@ class OTPHandler(BaseHTTPRequestHandler):
 
 
 class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
-    def setUp(self):
-        self.enterContext(patch.dict(os.environ, {"OPENAI_WARP_WORKER_NETWORK_ISOLATED": "true"}))
-
     def test_siwc_failures_use_fixed_stage_and_reason_without_external_output(self):
         cases = (
             ("[1/5] Password accepted TOTP 2FA challenge reached 2FA verification accepted SIWC_INTERACTION_REQUIRED", "mfa_accepted", "browser_interaction_required"),
@@ -93,7 +89,7 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
         ) as runner:
             with self.assertRaises(WorkerError) as failure:
                 process_password_claim(api, dict(task_id=7, account_id=42, login_email="demo@example.test",
-                                                password="synthetic-secret", oauth_profile="siwc", proxy_url="socks5h://warp:1080",
+                                                password="synthetic-secret", oauth_profile="siwc",
                                                 auth_url="https://auth.openai.com/api/accounts/authorize?state=synthetic"))
         self.assertIn("stage=mfa_accepted, reason=browser_interaction_required", str(failure.exception))
         self.assertIn("use browser authorization", str(failure.exception))
@@ -117,7 +113,7 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 config = WorkerConfig.from_env()
                 self.assertIsNone(config.protocol_root)
-                self.assertEqual(config.tosub2_root, Path(root).resolve())
+                self.assertEqual(config.tosub2_root, Path(root))
 
     def test_rejects_missing_login_runtimes(self):
         with patch.dict(os.environ, {"OPENAI_REAUTH_WORKER_TOKEN": "x" * 32}, clear=True):
@@ -137,7 +133,7 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
 
     def test_email_claim_without_protocol_has_explicit_failure(self):
         with self.assertRaisesRegex(WorkerError, "email OTP re-login requires"):
-            process_claim(SimpleNamespace(), None, {"credential_mode": "email_otp_url", "proxy_url": "socks5h://warp:1080"})
+            process_claim(SimpleNamespace(), None, {"credential_mode": "email_otp_url"})
 
     def test_check_does_not_load_email_protocol_or_claim_tasks(self):
         config = WorkerConfig("http://127.0.0.1:4040", "x" * 32, "check", None, Path("tosub2"))
@@ -166,7 +162,7 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
             with self.assertRaises(WorkerError) as raised:
                 process_password_claim(api, {
                     "task_id": 7, "account_id": 42, "login_email": "demo@example.com",
-                    "password": "synthetic-secret", "totp_secret": "synthetic-totp", "proxy_url": "socks5h://warp:1080",
+                    "password": "synthetic-secret", "totp_secret": "synthetic-totp",
                 })
         self.assertEqual(str(raised.exception), "password/TOTP protocol failed (exit 1)")
         self.assertNotIn("OPENAI_REAUTH_WORKER_TOKEN", runner.call_args.kwargs["env"])
@@ -259,7 +255,6 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
             callback = staticmethod(lambda _task_id, _callback: {"status": "succeeded"})
 
         claim = {
-            "proxy_url": "socks5h://warp:1080",
             "task_id": 7,
             "account_id": 42,
             "login_email": "mail@example.com",
@@ -419,7 +414,6 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
                 return {"status": "succeeded"}
 
         claim = {
-            "proxy_url": "socks5h://warp:1080",
             "task_id": 7,
             "account_id": 42,
             "login_email": "mail@example.com",
@@ -466,7 +460,6 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
             callback = staticmethod(lambda _task_id, _callback: {"status": "succeeded"})
 
         claim = {
-            "proxy_url": "socks5h://warp:1080",
             "task_id": 7,
             "account_id": 42,
             "login_email": "mail@example.com",
@@ -516,7 +509,6 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
             callback = staticmethod(lambda _task_id, _callback: {"status": "succeeded"})
 
         claim = {
-            "proxy_url": "socks5h://warp:1080",
             "task_id": 7,
             "account_id": 42,
             "login_email": "mail@example.com",
@@ -550,7 +542,6 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
                 self.assertNotEqual(Path(kwargs["cwd"]), root)
                 self.assertEqual(kwargs["env"]["CHATGPT_LOGIN_PASSWORD"], "password-secret")
                 self.assertEqual(kwargs["env"]["CHATGPT_TOTP_SECRET"], "totp-secret")
-                self.assertEqual(command[command.index("--proxy") + 1], "socks5h://warp:1080")
                 output_path = Path(command[command.index("--sub2api-out") + 1])
                 output_path.write_text(
                     json.dumps(
@@ -572,7 +563,6 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
 
             claim = {
-            "proxy_url": "socks5h://warp:1080",
                 "task_id": 8,
                 "account_id": 43,
                 "credential_mode": "password_totp",
@@ -639,13 +629,6 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(previous)
-
-    def test_private_app_http_requires_isolated_worker(self):
-        with patch.dict(os.environ, {"OPENAI_REAUTH_ALLOW_PRIVATE_HTTP": "true", "OPENAI_WARP_WORKER_NETWORK_ISOLATED": "true"}):
-            self.assertTrue(allow_private_worker_http("sub2api"))
-            self.assertFalse(allow_private_worker_http("other-service"))
-        with patch.dict(os.environ, {"OPENAI_REAUTH_ALLOW_PRIVATE_HTTP": "true", "OPENAI_WARP_WORKER_NETWORK_ISOLATED": "false"}):
-            self.assertFalse(allow_private_worker_http("sub2api"))
 
     def test_rejects_private_https_and_non_loopback_http_mailboxes(self):
         with patch.dict(os.environ, {"OPENAI_REAUTH_TRUSTED_OTP_HOSTS": ""}):

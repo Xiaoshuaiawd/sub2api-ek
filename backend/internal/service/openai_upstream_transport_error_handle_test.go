@@ -104,8 +104,9 @@ func TestHandleOpenAIUpstreamTransportError_PersistentEvictsAndFailsOver(t *test
 	events, ok := rawEvents.([]*OpsUpstreamErrorEvent)
 	require.True(t, ok)
 	require.Len(t, events, 1)
-	require.Nil(t, events[0].ProxyID)
-	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
+	require.NotNil(t, events[0].ProxyID)
+	require.Equal(t, proxyID, *events[0].ProxyID)
+	require.Equal(t, "wldsg82-ipv6-10060", events[0].ProxyName)
 }
 
 // A transient blip should fail over but must NOT evict the account.
@@ -198,7 +199,7 @@ func TestHandleOpenAIUpstreamTransportError_DeadlineExceeded_StillFailsOver(t *t
 	require.True(t, errors.As(err, &fo), "context.DeadlineExceeded must still return *UpstreamFailoverError")
 }
 
-func TestForwardAsRawChatCompletions_WarpTransportErrorFailsClosed(t *testing.T) {
+func TestForwardAsRawChatCompletions_TransportErrorFailsOver(t *testing.T) {
 	repo := &openaiTransportAccountRepoStub{}
 	upstream := &failingOpenAIHTTPUpstream{
 		err: errors.New(`Post "https://opencode.ai/zen/v1/chat/completions": EOF`),
@@ -235,20 +236,21 @@ func TestForwardAsRawChatCompletions_WarpTransportErrorFailsClosed(t *testing.T)
 	_, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
 
 	require.Equal(t, 1, upstream.calls)
-	require.Equal(t, OpenAIWarpProxyURL(), upstream.proxyURL)
+	require.Equal(t, proxy.URL(), upstream.proxyURL)
 	var fo *UpstreamFailoverError
-	require.False(t, errors.As(err, &fo), "shared WARP failure must not trigger account failover")
-	require.Error(t, err)
-	require.Empty(t, repo.tempUnschedCalls)
-	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.True(t, errors.As(err, &fo), "transport error must trigger account failover")
+	require.Equal(t, http.StatusBadGateway, fo.StatusCode)
+	require.Empty(t, repo.tempUnschedCalls, "plain EOF is transient: fail over but do not evict")
+	require.Equal(t, 0, rec.Body.Len(), "service must not write a hard 502 before handler can fail over")
 
 	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
 	events, ok := rawEvents.([]*OpsUpstreamErrorEvent)
 	require.True(t, ok)
 	require.Len(t, events, 1)
-	require.Nil(t, events[0].ProxyID)
-	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
+	require.NotNil(t, events[0].ProxyID)
+	require.Equal(t, proxyID, *events[0].ProxyID)
+	require.Equal(t, proxy.Name, events[0].ProxyName)
 }
 
 func TestForwardAsRawChatCompletions_RecordsProxyPerAccountAttempt(t *testing.T) {
@@ -273,21 +275,23 @@ func TestForwardAsRawChatCompletions_RecordsProxyPerAccountAttempt(t *testing.T)
 
 	for _, account := range accounts {
 		_, err := svc.forwardAsRawChatCompletions(context.Background(), c, account, body, "")
-		require.Error(t, err)
 		var failoverErr *UpstreamFailoverError
-		require.False(t, errors.As(err, &failoverErr))
+		require.ErrorAs(t, err, &failoverErr)
 	}
 
-	require.Equal(t, []string{OpenAIWarpProxyURL(), OpenAIWarpProxyURL(), OpenAIWarpProxyURL()}, upstream.proxyURLs)
+	require.Equal(t, []string{proxyA.URL(), proxyB.URL(), ""}, upstream.proxyURLs)
 	rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
 	events, ok := rawEvents.([]*OpsUpstreamErrorEvent)
 	require.True(t, ok)
 	require.Len(t, events, 3)
-	for _, event := range events {
-		require.Nil(t, event.ProxyID)
-		require.Equal(t, opsProxyNameUnknown, event.ProxyName)
+	for i, proxy := range []*Proxy{proxyA, proxyB} {
+		require.NotNil(t, events[i].ProxyID)
+		require.Equal(t, proxy.ID, *events[i].ProxyID)
+		require.Equal(t, proxy.Name, events[i].ProxyName)
 	}
+	require.Nil(t, events[2].ProxyID)
+	require.Equal(t, opsProxyNameDirect, events[2].ProxyName)
 }
 
 func TestHandleOpenAIUpstreamTransportError_RecordsOllamaActivityOnly(t *testing.T) {
@@ -353,19 +357,4 @@ func TestHandleOpenAIAccountUpstreamError_RecordsOllamaActivityOnly(t *testing.T
 	require.True(t, ok, "Ollama Cloud non-2xx must schedule last_used activity")
 	_, ok = deferred.lastUsedUpdates.Load(int64(505))
 	require.False(t, ok, "non-Ollama non-2xx must not schedule Ollama activity")
-}
-
-func TestOpenAIWarpTransportFailureDoesNotDisableAccountOrFailOver(t *testing.T) {
-	repo := &openaiTransportAccountRepoStub{}
-	svc := &OpenAIGatewayService{accountRepo: repo}
-	account := &Account{ID: 9101, Name: "warp-account", Platform: PlatformOpenAI}
-	c, rec := newOpenAITransportErrTestContext()
-	cause := &runtimeProxyEgressError{error: errors.New("proxy refused"), target: runtimeProxyEgress{url: OpenAIWarpProxyURL(), proxyID: -1, proxyName: "warp"}}
-	err := svc.handleOpenAIUpstreamTransportError(context.Background(), c, account, cause, false)
-	var failover *UpstreamFailoverError
-	require.False(t, errors.As(err, &failover))
-	require.ErrorIs(t, err, cause)
-	require.Empty(t, repo.tempUnschedCalls)
-	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
-	require.Equal(t, http.StatusBadGateway, rec.Code)
 }

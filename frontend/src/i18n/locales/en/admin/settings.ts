@@ -635,13 +635,6 @@ export default {
         saveFailed: 'Failed to save OpenCode Go usage refresh settings'
       },
       gatewayForwarding: {
-        openAIWarp: 'Use WARP for OpenAI accounts',
-        openAIWarpHint: 'When enabled, this service routes OpenAI account traffic through WARP and fails if it is unavailable. Disable to restore the account proxy or direct route. Configure any separately deployed relogin service independently.',
-        openAIWarpConnected: 'Node connected',
-        openAIWarpUnavailable: 'Node unavailable',
-        openAIWarpChecking: 'Checking node…',
-        openAIWarpIP: 'Exit IP: {ip}',
-        openAIWarpRefresh: 'Refresh node status',
         title: 'Request Forwarding',
         description: 'Control how requests are forwarded to upstream OAuth accounts',
         grokDefaultTextModel: 'Default Grok text model',

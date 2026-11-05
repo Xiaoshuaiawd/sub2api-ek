@@ -250,10 +250,6 @@ func prismBrowserForwardError(status int, body []byte) error {
 }
 
 func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.Context, account *Account, body []byte, started time.Time) (*OpenAIForwardResult, error) {
-	return s.forwardPrismBrowserWithCaller(ctx, c, account, body, started, s.callPrismBrowserForCaller)
-}
-
-func (s *OpenAIGatewayService) forwardPrismBrowserWithCaller(ctx context.Context, c *gin.Context, account *Account, body []byte, started time.Time, call func(context.Context, *Account, []byte, string, string) ([]byte, http.Header, int, error)) (*OpenAIForwardResult, error) {
 	MarkPrismBrowserAttempt(c, account.ID)
 	// This path buffers and writes a complete JSON or SSE response, including
 	// errors. The handler must never append another response.failed envelope.
@@ -305,7 +301,7 @@ func (s *OpenAIGatewayService) forwardPrismBrowserWithCaller(ctx context.Context
 		return nil, err
 	}
 	SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
-	responseBody, upstreamHeaders, status, err := call(ctx, account, body, sessionID, prismBrowserCallerID(c, account.ID))
+	responseBody, upstreamHeaders, status, err := s.callPrismBrowserForCaller(ctx, account, body, sessionID, prismBrowserCallerID(c, account.ID))
 	if mode := controlledMode(ctx); mode != nil {
 		mode.httpStatus.Store(int32(status))
 	}
@@ -373,13 +369,6 @@ func (s *OpenAIGatewayService) callPrismBrowserWithSession(ctx context.Context, 
 }
 
 func (s *OpenAIGatewayService) callPrismBrowserForCaller(ctx context.Context, account *Account, body []byte, sessionID, callerID string) ([]byte, http.Header, int, error) {
-	if OpenAIWarpEnabled() && account != nil && account.Platform == PlatformOpenAI {
-		return nil, nil, 0, errors.New("Prism browser transport cannot guarantee WARP-only egress")
-	}
-	return s.callPrismBrowserAdapter(ctx, account, body, sessionID, callerID)
-}
-
-func (s *OpenAIGatewayService) callPrismBrowserAdapter(ctx context.Context, account *Account, body []byte, sessionID, callerID string) ([]byte, http.Header, int, error) {
 	runtime := PrismBrowserRuntime{}
 	if s.settingService != nil {
 		runtime = s.settingService.GetPrismBrowserRuntime(ctx)
