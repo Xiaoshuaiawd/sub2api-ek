@@ -1333,7 +1333,9 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
     if engine != "local_worker":
         raise WorkerError("unsupported password re-login engine")
     codex_pool_url = os.getenv("OPENAI_REAUTH_CODEX_POOL_URL", "").strip()
-    if oauth_profile == "codex" and codex_pool_url:
+    # The shared relogin service has a single process-wide proxy. Keep claims
+    # with an account-selected exit on the local protocol path that honors it.
+    if oauth_profile == "codex" and codex_pool_url and not str(claim.get("proxy_url") or "").strip():
         process_codex_pool_claim(api, claim, codex_pool_url)
         return
     task_id = int(claim.get("task_id") or 0)

@@ -148,6 +148,26 @@ func TestForwardAsRawChatCompletions_FirstWordDeadlineIgnoresRoleOnlyChunk(t *te
 	require.NotContains(t, rec.Body.String(), `"role":"assistant"`)
 }
 
+func TestForwardAsRawChatCompletions_FirstWordPreambleIsBounded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	metadata := "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}],\"padding\":\"" + strings.Repeat("x", 900) + "\"}\n\n"
+	stream := strings.Repeat(metadata, 9500) + "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n"
+	cfg := rawChatCompletionsTestConfig()
+	cfg.Gateway.OpenAIFirstWordProtectionEnabled = true
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(stream)),
+	}}}
+	result, err := svc.forwardAsRawChatCompletions(context.Background(), c, rawChatCompletionsTestAccount(), body, "")
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Empty(t, rec.Body.String(), "metadata must stay private before a semantic response")
+}
+
 func TestForwardAsRawChatCompletions_FirstWordDisarmsDeadlineAfterContent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)

@@ -103,7 +103,6 @@ func TestFirstWordProtectionResponseHeaderWaitReturns504(t *testing.T) {
 		svc := &OpenAIGatewayService{
 			cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAIFirstWordProtectionEnabled: true, MaxLineSize: defaultMaxLineSize}},
 			httpUpstream: upstream,
-			accountRepo:  &bridgeTransportAccountRepo{},
 		}
 		body := []byte(`{"model":"gpt-5.5","stream":true,"input":"hello"}`)
 		rec := httptest.NewRecorder()

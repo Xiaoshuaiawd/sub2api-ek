@@ -348,6 +348,8 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	semanticOutputSeen := false
 	holdMetadata := account.Platform == PlatformOpenAI && s.firstWordProtectionEnabled()
 	pendingLines := make([]string, 0, 8)
+	var pendingBytes int64
+	pendingOverflow := false
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var terminal openAIRawStreamTerminalState
 	var regionalUsagePayload []byte
@@ -359,10 +361,18 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 
 	writeLine := func(line string) {
-		if clientDisconnected {
+		if clientDisconnected || pendingOverflow {
 			return
 		}
 		if !clientOutputStarted && ((holdMetadata && !semanticOutputSeen) || !refusalDetector.ShouldReleaseClientOutput()) {
+			if holdMetadata && !semanticOutputSeen {
+				incoming := int64(len(line) + 1)
+				if incoming > openAIFirstOutputStageMaxBytes-pendingBytes {
+					pendingOverflow = true
+					return
+				}
+				pendingBytes += incoming
+			}
 			pendingLines = append(pendingLines, line)
 			return
 		}
@@ -432,6 +442,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		} else {
 			writeLine(line)
 		}
+		if pendingOverflow {
+			break
+		}
 		if line == "" {
 			if !clientDisconnected && clientOutputStarted {
 				c.Writer.Flush()
@@ -463,6 +476,11 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 
 	scanErr := scanner.Err()
+	if pendingOverflow {
+		err := newOpenAIRawStreamTruncatedFailoverError(c, account, requestID, errOpenAIFirstOutputStageLimit)
+		err.NextAccountAction = NextAccountStop
+		return nil, err
+	}
 	if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
 		return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
 	}
