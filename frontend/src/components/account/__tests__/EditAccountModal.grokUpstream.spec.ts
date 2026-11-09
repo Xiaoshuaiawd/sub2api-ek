@@ -635,7 +635,7 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     expect(wrapper.text()).toContain('apikey-model')
     expect(getByIdMock).toHaveBeenCalledWith(apiKey.id)
 
-    const baseUrl = wrapper.get('input[placeholder="https://api.x.ai/v1"]')
+    const baseUrl = wrapper.get('[data-testid="edit-base-url"]')
     await baseUrl.setValue('https://draft-api.example.com')
     expect(wrapper.text()).toContain('admin.accounts.grokModelDiagnostics.savedConfigHint')
     expect((baseUrl.element as HTMLInputElement).value).toBe('https://draft-api.example.com')
@@ -1124,7 +1124,7 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     updateAccountMock.mockResolvedValue(account)
     const wrapper = mountLiveSelectorModal(account)
     await flushPromises()
-    const baseUrl = wrapper.get('input[placeholder="https://api.x.ai/v1"]')
+    const baseUrl = wrapper.get('[data-testid="edit-base-url"]')
     await baseUrl.setValue('https://draft-api.example.com')
     await wrapper.get('[data-testid="grok-diagnostics-sync"]').trigger('click')
     await flushPromises()

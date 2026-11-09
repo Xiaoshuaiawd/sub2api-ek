@@ -272,6 +272,12 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 			}
 			credsStatus["official_chat_base_url"] = a.IsOfficialCNChatBaseURL()
 		}
+		if a.Platform == service.PlatformGemini {
+			if credsStatus == nil {
+				credsStatus = make(map[string]bool, 1)
+			}
+			credsStatus["gemini_third_party_base_url"] = a.IsGeminiThirdPartyAPIKey()
+		}
 	}
 	extra := redactAccountManagedExtra(a.Extra)
 	var ollamaCloudUsage *service.OllamaCloudUsageState

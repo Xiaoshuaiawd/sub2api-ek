@@ -26,6 +26,7 @@ vi.mock('@/api/subscriptions', () => ({
     ]),
   },
 }))
+vi.mock('@/api/groups', () => ({ default: { getAvailable: vi.fn().mockResolvedValue([]) } }))
 
 describe('subscription renewal navigation', () => {
   beforeEach(() => {

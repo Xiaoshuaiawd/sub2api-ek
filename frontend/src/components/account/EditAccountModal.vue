@@ -619,7 +619,7 @@
 
         <!-- Gemini 显式缓存上游开关：仅自定义地址的 Gemini API Key 账号 -->
         <div
-          v-if="account.platform === 'gemini' && !isOfficialGeminiBaseUrl(editBaseUrl)"
+          v-if="isGeminiCustomUpstream"
           class="border-t border-gray-200 pt-4 dark:border-dark-600"
           data-testid="explicit-cache-upstream-section"
         >
@@ -4023,6 +4023,15 @@ interface TempUnschedRuleForm {
 // State
 const submitting = ref(false)
 const editBaseUrl = ref('')
+const isGeminiCustomUpstream = computed(() => {
+  if (props.account?.platform !== 'gemini' || props.account.type !== 'apikey') return false
+  const replacement = editBaseUrl.value.trim()
+  if (replacement) return !isOfficialGeminiBaseUrl(replacement)
+  const saved = props.account.credentials_status?.gemini_third_party_base_url
+  if (typeof saved === 'boolean') return saved
+  const legacy = (props.account.credentials as Record<string, unknown> | undefined)?.base_url
+  return !isOfficialGeminiBaseUrl(typeof legacy === 'string' ? legacy : '')
+})
 const editApiKey = ref('')
 const prismBrowserEnabled = ref(false)
 const prismSupportedModels = ['gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-luna']
@@ -6299,7 +6308,7 @@ const handleSubmit = async () => {
 
       applyExplicitCacheUpstreamCredentials(
         newCredentials,
-        props.account.platform === 'gemini' && !isOfficialGeminiBaseUrl(editBaseUrl.value) && explicitCacheUpstreamEnabled.value,
+        isGeminiCustomUpstream.value && explicitCacheUpstreamEnabled.value,
         explicitCacheUpstreamMaxTTL.value
       )
 

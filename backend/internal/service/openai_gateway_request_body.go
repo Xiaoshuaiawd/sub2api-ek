@@ -127,6 +127,10 @@ func stripOpenAIResponsesOutputTokenLimitsForAccount(account *Account, body []by
 	if account == nil || !account.IsOpenAI() {
 		return body, nil
 	}
+	// Ollama Cloud applies its own output cap and needs the bounded value sent upstream.
+	if isOllamaCloudBaseURL(ollamaCloudResponsesUpstreamBaseURL(account)) {
+		return body, nil
+	}
 	for _, field := range []string{"max_output_tokens", "max_tokens"} {
 		if !gjson.GetBytes(body, field).Exists() {
 			continue

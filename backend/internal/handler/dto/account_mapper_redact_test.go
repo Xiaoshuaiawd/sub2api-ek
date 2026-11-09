@@ -81,6 +81,22 @@ func TestAccountFromServiceShallow_RedactsAPIKeyBaseURLs(t *testing.T) {
 	require.NotContains(t, string(raw), "messages-relay.example")
 }
 
+func TestAccountFromServiceShallow_GeminiCustomBaseURLFlagWithoutURL(t *testing.T) {
+	for _, tc := range []struct {
+		baseURL string
+		want    bool
+	}{
+		{"https://upstream.example.com", true},
+		{"https://generativelanguage.googleapis.com", false},
+	} {
+		account := &service.Account{Platform: service.PlatformGemini, Type: service.AccountTypeAPIKey,
+			Credentials: map[string]any{"api_key": "fixture-secret", "base_url": tc.baseURL}}
+		view := AccountFromServiceShallow(account)
+		require.Equal(t, tc.want, view.CredentialsStatus["gemini_third_party_base_url"])
+		require.NotContains(t, view.Credentials, "base_url")
+	}
+}
+
 func TestAccountFromServiceShallow_KeepsOfficialEndpointEligibilityWithoutURL(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -261,9 +261,11 @@ func (s *OpenAIGatewayService) forward(ctx context.Context, c *gin.Context, acco
 	if legacyIngressChanged {
 		body = legacyIngressBody
 	}
-	body, err = stripOpenAIResponsesOutputTokenLimitsForAccount(account, body)
-	if err != nil {
-		return nil, err
+	if regionalMeterAttemptFrom(ctx) == nil {
+		body, err = stripOpenAIResponsesOutputTokenLimitsForAccount(account, body)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// 在分流到 passthrough / Codex transform / 原生 ChatCompletions 之前统一修正
 	// 显式为 null 的工具 Schema type，否则 upstream 的 400 会被归一成可重试的 502，
@@ -818,7 +820,9 @@ func (s *OpenAIGatewayService) forward(ctx context.Context, c *gin.Context, acco
 		if maxOutputTokens.Exists() {
 			switch account.Platform {
 			case PlatformOpenAI:
-				markPatchDelete("max_output_tokens")
+				if regionalMeterAttemptFrom(ctx) == nil && !isOllamaCloudBaseURL(ollamaCloudResponsesUpstreamBaseURL(account)) {
+					markPatchDelete("max_output_tokens")
+				}
 			case PlatformDeepseek:
 				// Preserve Responses-native output limits unless the selected upstream
 				// explicitly rejects the field in the bounded HTTP retry loop below.
@@ -949,12 +953,14 @@ func (s *OpenAIGatewayService) forward(ctx context.Context, c *gin.Context, acco
 			requestView = newOpenAIRequestView(body)
 		}
 	}
-	if strippedBody, stripErr := stripOpenAIResponsesOutputTokenLimitsForAccount(account, body); stripErr != nil {
-		return nil, stripErr
-	} else if !bytes.Equal(strippedBody, body) {
-		body = strippedBody
-		requestView = newOpenAIRequestView(body)
-		reqBody = nil
+	if regionalMeterAttemptFrom(ctx) == nil {
+		if strippedBody, stripErr := stripOpenAIResponsesOutputTokenLimitsForAccount(account, body); stripErr != nil {
+			return nil, stripErr
+		} else if !bytes.Equal(strippedBody, body) {
+			body = strippedBody
+			requestView = newOpenAIRequestView(body)
+			reqBody = nil
+		}
 	}
 	// Run after orphan-output filtering and all request-map rebuilds so a
 	// compaction trigger cannot remain ahead of surviving history items.
