@@ -39,8 +39,7 @@ func (h *AccountHandler) ActivateInventoryAccount(ctx context.Context, entry ser
 	if err != nil {
 		return 0, false, "import_failed", err
 	}
-	updateExisting := false
-	req := defaultAddAccountImportRequest(string(credentialJSON), entry.Email, entry.Email, &updateExisting)
+	req := inventoryAddAccountImportRequest(string(credentialJSON), entry.Email)
 	entries, err := parseCodexSessionImportEntries(req)
 	if err != nil || len(entries) != 1 {
 		return 0, false, "import_failed", errors.New("inventory credential is invalid")
@@ -76,4 +75,13 @@ func (h *AccountHandler) ActivateInventoryAccount(ctx context.Context, entry ser
 		return item.AccountID, false, "", nil
 	}
 	return 0, false, "import_failed", errors.New("inventory import did not create an account")
+}
+
+func inventoryAddAccountImportRequest(content, email string) CodexSessionImportRequest {
+	updateExisting := false
+	req := defaultAddAccountImportRequest(content, email, email, &updateExisting)
+	req.Extra["openai_oauth_responses_websockets_v2_mode"] = service.OpenAIWSIngressModeOff
+	req.Extra["openai_oauth_responses_websockets_v2_enabled"] = false
+	req.Extra["openai_oauth_ws_sse_acceleration"] = false
+	return req
 }
