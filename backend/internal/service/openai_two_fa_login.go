@@ -21,7 +21,7 @@ type OpenAITwoFALoginJob struct {
 	// ErrorCode 是脱敏后的失败原因短码（如 account_deactivated），供前端展示准确报错。
 	ErrorCode string `json:"error_code,omitempty"`
 	// AccountID 指向失败后登记到账号列表的错误态账号（0 表示未登记）。
-	AccountID int64          `json:"account_id,omitempty"`
+	AccountID int64 `json:"account_id,omitempty"`
 	cancel    context.CancelFunc
 	expiry    *time.Timer
 }
@@ -345,6 +345,13 @@ func (s *AccountTokenGuardService) recordFailedTwoFALoginAccount(ctx context.Con
 		if err := s.accounts.SetError(ctx, account.ID, message); err != nil {
 			slog.Warn("account_token_guard_two_fa_login_mark_error_failed", "account_id", account.ID, "reason", code, "error", err)
 			return 0
+		}
+		if updater, ok := s.accounts.(interface {
+			UpdateExtra(context.Context, int64, map[string]any) error
+		}); ok {
+			if err := updater.UpdateExtra(ctx, account.ID, map[string]any{"login_error_code": code}); err != nil {
+				slog.Warn("account_token_guard_two_fa_login_mark_reason_failed", "account_id", account.ID, "reason", code, "error", err)
+			}
 		}
 		_ = s.accounts.SetSchedulable(ctx, account.ID, false)
 		return account.ID

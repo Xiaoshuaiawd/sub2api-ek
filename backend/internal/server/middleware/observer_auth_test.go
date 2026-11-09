@@ -66,6 +66,8 @@ func TestObserverRoutesDenyNewAndGlobalEndpoints(t *testing.T) {
 		"POST /api/v1/admin/accounts/future-global-feature", "PUT /api/v1/admin/groups/:id",
 		"POST /api/v1/admin/proxies", "GET /api/v1/admin/proxies/data", "GET /api/v1/admin/request-captures",
 		"POST /api/v1/admin/system/update", "POST /api/v1/admin/system/restart",
+		"GET /api/v1/admin/accounts/inventory", "GET /api/v1/admin/accounts/inventory/status",
+		"POST /api/v1/admin/accounts/inventory/import", "PUT /api/v1/admin/accounts/inventory/config",
 	} {
 		method, path := route[:4], route[5:]
 		if route[:3] == "GET" || route[:3] == "PUT" {

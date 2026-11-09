@@ -56,6 +56,9 @@ func (h *AccountHandler) ActivateInventoryAccount(ctx context.Context, entry ser
 		if item.Action != "created" && item.Action != "skipped" {
 			continue
 		}
+		if item.Action == "skipped" {
+			return item.AccountID, true, "", nil
+		}
 		_, err := h.inventoryTokenGuardV2.SaveAccount(ctx, item.AccountID, service.AccountTokenGuardV2AccountInput{
 			LoginEmail: entry.Email, CredentialMode: service.OpenAIOAuthReauthModePasswordTOTP,
 			ProxySource: service.OpenAIOAuthReauthProxySourceAccount,
@@ -70,7 +73,7 @@ func (h *AccountHandler) ActivateInventoryAccount(ctx context.Context, entry ser
 			}
 			return 0, false, "credential_save_failed", err
 		}
-		return item.AccountID, item.Action == "skipped", "", nil
+		return item.AccountID, false, "", nil
 	}
 	return 0, false, "import_failed", errors.New("inventory import did not create an account")
 }

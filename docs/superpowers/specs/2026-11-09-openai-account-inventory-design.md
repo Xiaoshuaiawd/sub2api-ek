@@ -12,11 +12,11 @@ The target defaults to zero, so importing stock does not start logins. Saving a 
 
 ## Storage and security
 
-Inventory has a unique normalized email, encrypted password and MFA secret, state, attempt count, linked account ID, lease, and safe error code. Use the existing persistent credential encryption key. Refuse imports until encryption is configured. Accept one `email----password----MFA` line per account, validate all lines before any insert, reject duplicates within the file, and skip emails already in inventory. Never return passwords, MFA values, ciphertext, or raw upstream errors from the API or logs.
+Inventory has a unique normalized email, encrypted password and MFA secret, state, attempt count, linked account ID, lease, and safe error code. Use the existing persistent credential encryption key. Refuse imports until encryption is configured. Accept one `email----password----MFA` line per account and validate all lines before any insert. Reject duplicates within the file. Reimporting a failed email replaces its encrypted credentials and queues a new attempt; active, pending, and duplicate rows are preserved. Never return passwords, MFA values, ciphertext, or raw upstream errors from the API or logs.
 
 ## Activation
 
-Use the existing OpenAI 2FA login worker, Codex session import normalization and deduplication, and encrypted credential guard configuration. A successful login and account import must be linked to the stock row before its reservation closes. Resume stale leases after a crash. Confirmed bans mark the stock row retired, soft-delete its linked account, and cause a replacement claim in a later cycle.
+Use the existing OpenAI 2FA login worker, Codex session import normalization and deduplication, and encrypted credential guard configuration. An inventory login matching an existing identity must not edit that account's credential guard settings. A successful new account import is linked to the stock row before its reservation closes. Pending admission testing reserves a slot until the account passes or becomes isolated. Resume stale leases after a crash. A duplicate stock row returns to pending if its linked account is later deleted. Confirmed bans require current matching evidence; they retire the stock row, soft-delete its linked account, and cause a replacement claim in a later cycle.
 
 ## Administrator interface
 

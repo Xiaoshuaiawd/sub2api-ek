@@ -22,15 +22,16 @@ type AccountInventoryClaim struct {
 }
 
 type AccountInventoryStatus struct {
-	TargetCount int  `json:"target_count"`
-	Enabled     bool `json:"enabled"`
-	Available   int  `json:"available"`
-	Pending     int  `json:"pending"`
-	Activating  int  `json:"activating"`
-	Active      int  `json:"active"`
-	Failed      int  `json:"failed"`
-	Retired     int  `json:"retired"`
-	Duplicate   int  `json:"duplicate"`
+	TargetCount      int  `json:"target_count"`
+	Enabled          bool `json:"enabled"`
+	Available        int  `json:"available"`
+	AdmissionPending int  `json:"admission_pending"`
+	Pending          int  `json:"pending"`
+	Activating       int  `json:"activating"`
+	Active           int  `json:"active"`
+	Failed           int  `json:"failed"`
+	Retired          int  `json:"retired"`
+	Duplicate        int  `json:"duplicate"`
 }
 
 type AccountInventoryRow struct {
@@ -217,6 +218,7 @@ func (s *AccountInventoryService) RunOnce(ctx context.Context) error {
 	if err != nil || !keyStatus.Configured {
 		return errors.New("inventory credential encryption is unavailable")
 	}
+	failedBanUpdates := 0
 	if s.deleter != nil {
 		ids, listErr := s.repo.ConfirmedBannedAccountIDs(ctx)
 		if listErr != nil {
@@ -224,10 +226,11 @@ func (s *AccountInventoryService) RunOnce(ctx context.Context) error {
 		}
 		for _, id := range ids {
 			if err := s.deleter.DeleteAccount(ctx, id); err != nil {
-				return err
+				failedBanUpdates++
+				continue
 			}
 			if err := s.repo.RetireAccount(ctx, id); err != nil {
-				return err
+				failedBanUpdates++
 			}
 		}
 	}
@@ -244,6 +247,9 @@ func (s *AccountInventoryService) RunOnce(ctx context.Context) error {
 		}(claim)
 	}
 	wg.Wait()
+	if failedBanUpdates > 0 {
+		return fmt.Errorf("%d confirmed banned accounts could not be fully retired", failedBanUpdates)
+	}
 	return ctx.Err()
 }
 
@@ -256,12 +262,12 @@ func (s *AccountInventoryService) activate(ctx context.Context, claim AccountInv
 	}
 	password, err := s.encryptor.Decrypt(claim.PasswordCiphertext)
 	if err != nil {
-		s.finishClaim(ctx, claim.ID, 0, "failed", "decryption_failed")
+		s.finishClaim(ctx, claim.ID, 0, "pending", "decryption_failed")
 		return
 	}
 	mfa, err := s.encryptor.Decrypt(claim.MFACiphertext)
 	if err != nil {
-		s.finishClaim(ctx, claim.ID, 0, "failed", "decryption_failed")
+		s.finishClaim(ctx, claim.ID, 0, "pending", "decryption_failed")
 		return
 	}
 	accountID, duplicate, code, err := s.activator.ActivateInventoryAccount(ctx, AccountTokenGuardReloginAccount{Email: claim.Email, Password: password, MFASecret: mfa}, canImport)

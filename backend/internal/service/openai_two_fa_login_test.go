@@ -90,6 +90,39 @@ func TestTwoFALoginForOperationsDoesNotSaveLegacyCredentials(t *testing.T) {
 	require.NotContains(t, string(raw), entry.MFASecret)
 }
 
+type existingTwoFALoginAccountRepo struct {
+	AccountRepository
+	account *Account
+	code    string
+}
+
+func (r *existingTwoFALoginAccountRepo) ListAllWithFilters(context.Context, string, string, string, string, int64, string) ([]Account, error) {
+	return []Account{*r.account}, nil
+}
+func (r *existingTwoFALoginAccountRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
+	r.code, _ = updates["login_error_code"].(string)
+	return nil
+}
+func (r *existingTwoFALoginAccountRepo) SetError(_ context.Context, _ int64, message string) error {
+	r.account.Status = StatusError
+	r.account.ErrorMessage = message
+	return nil
+}
+func (r *existingTwoFALoginAccountRepo) SetSchedulable(_ context.Context, _ int64, schedulable bool) error {
+	r.account.Schedulable = schedulable
+	return nil
+}
+
+func TestExistingTwoFALoginBanRecordsSafeCodeForInventoryCleanup(t *testing.T) {
+	repo := &existingTwoFALoginAccountRepo{account: &Account{ID: 11, Name: "user@example.com", Status: StatusActive, Schedulable: true}}
+	svc := &AccountTokenGuardService{accounts: repo}
+	id := svc.recordFailedTwoFALoginAccount(context.Background(), AccountTokenGuardReloginAccount{Email: "user@example.com"}, "account_deactivated")
+	require.Equal(t, int64(11), id)
+	require.Equal(t, "account_deactivated", repo.code)
+	require.Equal(t, "封号", repo.account.ErrorMessage)
+	require.False(t, repo.account.Schedulable)
+}
+
 func TestTwoFALoginInitialLoginWithoutExistingAccount(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

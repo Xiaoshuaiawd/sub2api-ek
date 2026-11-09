@@ -120,6 +120,7 @@ let configLoaded = false
 const configDirty = ref(false)
 const cards = computed(() => [
   { key: 'available', value: status.value?.available ?? '—' },
+  { key: 'admissionPending', value: status.value?.admission_pending ?? '—' },
   { key: 'target', value: status.value?.target_count ?? '—' },
   { key: 'pending', value: status.value?.pending ?? '—' },
   { key: 'activating', value: status.value?.activating ?? '—' },

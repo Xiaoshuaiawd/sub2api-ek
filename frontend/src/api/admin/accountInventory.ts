@@ -4,6 +4,7 @@ export interface AccountInventoryStatus {
   target_count: number
   enabled: boolean
   available: number
+  admission_pending: number
   pending: number
   activating: number
   active: number

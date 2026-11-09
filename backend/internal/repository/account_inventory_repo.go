@@ -25,6 +25,10 @@ const inventoryRecoverableAccountWhere = inventoryOAuthAccountWhere + ` AND stat
    WHERE guard.account_id=accounts.id AND guard.enabled=TRUE AND guard.auto_relogin_enabled=TRUE AND guard.auto_relogin_exhausted=FALSE
  )`
 
+const inventoryPendingAdmissionWhere = inventoryOAuthAccountWhere + ` AND status='active' AND schedulable=FALSE
+ AND extra->'openai_two_fa_admission'->>'phase'='pending'
+ AND EXISTS (SELECT 1 FROM openai_account_inventory inventory WHERE inventory.account_id=accounts.id AND inventory.state='active')`
+
 type accountInventoryRepository struct{ db *sql.DB }
 
 func NewAccountInventoryRepository(db *sql.DB) service.AccountInventoryRepository {
@@ -51,7 +55,11 @@ func (r *accountInventoryRepository) Import(ctx context.Context, entries []servi
 			fmt.Fprintf(&query, "($%d,$%d,$%d)", base+1, base+2, base+3)
 			args = append(args, entries[i].Email, entries[i].PasswordCiphertext, entries[i].MFACiphertext)
 		}
-		query.WriteString(` ON CONFLICT (email) DO NOTHING`)
+		query.WriteString(` ON CONFLICT (email) DO UPDATE SET
+ password_ciphertext=EXCLUDED.password_ciphertext, mfa_ciphertext=EXCLUDED.mfa_ciphertext,
+ state='pending', account_id=NULL, lease_until=NULL, next_attempt_at=NOW(),
+ attempts=0, error_code='', updated_at=NOW()
+ WHERE openai_account_inventory.state='failed'`)
 		result, execErr := tx.ExecContext(ctx, query.String(), args...)
 		if execErr != nil {
 			return 0, execErr
@@ -72,6 +80,7 @@ func (r *accountInventoryRepository) Status(ctx context.Context) (service.Accoun
 	var result service.AccountInventoryStatus
 	err := r.db.QueryRowContext(ctx, `SELECT config.target_count, config.enabled,
  (SELECT COUNT(*) FROM accounts WHERE `+inventoryUsableAccountWhere+`),
+	 (SELECT COUNT(*) FROM accounts WHERE `+inventoryPendingAdmissionWhere+`),
  (SELECT COUNT(*) FROM openai_account_inventory WHERE state='pending'),
  (SELECT COUNT(*) FROM openai_account_inventory WHERE state='activating'),
  (SELECT COUNT(*) FROM openai_account_inventory WHERE state='active'),
@@ -79,7 +88,7 @@ func (r *accountInventoryRepository) Status(ctx context.Context) (service.Accoun
  (SELECT COUNT(*) FROM openai_account_inventory WHERE state='retired'),
  (SELECT COUNT(*) FROM openai_account_inventory WHERE state='duplicate')
  FROM openai_account_inventory_config config WHERE singleton=TRUE`).Scan(
-		&result.TargetCount, &result.Enabled, &result.Available, &result.Pending,
+		&result.TargetCount, &result.Enabled, &result.Available, &result.AdmissionPending, &result.Pending,
 		&result.Activating, &result.Active, &result.Failed, &result.Retired, &result.Duplicate)
 	return result, err
 }
@@ -144,8 +153,13 @@ func (r *accountInventoryRepository) Claim(ctx context.Context, limit int) ([]se
  (account_id IS NULL OR EXISTS (SELECT 1 FROM accounts account WHERE account.id=inventory.account_id AND account.deleted_at IS NOT NULL))`); err != nil {
 		return nil, err
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE openai_account_inventory inventory SET state='pending', account_id=NULL,
+ error_code='', next_attempt_at=NOW(), updated_at=NOW() WHERE state='duplicate' AND
+ (account_id IS NULL OR EXISTS (SELECT 1 FROM accounts account WHERE account.id=inventory.account_id AND account.deleted_at IS NOT NULL))`); err != nil {
+		return nil, err
+	}
 	var occupied, inFlight int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE (`+inventoryUsableAccountWhere+`) OR (`+inventoryRecoverableAccountWhere+`)`).Scan(&occupied); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE (`+inventoryUsableAccountWhere+`) OR (`+inventoryRecoverableAccountWhere+`) OR (`+inventoryPendingAdmissionWhere+`)`).Scan(&occupied); err != nil {
 		return nil, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM openai_account_inventory WHERE state='activating' AND lease_until >= NOW()`).Scan(&inFlight); err != nil {
@@ -186,7 +200,7 @@ func (r *accountInventoryRepository) Claim(ctx context.Context, limit int) ([]se
 func (r *accountInventoryRepository) CanActivate(ctx context.Context, claimID int64) (bool, error) {
 	var allowed bool
 	err := r.db.QueryRowContext(ctx, `SELECT config.enabled AND config.target_count > (
-	 SELECT COUNT(*) FROM accounts WHERE (`+inventoryUsableAccountWhere+`) OR (`+inventoryRecoverableAccountWhere+`))
+	 SELECT COUNT(*) FROM accounts WHERE (`+inventoryUsableAccountWhere+`) OR (`+inventoryRecoverableAccountWhere+`) OR (`+inventoryPendingAdmissionWhere+`))
 	 + (SELECT COUNT(*) FROM openai_account_inventory WHERE state='activating' AND lease_until >= NOW() AND id < $1)
 	 FROM openai_account_inventory_config config WHERE singleton=TRUE`, claimID).Scan(&allowed)
 	return allowed, err
@@ -208,9 +222,17 @@ func (r *accountInventoryRepository) ConfirmedBannedAccountIDs(ctx context.Conte
 	 WHERE account.platform='openai' AND account.type='oauth' AND account.parent_account_id IS NULL AND account.deleted_at IS NULL AND account.status='error'
  AND LOWER(COALESCE(account.credentials->>'auth_mode','')) NOT IN ('personalaccesstoken','personal_access_token','agentidentity')
  AND LOWER(COALESCE(account.credentials->>'openai_auth_mode','')) NOT IN ('personalaccesstoken','personal_access_token')
- AND ((account.extra->>'login_error_code') IN ('account_deactivated','account_deleted','account_retired','dead_account','account_not_found')
- OR (SELECT task.error_message FROM openai_oauth_reauth_tasks task WHERE task.account_id=account.id ORDER BY task.id DESC LIMIT 1)
-    IN ('account_deactivated','account_deleted','account_retired','dead_account','account_not_found'))
+ AND ((account.extra->>'login_error_code', account.error_message) IN (
+   ('account_deactivated','封号'),
+   ('account_deleted','封号（账号已删除）'),
+   ('account_retired','封号（账号已删除或停用）'),
+   ('dead_account','死号（邮箱失效，收不到验证码且无密码）'),
+   ('account_not_found','无此账号（被引导注册，需先注册 OpenAI 账号）'))
+ OR EXISTS (SELECT 1 FROM openai_oauth_reauth_tasks task
+    WHERE task.account_id=account.id
+      AND task.id=(SELECT MAX(latest.id) FROM openai_oauth_reauth_tasks latest WHERE latest.account_id=account.id)
+      AND task.status='failed' AND task.finished_at IS NOT NULL AND task.finished_at >= account.updated_at
+      AND task.error_message IN ('account_deactivated','account_deleted','account_retired','dead_account','account_not_found')))
  ORDER BY account.id LIMIT 100`)
 	if err != nil {
 		return nil, err
