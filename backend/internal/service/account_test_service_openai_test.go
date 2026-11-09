@@ -562,6 +562,14 @@ func TestAccountTestService_OpenAI401SetsPermanentErrorOnly(t *testing.T) {
 	require.Nil(t, account.RateLimitResetAt)
 }
 
+func TestOpenAIAccountTest401ErrorOnlyNormalizesStructuredAuth(t *testing.T) {
+	privileged := openAIAccountTest401Error([]byte(`{"error":{"code":"token_revoked","message":"private"}}`))
+	require.Equal(t, "Unauthorized (401): account authentication failed", privileged)
+	unrelated := openAIAccountTest401Error([]byte(`{"error":{"code":"provider_unauthorized","message":"token_revoked"}}`))
+	require.Contains(t, unrelated, "Authentication failed (401):")
+	require.NotContains(t, unrelated, "Unauthorized (401): account authentication failed")
+}
+
 func TestAccountTestService_OpenAIAPIKeyResponsesUsesCodexProbeHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()

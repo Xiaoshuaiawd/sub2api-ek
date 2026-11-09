@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -87,6 +88,33 @@ func (r *accountTokenGuardV2Repository) ReconcileReloginBudget(ctx context.Conte
 // Accounting and automatic insertion share row locks. A concurrently finishing
 // worker is either counted here, or remains active and prevents another task.
 func (r *accountTokenGuardV2Repository) CreateAutomaticRelogin(ctx context.Context, id int64, hash, owner string, rules service.AccountTokenGuardV2Rules, now time.Time) (*service.OpenAIOAuthReauthTaskRecord, error) {
+	return r.createAutomaticRelogin(ctx, id, hash, owner, rules, now, "")
+}
+
+// CreateRecorded401Relogin holds the account row until the task is inserted,
+// so a concurrent ClearError cannot make a stale 401 observation queue a new
+// login after the account has recovered.
+func (r *accountTokenGuardV2Repository) CreateRecorded401Relogin(ctx context.Context, id int64, hash, owner string, rules service.AccountTokenGuardV2Rules, now time.Time, expectedError string) (*service.OpenAIOAuthReauthTaskRecord, error) {
+	if strings.TrimSpace(expectedError) == "" {
+		return nil, infraerrors.Conflict("RECORDED_401_CHANGED", "Recorded 401 error has changed")
+	}
+	return r.createAutomaticRelogin(ctx, id, hash, owner, rules, now, expectedError)
+}
+
+func recorded401FailureStillCurrent(ctx context.Context, tx *sql.Tx, id int64, expectedError string) (bool, error) {
+	var accountID int64
+	err := tx.QueryRowContext(ctx, `SELECT account.id FROM accounts account
+ WHERE account.id=$1 AND account.platform='openai' AND account.type='oauth'
+   AND account.parent_account_id IS NULL AND account.deleted_at IS NULL
+   AND account.status='error' AND account.error_message=$2
+ FOR SHARE`, id, expectedError).Scan(&accountID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (r *accountTokenGuardV2Repository) createAutomaticRelogin(ctx context.Context, id int64, hash, owner string, rules service.AccountTokenGuardV2Rules, now time.Time, expectedError string) (*service.OpenAIOAuthReauthTaskRecord, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -95,6 +123,15 @@ func (r *accountTokenGuardV2Repository) CreateAutomaticRelogin(ctx context.Conte
 	record, err := lockReloginBudget(ctx, tx, id, owner)
 	if err != nil {
 		return nil, err
+	}
+	if expectedError != "" {
+		stillFailed, err := recorded401FailureStillCurrent(ctx, tx, id, expectedError)
+		if err != nil {
+			return nil, err
+		}
+		if !stillFailed {
+			return nil, infraerrors.Conflict("RECORDED_401_CHANGED", "Recorded 401 error has changed")
+		}
 	}
 	record, pending, err := reconcileReloginBudgetTx(ctx, tx, record, rules, now, service.AccountTokenGuardV2ProbePending)
 	if err != nil {
