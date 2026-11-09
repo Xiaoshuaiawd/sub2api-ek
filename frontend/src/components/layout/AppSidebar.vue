@@ -299,6 +299,7 @@ const OpsMonitoringIcon = { render: () => h(Icon, { name: 'monitorPulse' }) }
 const SmartOpsIcon = { render: () => h(Icon, { name: 'cpu' }) }
 const QualityOpsIcon = { render: () => h(Icon, { name: 'badge', size: 'sm' }) }
 const AccountOpsIcon = { render: () => h(Icon, { name: 'userCog', size: 'sm' }) }
+const AccountInventoryIcon = { render: () => h(Icon, { name: 'database', size: 'sm' }) }
 const TokenGuardIcon = { render: () => h(Icon, { name: 'shieldKey', size: 'sm' }) }
 const CredentialOpsIcon = { render: () => h(Icon, { name: 'credentialOps', size: 'sm' }) }
 const PelicanTestsIcon = { render: () => h(Icon, { name: 'beaker', size: 'sm' }) }
@@ -859,6 +860,7 @@ const adminNavItems = computed((): NavItem[] => {
     // 「仅充值」站点连管理端的「订阅管理」入口也一并收起（路由本身不拦截）。
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true, featureFlag: flagSubscription },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
+    { path: '/admin/account-inventory', label: t('accountInventory.title'), icon: AccountInventoryIcon },
     { path: '/admin/smart-ops', label: t('accountOps.smartTitle'), icon: SmartOpsIcon, expandOnly: true, children: [
       { path: '/admin/auto-config', label: t('autoConfig.title'), icon: AccountOpsIcon },
       { path: '/admin/priority-scheduling', label: t('priorityScheduling.title'), icon: AccountOpsIcon },
