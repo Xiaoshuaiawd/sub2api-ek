@@ -352,6 +352,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	accountTokenGuardV2Repository := repository.NewAccountTokenGuardV2Repository(db)
 	accountTokenGuardV2Service := service.ProvideAccountTokenGuardV2Service(accountTokenGuardV2Repository, settingRepository, adminService, openAIGatewayService, openAIOAuthReauthService, configConfig)
 	accountTokenGuardV2Handler := admin.NewAccountTokenGuardV2Handler(accountTokenGuardV2Service)
+	accountHandler.SetInventoryTokenGuardV2(accountTokenGuardV2Service)
+	accountInventoryRepository := repository.NewAccountInventoryRepository(db)
+	accountInventoryService := service.NewAccountInventoryService(accountInventoryRepository, openAICredentialEncryptor, accountHandler)
+	accountInventoryService.SetDeleter(adminService)
+	accountHandler.SetInventoryService(accountInventoryService)
 	channelHandler := admin.NewChannelHandler(channelService, billingService, pricingService)
 	channelMonitorHandler := admin.NewChannelMonitorHandler(channelMonitorService)
 	channelMonitorRequestTemplateRepository := repository.NewChannelMonitorRequestTemplateRepository(client, db)
@@ -456,7 +461,13 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		PromptAudit:   promptService,
 		PluginManager: pluginManager,
 		Lifecycle:     lifecycle,
-		Cleanup:       v,
+		Cleanup: func() {
+			accountInventoryService.Stop()
+			v()
+		},
+	}
+	if configConfig.RunsBackgroundJobs() {
+		accountInventoryService.Start()
 	}
 	return application, nil
 }

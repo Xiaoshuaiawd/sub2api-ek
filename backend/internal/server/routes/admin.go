@@ -410,6 +410,10 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 	accounts := admin.Group("/accounts")
 	{
 		accounts.GET("/openai-request-timezones", h.Admin.Account.GetOpenAIRequestTimezones)
+		accounts.GET("/inventory/status", h.Admin.Account.InventoryStatus)
+		accounts.PUT("/inventory/config", h.Admin.Account.InventorySaveConfig)
+		accounts.POST("/inventory/import", h.Admin.Account.InventoryImport)
+		accounts.GET("/inventory", h.Admin.Account.InventoryList)
 		accounts.GET("", h.Admin.Account.List)
 		accounts.GET("/management-capabilities", h.Admin.Setting.GetAccountManagementCapabilities)
 		accounts.GET("/upstream-billing-rates", h.Admin.Account.GetUpstreamBillingRates)

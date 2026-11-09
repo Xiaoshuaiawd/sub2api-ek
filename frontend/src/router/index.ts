@@ -586,6 +586,12 @@ const routes: RouteRecordRaw[] = [
       descriptionKey: 'admin.accounts.description'
     }
   },
+  {
+    path: '/admin/account-inventory',
+    name: 'AdminAccountInventory',
+    component: () => import('@/views/admin/AccountInventoryView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'OpenAI Account Inventory', titleKey: 'accountInventory.title', descriptionKey: 'accountInventory.description' }
+  },
   { path: '/admin/astra-gateway', redirect: '/admin/harvest-flow' },
   {
     path: '/admin/harvest-flow',

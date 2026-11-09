@@ -52,6 +52,8 @@ type AccountHandler struct {
 	adminService service.AdminService
 	// tokenGuard 供「一键 2FA 导入」在服务端完成首次登录；由装配层注入。
 	tokenGuard              *service.AccountTokenGuardService
+	inventoryTokenGuardV2   *service.AccountTokenGuardV2Service
+	inventory               *service.AccountInventoryService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
 	openaiOAuthReauth       *service.OpenAIOAuthReauthService
@@ -140,6 +142,14 @@ func NewAccountHandler(
 // SetTokenGuardService 注入凭证守护服务，用于服务端「一键 2FA 登录并导入」。
 func (h *AccountHandler) SetTokenGuardService(svc *service.AccountTokenGuardService) {
 	h.tokenGuard = svc
+}
+
+func (h *AccountHandler) SetInventoryTokenGuardV2(svc *service.AccountTokenGuardV2Service) {
+	h.inventoryTokenGuardV2 = svc
+}
+
+func (h *AccountHandler) SetInventoryService(svc *service.AccountInventoryService) {
+	h.inventory = svc
 }
 
 // CreateAccountRequest represents create account request

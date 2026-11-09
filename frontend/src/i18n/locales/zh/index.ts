@@ -10,6 +10,7 @@ import priorityScheduling from './priorityScheduling'
 import qualityOps from './qualityOps'
 import controlledExperiments from './controlledExperiments'
 import accountOps from './accountOps'
+import accountInventory from './accountInventory'
 import tokenGuard from './tokenGuard'
 import pelicanTests from './pelicanTests'
 import modelTrace from './modelTrace'
@@ -43,6 +44,7 @@ export default {
   profitOps,
   controlledExperiments,
   accountOps,
+  accountInventory,
   tokenGuard,
   pelicanTests,
   modelTrace,

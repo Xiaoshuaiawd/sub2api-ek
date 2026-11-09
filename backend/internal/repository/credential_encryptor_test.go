@@ -168,7 +168,7 @@ func TestCredentialEncryptionProviderChecksExistingDatabaseSecrets(t *testing.T)
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 			defer func() { _ = db.Close() }()
-			mock.ExpectQuery("SELECT EXISTS ").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(exists))
+			mock.ExpectQuery("(?s)SELECT EXISTS .*openai_account_inventory").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(exists))
 			e := NewOpenAICredentialEncryptor(&config.Config{}, aesEncryptor(t), db)
 			status, err := e.InitializeEncryption()
 			if exists {

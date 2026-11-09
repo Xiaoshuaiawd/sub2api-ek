@@ -101,6 +101,12 @@
                         </span>
                         <span class="flex-1 text-left">{{ t('admin.accounts.dataImport') }}</span>
                       </button>
+                      <router-link v-if="authStore.isAdmin" to="/admin/account-inventory" class="account-tools-menu-item" @click="showAccountToolsDropdown = false">
+                        <span class="account-tools-menu-icon bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                          <Icon name="upload" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('accountInventory.title') }}</span>
+                      </router-link>
                       <button class="account-tools-menu-item" @click="openExportDataDialogFromMenu">
                         <span class="account-tools-menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
                           <Icon name="download" size="sm" />
