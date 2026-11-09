@@ -43,17 +43,23 @@ func ValidateOpenAITwoFALogin(entry AccountTokenGuardReloginAccount) error {
 }
 
 func (s *AccountTokenGuardService) StartTwoFALogin(ctx context.Context, entry AccountTokenGuardReloginAccount) (*OpenAITwoFALoginJob, error) {
-	return s.startTwoFALogin(ctx, entry, true)
+	return s.startTwoFALogin(ctx, entry, true, true)
 }
 
 // Operations imports save their login method through the encrypted per-account
 // API after identity deduplication returns the account ID. Do not also enroll
 // them in the legacy guard's plaintext settings.
 func (s *AccountTokenGuardService) StartTwoFALoginForOperations(ctx context.Context, entry AccountTokenGuardReloginAccount) (*OpenAITwoFALoginJob, error) {
-	return s.startTwoFALogin(ctx, entry, false)
+	return s.startTwoFALogin(ctx, entry, false, true)
 }
 
-func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry AccountTokenGuardReloginAccount, saveToLegacyGuard bool) (*OpenAITwoFALoginJob, error) {
+// Inventory probes must not put an existing healthy account into error state
+// merely because one stock password for the same email was wrong.
+func (s *AccountTokenGuardService) StartTwoFALoginForInventory(ctx context.Context, entry AccountTokenGuardReloginAccount) (*OpenAITwoFALoginJob, error) {
+	return s.startTwoFALogin(ctx, entry, false, false)
+}
+
+func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry AccountTokenGuardReloginAccount, saveToLegacyGuard, recordFailedAccount bool) (*OpenAITwoFALoginJob, error) {
 	if err := ValidateOpenAITwoFALogin(entry); err != nil {
 		return nil, err
 	}
@@ -118,7 +124,9 @@ func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry Ac
 			job.ErrorCode = twoFALoginPublicErrorCode(reason)
 			// 账号层面的失败（封号 / 密码错误 / 需要验证）同步登记到账号列表的错误态，
 			// 便于管理员直接看到哪些号已经不可用。
-			job.AccountID = s.recordFailedTwoFALoginAccount(context.Background(), entry, job.ErrorCode)
+			if recordFailedAccount {
+				job.AccountID = s.recordFailedTwoFALoginAccount(context.Background(), entry, job.ErrorCode)
+			}
 			return
 		}
 		// Persist verified login credentials before the client imports tokens and

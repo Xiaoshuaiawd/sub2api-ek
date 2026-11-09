@@ -17,7 +17,8 @@ type AccountInventoryEncryptedEntry struct {
 }
 
 type AccountInventoryClaim struct {
-	ID int64
+	ID         int64
+	ForceLogin bool
 	AccountInventoryEncryptedEntry
 }
 
@@ -270,7 +271,7 @@ func (s *AccountInventoryService) activate(ctx context.Context, claim AccountInv
 		s.finishClaim(ctx, claim.ID, 0, "pending", "decryption_failed")
 		return
 	}
-	accountID, duplicate, code, err := s.activator.ActivateInventoryAccount(ctx, AccountTokenGuardReloginAccount{Email: claim.Email, Password: password, MFASecret: mfa}, canImport)
+	accountID, duplicate, code, err := s.activator.ActivateInventoryAccount(ctx, AccountTokenGuardReloginAccount{Email: claim.Email, Password: password, MFASecret: mfa, Force: claim.ForceLogin}, canImport)
 	if err == nil {
 		if duplicate {
 			s.finishClaim(ctx, claim.ID, accountID, "duplicate", "")

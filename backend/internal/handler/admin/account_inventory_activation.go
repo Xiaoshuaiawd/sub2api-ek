@@ -15,7 +15,7 @@ func (h *AccountHandler) ActivateInventoryAccount(ctx context.Context, entry ser
 	if h == nil || h.tokenGuard == nil || h.inventoryTokenGuardV2 == nil {
 		return 0, false, "service_unavailable", errors.New("inventory activation unavailable")
 	}
-	job, err := h.tokenGuard.StartTwoFALoginForOperations(ctx, entry)
+	job, err := h.tokenGuard.StartTwoFALoginForInventory(ctx, entry)
 	if err != nil {
 		var skipped *service.TwoFALoginSkippedError
 		if errors.As(err, &skipped) {

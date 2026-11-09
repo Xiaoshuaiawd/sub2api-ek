@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS openai_account_inventory (
     lease_until TIMESTAMPTZ,
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    force_login BOOLEAN NOT NULL DEFAULT FALSE,
     error_code TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

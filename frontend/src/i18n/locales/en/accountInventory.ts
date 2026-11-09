@@ -14,7 +14,7 @@ export default {
   duplicate: 'Already exists',
   targetLabel: 'Target usable accounts',
   enabled: 'Enable automatic replenishment',
-  targetHint: 'Counts active, schedulable OpenAI OAuth parent accounts, including existing accounts; new accounts awaiting admission reserve a slot. Short rate limits do not trigger replenishment. A 401 is retried through re-login first; confirmed bans are deleted and replaced. Lowering the target does not delete healthy accounts.',
+  targetHint: 'Counts active, schedulable OpenAI OAuth parent accounts, including existing accounts; new accounts awaiting admission reserve a slot. Short rate limits do not trigger replenishment. Accounts configured in credential operations re-login on a 401 first; confirmed bans are deleted and replaced. Lowering the target does not delete healthy accounts.',
   save: 'Save settings',
   saving: 'Saving…',
   saved: 'Inventory settings saved',

@@ -27,7 +27,7 @@
 
 ### Task 3: Administrator API and page
 
-- [ ] Add authenticated inventory status, import, target, list, and retry endpoints with sanitized responses.
+- [ ] Add authenticated inventory status, import, target, and list endpoints with sanitized responses. Failed rows accept corrected credentials through the import endpoint.
 - [ ] Add the inventory page to account management using established form, table, and loading patterns.
 - [ ] Test target save, 10,000-line file upload, masked rows, and error states.
 

@@ -16,7 +16,7 @@ func TestAccountInventoryImportReplacesOnlyFailedCredentials(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 	mock.ExpectBegin()
-	mock.ExpectExec("(?s)INSERT INTO openai_account_inventory.*ON CONFLICT.*DO UPDATE.*WHERE openai_account_inventory.state='failed'").
+	mock.ExpectExec("(?s)INSERT INTO openai_account_inventory.*ON CONFLICT.*DO UPDATE.*force_login=TRUE.*WHERE openai_account_inventory.state='failed'").
 		WithArgs("user@example.com", "encrypted-new-password", "encrypted-new-mfa").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -40,8 +40,8 @@ func TestAccountInventoryClaimReservesOnlyMissingSlots(t *testing.T) {
 	mock.ExpectExec("UPDATE openai_account_inventory inventory SET state='pending'").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("(?s)SELECT COUNT\\(\\*\\) FROM accounts.*openai_two_fa_admission").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(399))
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM openai_account_inventory WHERE state='activating'").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery("SELECT id, email, password_ciphertext, mfa_ciphertext").WithArgs(1).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "email", "password_ciphertext", "mfa_ciphertext"}).AddRow(7, "new@example.com", "encrypted-password", "encrypted-mfa"))
+	mock.ExpectQuery("SELECT id, email, password_ciphertext, mfa_ciphertext, force_login").WithArgs(1).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "email", "password_ciphertext", "mfa_ciphertext", "force_login"}).AddRow(7, "new@example.com", "encrypted-password", "encrypted-mfa", false))
 	mock.ExpectExec("UPDATE openai_account_inventory SET state='activating'").WithArgs(int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	repo := NewAccountInventoryRepository(db)
@@ -68,7 +68,7 @@ func TestAccountInventoryBanQueryRequiresCurrentFailedTask(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
-	mock.ExpectQuery("(?s)SELECT account.id.*task.status='failed'.*task.finished_at >= account.updated_at").WillReturnRows(
+	mock.ExpectQuery("(?s)SELECT account.id.*task.status='failed'.*task.finished_at >= account.updated_at.*local_protocol_failed.*session_studio_failed").WillReturnRows(
 		sqlmock.NewRows([]string{"id"}))
 	ids, err := NewAccountInventoryRepository(db).ConfirmedBannedAccountIDs(context.Background())
 	require.NoError(t, err)

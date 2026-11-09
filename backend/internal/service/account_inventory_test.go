@@ -183,3 +183,16 @@ func TestAccountInventoryExistingIdentityDoesNotConsumeNewSlot(t *testing.T) {
 	require.NoError(t, svc.RunOnce(context.Background()))
 	require.Equal(t, []string{"duplicate:"}, repo.completed)
 }
+
+func TestAccountInventoryCorrectedFailedRowCanBypassOldLoginSkip(t *testing.T) {
+	repo := &inventoryWorkerRepo{
+		status: AccountInventoryStatus{TargetCount: 1, Enabled: true}, canActivate: true,
+		claims: []AccountInventoryClaim{{ID: 7, ForceLogin: true, AccountInventoryEncryptedEntry: AccountInventoryEncryptedEntry{
+			Email: "user@example.com", PasswordCiphertext: "cipher:new-password", MFACiphertext: "cipher:new-mfa",
+		}}},
+	}
+	activator := &inventoryActivatorStub{}
+	svc := NewAccountInventoryService(repo, decryptingInventoryEncryptor{}, activator)
+	require.NoError(t, svc.RunOnce(context.Background()))
+	require.True(t, activator.entry.Force)
+}

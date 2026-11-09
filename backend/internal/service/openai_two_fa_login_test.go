@@ -123,6 +123,24 @@ func TestExistingTwoFALoginBanRecordsSafeCodeForInventoryCleanup(t *testing.T) {
 	require.False(t, repo.account.Schedulable)
 }
 
+func TestInventoryLoginFailureDoesNotDisableMatchingHealthyAccount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"code":"password_rejected"}}`)
+	}))
+	defer server.Close()
+	svc := newTwoFATestService(t, server)
+	repo := &existingTwoFALoginAccountRepo{account: &Account{ID: 11, Name: "user@example.com", Status: StatusActive, Schedulable: true}}
+	svc.accounts = repo
+	job, err := svc.StartTwoFALoginForInventory(context.Background(), AccountTokenGuardReloginAccount{Email: "user@example.com", Password: "wrong", MFASecret: "secret"})
+	require.NoError(t, err)
+	result := waitTwoFALogin(t, svc, job.ID)
+	require.Equal(t, "failed", result.Status)
+	require.Zero(t, result.AccountID)
+	require.Equal(t, StatusActive, repo.account.Status)
+	require.True(t, repo.account.Schedulable)
+}
+
 func TestTwoFALoginInitialLoginWithoutExistingAccount(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

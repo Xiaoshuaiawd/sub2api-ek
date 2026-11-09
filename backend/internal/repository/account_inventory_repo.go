@@ -58,7 +58,7 @@ func (r *accountInventoryRepository) Import(ctx context.Context, entries []servi
 		query.WriteString(` ON CONFLICT (email) DO UPDATE SET
  password_ciphertext=EXCLUDED.password_ciphertext, mfa_ciphertext=EXCLUDED.mfa_ciphertext,
  state='pending', account_id=NULL, lease_until=NULL, next_attempt_at=NOW(),
- attempts=0, error_code='', updated_at=NOW()
+ attempts=0, force_login=TRUE, error_code='', updated_at=NOW()
  WHERE openai_account_inventory.state='failed'`)
 		result, execErr := tx.ExecContext(ctx, query.String(), args...)
 		if execErr != nil {
@@ -169,7 +169,7 @@ func (r *accountInventoryRepository) Claim(ctx context.Context, limit int) ([]se
 	if missing <= 0 {
 		return nil, tx.Commit()
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, email, password_ciphertext, mfa_ciphertext FROM openai_account_inventory
+	rows, err := tx.QueryContext(ctx, `SELECT id, email, password_ciphertext, mfa_ciphertext, force_login FROM openai_account_inventory
  WHERE state='pending' AND next_attempt_at <= NOW() ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED`, missing)
 	if err != nil {
 		return nil, err
@@ -177,7 +177,7 @@ func (r *accountInventoryRepository) Claim(ctx context.Context, limit int) ([]se
 	claims := make([]service.AccountInventoryClaim, 0, missing)
 	for rows.Next() {
 		var claim service.AccountInventoryClaim
-		if err := rows.Scan(&claim.ID, &claim.Email, &claim.PasswordCiphertext, &claim.MFACiphertext); err != nil {
+		if err := rows.Scan(&claim.ID, &claim.Email, &claim.PasswordCiphertext, &claim.MFACiphertext, &claim.ForceLogin); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -212,6 +212,7 @@ func (r *accountInventoryRepository) Complete(ctx context.Context, id int64, sta
 		linked = accountID
 	}
 	_, err := r.db.ExecContext(ctx, `UPDATE openai_account_inventory SET state=$2, account_id=$3, error_code=$4,
+ force_login=CASE WHEN $2='pending' THEN force_login ELSE FALSE END,
  lease_until=NULL, next_attempt_at=CASE WHEN $2='pending' THEN NOW()+INTERVAL '5 minutes' ELSE NOW() END,
  updated_at=NOW() WHERE id=$1 AND state='activating'`, id, state, linked, errorCode)
 	return err
@@ -232,7 +233,9 @@ func (r *accountInventoryRepository) ConfirmedBannedAccountIDs(ctx context.Conte
     WHERE task.account_id=account.id
       AND task.id=(SELECT MAX(latest.id) FROM openai_oauth_reauth_tasks latest WHERE latest.account_id=account.id)
       AND task.status='failed' AND task.finished_at IS NOT NULL AND task.finished_at >= account.updated_at
-      AND task.error_message IN ('account_deactivated','account_deleted','account_retired','dead_account','account_not_found')))
+      AND (task.error_message IN ('account_deactivated','account_deleted','account_retired','dead_account','account_not_found')
+        OR task.error_message ~ '^local_protocol_failed stage=[a-z_]+ reason=(account_deactivated|account_deleted|account_retired|dead_account|account_not_found) elapsed_ms=[0-9]+ exit=-?[0-9]+$'
+        OR task.error_message ~ '^session_studio_failed stage=terminal_result reason=(account_deactivated|account_deleted|account_retired|dead_account|account_not_found) elapsed_ms=[0-9]+ http_status=0$')))
  ORDER BY account.id LIMIT 100`)
 	if err != nil {
 		return nil, err
