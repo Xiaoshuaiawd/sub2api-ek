@@ -435,7 +435,7 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	}
 	accountExtra = MergeOpenAICodexTicketExtra(accountExtra, nil)
 	delete(accountExtra, OAuthDegradationActionExtraKey)
-	if (input.Platform == PlatformTypeSafe || input.Platform == PlatformMistral) && input.Type != AccountTypeAPIKey {
+	if (input.Platform == PlatformTypeSafe || input.Platform == PlatformMistral || input.Platform == PlatformQwen) && input.Type != AccountTypeAPIKey {
 		return nil, fmt.Errorf("%s accounts only support apikey credentials", input.Platform)
 	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
@@ -643,6 +643,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// single/bulk switch APIs carry manual intent; an ordinary edit must neither
 	// overwrite a concurrently executed timer nor cancel plans via inherited intent.
 	ctx = accounttimer.WithPreservedSchedulable(accounttimer.WithoutManualIntent(ctx))
+	// An omitted status does not own authentication state. Explicit status edits
+	// override any inherited preservation marker just as scheduling intent does.
+	ctx = withAccountStatusPreservation(ctx, input.Status == "")
 	if err := ValidateAccountCostMultiplierExtra(input.Extra); err != nil {
 		return nil, err
 	}
@@ -653,7 +656,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
-	if (account.Platform == PlatformTypeSafe || account.Platform == PlatformMistral) && input.Type != "" && input.Type != AccountTypeAPIKey {
+	if (account.Platform == PlatformTypeSafe || account.Platform == PlatformMistral || account.Platform == PlatformQwen) && input.Type != "" && input.Type != AccountTypeAPIKey {
 		return nil, fmt.Errorf("%s accounts only support apikey credentials", account.Platform)
 	}
 	var normalizedExtra map[string]any
