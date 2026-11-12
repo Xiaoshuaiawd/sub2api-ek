@@ -16,6 +16,28 @@ func TestAPIKeyAuthSnapshotPreservesHybridSubscriptionRate(t *testing.T) {
 	}
 }
 
+func TestAPIKeyServiceRejectsV33SnapshotWithoutHybridRate(t *testing.T) {
+	groupID := int64(9)
+	svc := &APIKeyService{}
+	apiKey, ok, err := svc.applyAuthCacheEntry("k-legacy-hybrid-rate", &APIKeyAuthCacheEntry{
+		Snapshot: &APIKeyAuthSnapshot{
+			Version:  33,
+			APIKeyID: 1,
+			UserID:   2,
+			GroupID:  &groupID,
+			User:     APIKeyAuthUserSnapshot{ID: 2},
+			Group: &APIKeyAuthGroupSnapshot{
+				ID:               groupID,
+				SubscriptionType: SubscriptionTypeSubscriptionBalance,
+				RateMultiplier:   0.25,
+			},
+		},
+	})
+	if err != nil || ok || apiKey != nil {
+		t.Fatalf("v33 snapshot must reload hybrid rate from DB: key=%v ok=%v err=%v", apiKey, ok, err)
+	}
+}
+
 func TestAPIKeyService_RejectsV10AuthSnapshotWithoutModelAllowlist(t *testing.T) {
 	groupID := int64(9)
 	svc := &APIKeyService{}

@@ -15,7 +15,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 33 // v33: per-key long context permission
+const apiKeyAuthSnapshotVersion = 34 // v34: reload hybrid subscription rate omitted by the old auth query
 
 // Local-only generation wrapper. Old entries remain bounded by existing TTL
 // and capacity, but cannot authorize after a subscription recovery checkpoint.
