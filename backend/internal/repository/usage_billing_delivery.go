@@ -82,6 +82,31 @@ func validateUsageBillingEvent(e *service.UsageBillingEvent, key service.UsageBi
 	return nil
 }
 
+// settleHybridUsageLog applies the funding source selected by the DB transaction
+// to the usage row inserted in that same transaction. The staged snapshot may
+// still describe the subscription preflight when quota has since run out.
+func settleHybridUsageLog(usage *service.UsageLog, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) {
+	if usage == nil || cmd == nil || result == nil || cmd.HybridGroupID == 0 {
+		return
+	}
+	previousCost := usage.ActualCost
+	usage.BillingType = result.BillingType
+	usage.SubscriptionID = result.SubscriptionID
+	if !cmd.HybridSplitPricing {
+		return
+	}
+	settledCost := cmd.BalanceCost
+	if result.BillingType == service.BillingTypeSubscription {
+		settledCost = cmd.SubscriptionCost
+	}
+	usage.ActualCost = settledCost
+	if previousCost > 0 {
+		usage.RateMultiplier *= settledCost / previousCost
+	} else if usage.TotalCost > 0 {
+		usage.RateMultiplier = settledCost / usage.TotalCost
+	}
+}
+
 func (r *usageBillingRepository) ApplyStagedUsageBilling(ctx context.Context, key service.UsageBillingEventKey) (_ *service.UsageBillingRecovery, err error) {
 	defer func() {
 		if err == nil {
@@ -163,6 +188,7 @@ func (r *usageBillingRepository) ApplyStagedUsageBilling(ctx context.Context, ke
 	if err = r.applyUsageBillingEffects(ctx, tx, cmd, &recovered.Result); err != nil {
 		return nil, err
 	}
+	settleHybridUsageLog(&recovered.Event.Usage, cmd, &recovered.Result)
 	if err = insertUsageBillingQuote(ctx, tx, cmd); err != nil {
 		return nil, err
 	}
