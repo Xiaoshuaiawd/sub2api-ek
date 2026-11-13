@@ -3,12 +3,76 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
+
+type penaltyConfigReadSequence struct {
+	SettingRepository
+	values map[string]string
+	calls  int
+}
+
+func (r *penaltyConfigReadSequence) GetMultiple(context.Context, []string) (map[string]string, error) {
+	r.calls++
+	if r.calls > 1 {
+		return nil, errors.New("temporary settings read failure")
+	}
+	return r.values, nil
+}
+
+func TestSecurityPenaltyConfigUsesRecentlyLoadedInactiveConfigOnReadFailure(t *testing.T) {
+	repo := &penaltyConfigReadSequence{values: map[string]string{SettingKeyRiskControlEnabled: "false"}}
+	svc := NewSecurityPenaltyService(nil, repo, nil)
+	initial, err := svc.GetConfig(context.Background())
+	require.NoError(t, err)
+	require.False(t, initial.Applies(190))
+
+	svc.expires = time.Now().Add(-time.Second)
+	cfg, err := svc.GetConfig(context.Background())
+	require.NoError(t, err)
+	require.False(t, cfg.Applies(190))
+	require.Equal(t, 2, repo.calls)
+}
+
+func TestSecurityPenaltyConfigDoesNotReuseActiveConfigOnReadFailure(t *testing.T) {
+	active := penaltyTestConfig()
+	raw, err := json.Marshal(active)
+	require.NoError(t, err)
+	repo := &penaltyConfigReadSequence{values: map[string]string{
+		SettingKeySecurityPenalty:    string(raw),
+		SettingKeyRiskControlEnabled: "true",
+	}}
+	svc := NewSecurityPenaltyService(nil, repo, nil)
+	_, err = svc.GetConfig(context.Background())
+	require.NoError(t, err)
+	svc.expires = time.Now().Add(-time.Second)
+	_, err = svc.GetConfig(context.Background())
+	require.Error(t, err)
+}
+
+func TestSecurityPenaltyConfigDoesNotReuseStaleInactiveConfig(t *testing.T) {
+	repo := &penaltyConfigReadSequence{values: map[string]string{SettingKeyRiskControlEnabled: "false"}}
+	svc := NewSecurityPenaltyService(nil, repo, nil)
+	_, err := svc.GetConfig(context.Background())
+	require.NoError(t, err)
+	svc.lastLoadedAt = time.Now().Add(-time.Minute)
+	svc.expires = time.Now().Add(-time.Second)
+	_, err = svc.GetConfig(context.Background())
+	require.Error(t, err)
+}
+
+func TestSecurityPenaltyConfigDoesNotUseDefaultWithoutSuccessfulLoad(t *testing.T) {
+	repo := &penaltyConfigReadSequence{calls: 1}
+	svc := NewSecurityPenaltyService(nil, repo, nil)
+	_, err := svc.GetConfig(context.Background())
+	require.Error(t, err)
+}
 
 func penaltyTestService(t *testing.T, cfg SecurityPenaltyConfig) (*SecurityPenaltyService, sqlmock.Sqlmock) {
 	t.Helper()

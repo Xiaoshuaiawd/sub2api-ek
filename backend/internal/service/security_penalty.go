@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 )
 
 const SettingKeySecurityPenalty = "security_penalty_config"
+const inactiveSecurityPenaltyConfigGrace = 30 * time.Second
 
 // Penalties restrict gateway admission only. They never change users.status.
 type SecurityPenaltyConfig struct {
@@ -94,11 +96,12 @@ type SecurityPenaltyAdmission struct {
 }
 
 type SecurityPenaltyService struct {
-	db       *sql.DB
-	settings SettingRepository
-	mu       sync.Mutex
-	cached   SecurityPenaltyConfig
-	expires  time.Time
+	db           *sql.DB
+	settings     SettingRepository
+	mu           sync.Mutex
+	cached       SecurityPenaltyConfig
+	expires      time.Time
+	lastLoadedAt time.Time
 }
 
 func NewSecurityPenaltyService(db *sql.DB, settings SettingRepository, keys *APIKeyService) *SecurityPenaltyService {
@@ -115,11 +118,22 @@ func (s *SecurityPenaltyService) GetConfig(ctx context.Context) (SecurityPenalty
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if time.Now().Before(s.expires) {
+	now := time.Now()
+	if now.Before(s.expires) {
 		return s.cached, nil
 	}
 	values, err := s.settings.GetMultiple(ctx, []string{SettingKeySecurityPenalty, SettingKeyRiskControlEnabled, SettingKeyCyberPolicyUserAllowlist})
 	if err != nil {
+		inactive := !s.cached.Enabled || !s.cached.RiskControlEnabled || s.cached.ObserveOnly
+		if !s.lastLoadedAt.IsZero() && now.Sub(s.lastLoadedAt) <= inactiveSecurityPenaltyConfigGrace && inactive {
+			// A brief settings read failure must not block traffic when the last
+			// validated policy could not enforce a penalty. Active policies and
+			// cold starts still fail closed.
+			slog.WarnContext(ctx, "security_penalty.config_refresh_failed", "error", err, "using_cached_inactive", true)
+			s.expires = now.Add(time.Second)
+			return s.cached, nil
+		}
+		slog.WarnContext(ctx, "security_penalty.config_refresh_failed", "error", err, "using_cached_inactive", false)
 		return SecurityPenaltyConfig{}, err
 	}
 	cfg := DefaultSecurityPenaltyConfig()
@@ -141,7 +155,8 @@ func (s *SecurityPenaltyService) GetConfig(ctx context.Context) (SecurityPenalty
 		cfg.trustedUserIDs = append(cfg.trustedUserIDs, id)
 	}
 	s.cached = cfg
-	s.expires = time.Now().Add(time.Second)
+	s.lastLoadedAt = now
+	s.expires = now.Add(time.Second)
 	return cfg, nil
 }
 
