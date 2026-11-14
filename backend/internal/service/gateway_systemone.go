@@ -31,6 +31,10 @@ func (e *SystemOneUpstreamError) Error() string {
 }
 
 func (s *GatewayService) ForwardSystemOne(ctx context.Context, c *gin.Context, account *Account, body []byte) (*SystemOneForwardResult, error) {
+	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
+		return nil, err
+	}
+
 	started := time.Now()
 	if account == nil || !account.IsTypeSafe() || account.Type != AccountTypeAPIKey {
 		return nil, errors.New("invalid typesafe account")
@@ -51,6 +55,9 @@ func (s *GatewayService) ForwardSystemOne(ctx context.Context, c *gin.Context, a
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
+	}
+	if err := checkAPIKeyLongContextBeforeForward(ctx, c, s.billingService, body); err != nil {
+		return nil, err
 	}
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {

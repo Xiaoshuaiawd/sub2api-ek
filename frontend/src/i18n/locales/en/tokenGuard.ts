@@ -2,7 +2,7 @@ export default {
   "twoFA": {
   "title": "2FA login and import",
   "label": "Initial login with email, password and 2FA",
-  "hint": "One entry per line, two formats supported: email----GPT password----2FA, or email----mailbox password----client_id----refresh_token----GPT password----2FA (when pasting a full mailbox list, the last two fields are used as login password and 2FA). Up to 100 entries. Initial login uses the configured login service. Imported accounts join Credential Operations by default with encrypted password/2FA storage, inspection and automatic re-login enabled. Subsequent logins use the local Worker. Enable credential encryption on this page; automatic re-login also requires a configured Worker.",
+  "hint": "One entry per line, two formats supported: email----GPT password----2FA, or email----mailbox password----client_id----refresh_token----GPT password----2FA (when pasting a full mailbox list, the last two fields are used as login password and 2FA). Up to 100 entries. Initial login uses the configured login service. Imported accounts join Credential Operations by default with encrypted password/2FA storage, inspection and automatic re-login enabled. Subsequent logins use the local Worker. Enable credential encryption on this page; automatic re-login also requires a configured Worker. Processing at most 3 accounts at a time. Stopping aborts page requests and further processing; remote logins or saves already submitted may still complete.",
   "settings": "View relogin service settings",
   "credentials": "Login credentials",
   "placeholder": "email----GPT password----2FA\nor: email----mailbox password----client_id----refresh_token----GPT password----2FA",
@@ -10,7 +10,8 @@ export default {
   "invalid": "Enter 1–100 complete email, password and 2FA entries, one per line with no duplicate emails.",
   "start": "Log in and import",
   "retry": "Continue unfinished entries",
-  "stop": "Stop further logins",
+  "stop": "Stop this batch",
+  "ownedJobs": "Some login tasks are unresolved, so this window must stay open. Continue unfinished entries to resume them, or stop this batch to clean them up. If cleanup fails, you can try again.",
   "reset": "Import another batch",
   "states": {
     "pending": "Pending",

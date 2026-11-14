@@ -2,10 +2,15 @@ package service
 
 import (
 	"context"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
+
+const profitOperationsQueryTimeout = 5 * time.Minute
 
 type ProfitOperationsSnapshot struct {
 	UpstreamOperationsSnapshot
@@ -20,20 +25,48 @@ func ValidateProfitOperationsFilter(f UpstreamOperationsFilter) error {
 	if !slices.Contains([]string{"requests", "standard_charge", "request_income", "estimated_cost", "estimated_profit", "margin", "name"}, f.Sort) {
 		return ErrUpstreamOperationsValidation
 	}
+	if strings.HasPrefix(f.Upstream, "channel:") {
+		id, e := strconv.ParseInt(strings.TrimPrefix(f.Upstream, "channel:"), 10, 64)
+		if e != nil || id < 1 || f.Upstream != "channel:"+strconv.FormatInt(id, 10) {
+			return ErrUpstreamOperationsValidation
+		}
+		f.Upstream = ""
+	}
 	f.Sort = "requests"
-	return ValidateUpstreamOperationsFilter(f)
+	// A complete local calendar month can exceed 31*24h when daylight saving ends.
+	return validateUpstreamOperationsFilter(f, 32*24*time.Hour)
+}
+
+func NormalizeProfitOperationsFilter(f *UpstreamOperationsFilter) error {
+	if f == nil {
+		return ErrUpstreamOperationsValidation
+	}
+	if strings.HasPrefix(f.Upstream, "channel:") {
+		id, err := strconv.ParseInt(strings.TrimPrefix(f.Upstream, "channel:"), 10, 64)
+		if err != nil || id < 1 || f.Upstream != "channel:"+strconv.FormatInt(id, 10) || (f.ChannelID != 0 && f.ChannelID != id) {
+			return ErrUpstreamOperationsValidation
+		}
+		f.ChannelID, f.Upstream = id, ""
+	}
+	return ValidateProfitOperationsFilter(*f)
 }
 func (s *ChannelService) ProfitOperations(ctx context.Context, f UpstreamOperationsFilter) (*ProfitOperationsSnapshot, error) {
-	if err := ValidateProfitOperationsFilter(f); err != nil {
+	if err := NormalizeProfitOperationsFilter(&f); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, profitOperationsQueryTimeout)
 	defer cancel()
 	repo, ok := s.repo.(ProfitOperationsRepository)
 	if !ok {
 		return nil, infraerrors.ServiceUnavailable("PROFIT_OPERATIONS_UNAVAILABLE", "Profit operations data source unavailable")
 	}
-	return repo.ReadProfitOperations(ctx, f)
+	out, err := repo.ReadProfitOperations(ctx, f)
+	// Database drivers can return their own cancellation error. Preserve the
+	// request's deadline/cancellation so callers can distinguish a timeout.
+	if err != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return out, err
 }
 
 // OperationsCostMultiplier distinguishes the scheduling default from a saved

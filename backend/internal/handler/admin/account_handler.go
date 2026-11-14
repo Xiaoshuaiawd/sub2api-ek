@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -49,11 +50,13 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 
 // AccountHandler handles admin account management
 type AccountHandler struct {
-	adminService service.AdminService
 	// tokenGuard 供「一键 2FA 导入」在服务端完成首次登录；由装配层注入。
 	tokenGuard              *service.AccountTokenGuardService
 	inventoryTokenGuardV2   *service.AccountTokenGuardV2Service
 	inventory               *service.AccountInventoryService
+	performance             *service.AccountPerformanceService
+	upstreamChannels        *service.ChannelService
+	adminService            service.AdminService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
 	openaiOAuthReauth       *service.OpenAIOAuthReauthService
@@ -154,6 +157,8 @@ func (h *AccountHandler) SetInventoryService(svc *service.AccountInventoryServic
 
 // CreateAccountRequest represents create account request
 type CreateAccountRequest struct {
+	UpstreamChannelID       int64          `json:"upstream_channel_id"`
+	ConfirmUpstreamChannel  bool           `json:"confirm_upstream_channel_binding"`
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
 	Platform                string         `json:"platform" binding:"required"`
@@ -237,6 +242,7 @@ type CheckMixedChannelRequest struct {
 
 // AccountWithConcurrency extends Account with real-time concurrency info
 type AccountWithConcurrency struct {
+	ModerationScopeEligible bool `json:"moderation_scope_eligible"`
 	*dto.Account
 	simpleMode         bool                         `json:"-"`
 	CurrentConcurrency int                          `json:"current_concurrency"`
@@ -254,6 +260,7 @@ type AccountWithConcurrency struct {
 // for lite=1. It embeds dto.AccountListItem instead of the full dto.Account,
 // so groups/account_groups never appear in the list payload.
 type AccountListItemWithConcurrency struct {
+	ModerationScopeEligible bool `json:"moderation_scope_eligible"`
 	*dto.AccountListItem
 	CurrentConcurrency int                          `json:"current_concurrency"`
 	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
@@ -424,9 +431,10 @@ func (h *AccountHandler) isSimpleMode() bool {
 
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	item := AccountWithConcurrency{
-		Account:            dto.AccountForObserver(ctx, h.accountResponseFromService(account)),
-		simpleMode:         h.isSimpleMode(),
-		CurrentConcurrency: 0,
+		Account:                 dto.AccountForObserver(ctx, h.accountResponseFromService(account)),
+		ModerationScopeEligible: service.ModerationUpstreamAccountEligible(account),
+		simpleMode:              h.isSimpleMode(),
+		CurrentConcurrency:      0,
 	}
 	if account == nil {
 		return item
@@ -473,6 +481,10 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 		}
 	}
 
+	// Analytics enrichment is separate from the scheduler account domain.
+	if err := h.enrichUpstreamChannelBindings(ctx, []AccountWithConcurrency{item}); err != nil {
+		slog.Warn("upstream_channel_readback_failed")
+	}
 	h.enrichShadowParents(ctx, []AccountWithConcurrency{item})
 
 	return item
@@ -538,7 +550,7 @@ func (h *AccountHandler) fetchOpenAIAccountLoadMap(ctx context.Context, openAIAc
 		seen[account.ID] = struct{}{}
 		loadReq = append(loadReq, service.AccountWithConcurrency{
 			ID:             account.ID,
-			MaxConcurrency: account.EffectiveLoadFactor(),
+			MaxConcurrency: account.Concurrency,
 		})
 	}
 	if batchLoad, err := h.concurrencyService.GetAccountsLoadBatch(ctx, loadReq); err != nil {
@@ -742,7 +754,15 @@ func (h *AccountHandler) List(c *gin.Context) {
 		}
 	}
 
-	accounts, total, err := h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
+	var accounts []service.Account
+	var total int64
+	var err error
+	var concurrencyCounts map[int64]int
+	if strings.EqualFold(strings.TrimSpace(sortBy), "current_concurrency") {
+		accounts, total, concurrencyCounts, err = h.listAccountsByCurrentConcurrency(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortOrder)
+	} else {
+		accounts, total, err = h.adminService.ListAccounts(c.Request.Context(), page, pageSize, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -772,7 +792,6 @@ func (h *AccountHandler) List(c *gin.Context) {
 		accountIDs[i] = acc.ID
 	}
 
-	concurrencyCounts := make(map[int64]int)
 	var windowCosts map[int64]float64
 	var activeSessions map[int64]int
 	var rpmCounts map[int64]int
@@ -792,7 +811,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 	}
 
 	// 始终获取并发数（Redis ZCARD，极低开销）
-	if h.concurrencyService != nil {
+	if concurrencyCounts == nil && h.concurrencyService != nil {
 		if cc, ccErr := h.concurrencyService.GetAccountConcurrencyBatch(c.Request.Context(), accountIDs); ccErr == nil && cc != nil {
 			concurrencyCounts = cc
 		}
@@ -879,11 +898,12 @@ func (h *AccountHandler) List(c *gin.Context) {
 			}
 		}
 		item := AccountWithConcurrency{
-			Account:            accountResponse,
-			simpleMode:         h.isSimpleMode(),
-			CurrentConcurrency: concurrencyCounts[acc.ID],
-			SchedulerScore:     schedulerScores[acc.ID],
-			SchedulerScores:    schedulerGroupScores[acc.ID],
+			Account:                 accountResponse,
+			ModerationScopeEligible: service.ModerationUpstreamAccountEligible(acc),
+			simpleMode:              h.isSimpleMode(),
+			CurrentConcurrency:      concurrencyCounts[acc.ID],
+			SchedulerScore:          schedulerScores[acc.ID],
+			SchedulerScores:         schedulerGroupScores[acc.ID],
 		}
 
 		// 添加窗口费用（仅当启用时）
@@ -919,6 +939,10 @@ func (h *AccountHandler) List(c *gin.Context) {
 		result[i] = item
 	}
 
+	if err := h.enrichUpstreamChannelBindings(c.Request.Context(), result); err != nil {
+		response.InternalError(c, "Upstream channel readback failed")
+		return
+	}
 	h.enrichShadowParents(c.Request.Context(), result)
 
 	if lite {
@@ -926,15 +950,16 @@ func (h *AccountHandler) List(c *gin.Context) {
 		for i := range result {
 			item := result[i]
 			compact[i] = AccountListItemWithConcurrency{
-				AccountListItem:    dto.AccountListItemFromAccount(item.Account),
-				CurrentConcurrency: item.CurrentConcurrency,
-				SchedulerScore:     item.SchedulerScore,
-				SchedulerScores:    item.SchedulerScores,
-				CurrentWindowCost:  item.CurrentWindowCost,
-				ActiveSessions:     item.ActiveSessions,
-				CurrentRPM:         item.CurrentRPM,
-				RPMPaused:          item.RPMPaused,
-				RPMResetAt:         item.RPMResetAt,
+				AccountListItem:         dto.AccountListItemFromAccount(item.Account),
+				ModerationScopeEligible: item.ModerationScopeEligible,
+				CurrentConcurrency:      item.CurrentConcurrency,
+				SchedulerScore:          item.SchedulerScore,
+				SchedulerScores:         item.SchedulerScores,
+				CurrentWindowCost:       item.CurrentWindowCost,
+				ActiveSessions:          item.ActiveSessions,
+				CurrentRPM:              item.CurrentRPM,
+				RPMPaused:               item.RPMPaused,
+				RPMResetAt:              item.RPMResetAt,
 			}
 		}
 		etag := buildAccountsListETag(compact, total, page, pageSize, platform, accountType, status, search, true)
@@ -1104,6 +1129,14 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if _, observer := service.ObserverGroupIDs(c.Request.Context()); observer && req.UpstreamChannelID > 0 {
+		response.ErrorFrom(c, service.ErrObserverScope)
+		return
+	}
+	if req.UpstreamChannelID < 0 || (req.UpstreamChannelID > 0 && !req.ConfirmUpstreamChannel) {
+		response.ErrorFrom(c, service.ErrUpstreamChannelValidation)
+		return
+	}
 	if err := service.ValidateOpenAILongContextBillingExtra(req.Platform, req.Extra); err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -1131,6 +1164,9 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	var createdAccount *service.Account
 
 	result, err := executeAdminIdempotent(c, "admin.accounts.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		if req.UpstreamChannelID > 0 {
+			ctx = service.WithInitialUpstreamChannel(ctx, req.UpstreamChannelID)
+		}
 		account, execErr := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
 			Name:                  req.Name,
 			Notes:                 req.Notes,
@@ -1369,9 +1405,11 @@ type TestAccountRequest struct {
 }
 
 type PelicanTestRequest struct {
-	ModelID         string `json:"model_id"`
-	Prompt          string `json:"prompt"`
-	ReasoningEffort string `json:"reasoning_effort"`
+	PromptMode      string                   `json:"prompt_mode"`
+	PelicanQuestion *service.PelicanQuestion `json:"pelican_question"`
+	ModelID         string                   `json:"model_id"`
+	Prompt          string                   `json:"prompt"`
+	ReasoningEffort string                   `json:"reasoning_effort"`
 }
 
 type SyncFromCRSRequest struct {
@@ -1391,6 +1429,7 @@ type PreviewFromCRSRequest struct {
 // Test handles testing account connectivity with SSE streaming
 // POST /api/v1/admin/accounts/:id/test
 func (h *AccountHandler) Test(c *gin.Context) {
+	c.Request = c.Request.WithContext(service.WithAccountTestTimingStart(c.Request.Context(), time.Now()))
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")
@@ -1419,6 +1458,16 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	}
 }
 
+// PreparePelicanQuestion allocates a comparison round without contacting an upstream.
+func (h *AccountHandler) PreparePelicanQuestion(c *gin.Context) {
+	cfg, err := service.NewPelicanQuestion()
+	if err != nil {
+		response.InternalError(c, "Unable to prepare pelican question")
+		return
+	}
+	response.Success(c, cfg)
+}
+
 // PelicanTest handles the dedicated Pelican HTML-generation test stream.
 // POST /api/v1/admin/accounts/:id/pelican-test
 func (h *AccountHandler) PelicanTest(c *gin.Context) {
@@ -1431,6 +1480,17 @@ func (h *AccountHandler) PelicanTest(c *gin.Context) {
 	var req PelicanTestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.PromptMode == service.PelicanPromptModeRandom {
+		cfg, err := service.ResolveManualPelicanQuestion(req.PelicanQuestion)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		req.Prompt = cfg.ActualPrompt
+	} else if req.PromptMode != "" && req.PromptMode != "custom" {
+		response.BadRequest(c, "Invalid pelican prompt mode")
 		return
 	}
 	if err := h.accountTestService.TestPelicanAccountConnection(c, accountID, req.ModelID, req.Prompt, req.ReasoningEffort); err != nil {
@@ -3244,6 +3304,19 @@ func antigravityAccountTestModels(rawMapping any) []antigravity.ClaudeModel {
 // SyncUpstreamModels handles syncing live supported models from an account's upstream.
 // POST /api/v1/admin/accounts/:id/models/sync-upstream
 func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
+	var options service.UpstreamModelSyncOptions
+	if err := c.ShouldBindJSON(&options); err != nil && !errors.Is(err, io.EOF) {
+		response.BadRequest(c, "Invalid upstream model sync options")
+		return
+	}
+	if options.Automatic && !options.Apply {
+		response.BadRequest(c, "Automatic model sync requires apply=true")
+		return
+	}
+	if _, observer := service.ObserverGroupIDs(c.Request.Context()); observer && options.Apply {
+		response.ErrorFrom(c, service.ErrObserverScope)
+		return
+	}
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")
@@ -3261,7 +3334,7 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		return
 	}
 
-	catalog, err := h.accountTestService.SyncUpstreamModelCatalog(c.Request.Context(), account)
+	catalog, err := h.accountTestService.SyncUpstreamModelCatalogWithOptions(c.Request.Context(), account, options)
 	if err != nil {
 		var syncErr *service.UpstreamModelSyncError
 		if errors.As(err, &syncErr) {

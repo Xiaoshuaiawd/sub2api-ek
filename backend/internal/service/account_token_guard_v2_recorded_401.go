@@ -90,7 +90,7 @@ func (s *AccountTokenGuardV2Service) RunRecorded401(ctx context.Context) (int, e
 			completion.ProbeDetail = record.ProbeDetail
 			completion.FailStreak = record.FailStreak
 			completion.NextProbeAt = record.NextProbeAt
-			s.completeProbe(ctx, id, completion)
+			s.completeProbe(ctx, id, s.leaseOwner, completion)
 			continue
 		}
 		task, taskErr := s.reauth.createTaskForProfile(ctx, id, "codex", func(createCtx context.Context, accountID int64, hash string) (*OpenAIOAuthReauthTaskRecord, error) {
@@ -121,7 +121,7 @@ func (s *AccountTokenGuardV2Service) RunRecorded401(ctx context.Context) (int, e
 				}
 			}
 		}
-		s.completeProbe(ctx, id, completion)
+		s.completeProbe(ctx, id, s.leaseOwner, completion)
 	}
 	return queued, firstErr
 }

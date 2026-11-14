@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/url"
 	"reflect"
 	"slices"
@@ -22,7 +23,9 @@ import (
 )
 
 type Account struct {
-	InitialAdmissionPlan *ScheduledTestPlan `json:"-"`
+	AuthConnectionID       string
+	AuthConnectionRevision int64
+	InitialAdmissionPlan   *ScheduledTestPlan `json:"-"`
 	// InitialQualityPlan is internal create-only state, never imported or exported.
 	InitialQualityPlan      *ScheduledTestPlan `json:"-"`
 	ID                      int64
@@ -53,7 +56,8 @@ type Account struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 
-	Schedulable bool
+	Schedulable       bool
+	PerformancePaused bool
 
 	RateLimitedAt    *time.Time
 	RateLimitResetAt *time.Time
@@ -82,6 +86,7 @@ type Account struct {
 	modelMappingCacheRawLen         int
 	modelMappingCacheRawSig         uint64
 	modelMappingCacheRuntimeVersion uint64
+	modelMappingCacheMode           string
 	// modelMappingCacheShared 为 true 时缓存来自只读共享母本（见 PrepareSharedSnapshot），
 	// 指针、长度与运行时版本匹配即直接复用预解析结果，不计算签名。
 	modelMappingCacheShared bool
@@ -158,6 +163,16 @@ const (
 	TempUnschedScopeModel   = "model"
 )
 
+// 临时不可调度规则在 accounts.credentials.temp_unschedulable_rules 中的流触发时机。
+// 缺省（空字符串）保持历史行为，见 TempUnschedulableRule.StreamTiming。
+const (
+	// TempUnschedStreamBefore 只匹配流开始前的 HTTP 错误，不处理流已经开始后的失败。
+	TempUnschedStreamBefore = "before_stream"
+	// TempUnschedStreamAfter 同时匹配流开始前的 HTTP 错误和流开始后的失败
+	// （包括 OpenAI 中途 502 / 通用 upstream_error，且规则 error_code 为 502 时）。
+	TempUnschedStreamAfter = "after_stream"
+)
+
 type TempUnschedulableRule struct {
 	ErrorCode       int      `json:"error_code"`
 	Keywords        []string `json:"keywords"`
@@ -166,6 +181,34 @@ type TempUnschedulableRule struct {
 	// Scope 决定命中后的隔离粒度：account 暂停整个账号，model 只冷却本次请求的模型。
 	// 为空时模型已知且非 401 走模型级，否则账号级。
 	Scope string `json:"scope,omitempty"`
+	// StreamTiming 是 credentials JSON 键 stream_timing。
+	//   "" / 省略：兼容旧规则。流开始前的 HTTP 错误可匹配；流中途仅 401、凭据类 403、
+	//     429、容量降载 503、529 可匹配。中途 502 / 通用 upstream_error 不匹配。
+	//   "before_stream"：仅流开始前的 HTTP 错误。
+	//   "after_stream"：流开始前和流开始后都可以，包括中途 502。
+	StreamTiming string `json:"stream_timing,omitempty"`
+	// TriggerCount 是 credentials JSON 键 trigger_count：错误计数窗口内需要多少次匹配才冷却。
+	// 省略或小于 1 按 1 处理（第一次匹配即触发，与旧行为一致）。
+	TriggerCount int `json:"trigger_count,omitempty"`
+	// TriggerWindow 是 credentials JSON 键 trigger_window_minutes：从第一次匹配起累计次数的时间窗口。
+	// 与 duration_minutes（冷却触发后暂停调度多久）相互独立。省略或小于 1 按 1 分钟处理，不借用 duration_minutes。
+	TriggerWindow int `json:"trigger_window_minutes,omitempty"`
+}
+
+// NormalizedTriggerCount 返回至少为 1 的触发次数。
+func (r TempUnschedulableRule) NormalizedTriggerCount() int {
+	if r.TriggerCount < 1 {
+		return 1
+	}
+	return r.TriggerCount
+}
+
+// TriggerWindowMinutes 返回错误计数窗口（分钟），至少 1 分钟。
+func (r TempUnschedulableRule) TriggerWindowMinutes() int {
+	if r.TriggerWindow < 1 {
+		return 1
+	}
+	return r.TriggerWindow
 }
 
 func (a *Account) IsActive() bool {
@@ -220,8 +263,19 @@ func (a *Account) EffectiveLoadFactor() int {
 	return 1
 }
 
+// accountLoadPreferenceRate preserves load_factor as a bounded soft preference
+// after capacity has been measured against real concurrency slots.
+func accountLoadPreferenceRate(account *Account, loadRate int) int {
+	if account == nil || account.Concurrency <= 0 || account.LoadFactor == nil || *account.LoadFactor <= 0 {
+		return loadRate
+	}
+	weight := float64(*account.LoadFactor) / float64(account.Concurrency)
+	weight = math.Max(0.5, math.Min(2, weight))
+	return int(math.Round(float64(max(0, loadRate)) / weight))
+}
+
 func (a *Account) IsSchedulable() bool {
-	if !a.IsActive() || !a.Schedulable {
+	if !a.IsActive() || !a.Schedulable || a.PerformancePaused {
 		return false
 	}
 	now := time.Now()
@@ -522,6 +576,9 @@ func (a *Account) GetTempUnschedulableRules() []TempUnschedulableRule {
 			DurationMinutes: parseTempUnschedInt(entry["duration_minutes"]),
 			Description:     parseTempUnschedString(entry["description"]),
 			Scope:           normalizeTempUnschedScope(entry["scope"]),
+			StreamTiming:    normalizeTempUnschedStreamTiming(entry["stream_timing"]),
+			TriggerCount:    parseTempUnschedInt(entry["trigger_count"]),
+			TriggerWindow:   parseTempUnschedInt(entry["trigger_window_minutes"]),
 		}
 
 		if rule.ErrorCode <= 0 || rule.DurationMinutes <= 0 || len(rule.Keywords) == 0 {
@@ -541,6 +598,19 @@ func normalizeTempUnschedScope(raw any) string {
 		return TempUnschedScopeAccount
 	case TempUnschedScopeModel:
 		return TempUnschedScopeModel
+	default:
+		return ""
+	}
+}
+
+// normalizeTempUnschedStreamTiming 只认 before_stream / after_stream。
+// 缺省和无法识别的值都视为旧规则（空字符串），以保留历史中途匹配行为。
+func normalizeTempUnschedStreamTiming(raw any) string {
+	switch strings.ToLower(strings.TrimSpace(parseTempUnschedString(raw))) {
+	case TempUnschedStreamBefore:
+		return TempUnschedStreamBefore
+	case TempUnschedStreamAfter:
+		return TempUnschedStreamAfter
 	default:
 		return ""
 	}
@@ -671,6 +741,7 @@ func (a *Account) GetModelMapping() map[string]string {
 	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
 	rawPtr := mapPtr(rawMapping)
 	rawLen := len(rawMapping)
+	mode := a.GetCredential(OpenAIModelMappingModeKey)
 	rawSig := uint64(0)
 	rawSigReady := false
 
@@ -678,6 +749,7 @@ func (a *Account) GetModelMapping() map[string]string {
 		a.modelMappingCacheCredentialsPtr == credentialsPtr &&
 		a.modelMappingCacheRawPtr == rawPtr &&
 		a.modelMappingCacheRawLen == rawLen &&
+		a.modelMappingCacheMode == mode &&
 		a.modelMappingCacheRuntimeVersion == runtimeVersion {
 		if a.modelMappingCacheShared {
 			return a.modelMappingCache
@@ -690,6 +762,15 @@ func (a *Account) GetModelMapping() map[string]string {
 	}
 
 	mapping := a.resolveModelMapping(rawMapping)
+	if a.hasOAuthInitialModelSelection() {
+		filtered := make(map[string]string)
+		for source, target := range mapping {
+			if a.oauthInitialSelectionAllows(source) && a.oauthInitialSelectionAllows(target) {
+				filtered[source] = target
+			}
+		}
+		mapping = filtered
+	}
 	if !rawSigReady {
 		rawSig = modelMappingSignature(rawMapping)
 	}
@@ -701,6 +782,7 @@ func (a *Account) GetModelMapping() map[string]string {
 	a.modelMappingCacheRawLen = rawLen
 	a.modelMappingCacheRawSig = rawSig
 	a.modelMappingCacheRuntimeVersion = runtimeVersion
+	a.modelMappingCacheMode = mode
 	a.modelMappingCacheShared = false
 	return mapping
 }
@@ -752,6 +834,11 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		}
 	}
 	if len(result) > 0 {
+		// An explicit OAuth whitelist is the native model boundary. Provider
+		// defaults must not silently reintroduce models removed by an edit.
+		if a.Type == AccountTypeOAuth && a.GetCredential(OpenAIModelMappingModeKey) == "whitelist" {
+			return result
+		}
 		if a.Platform == domain.PlatformAntigravity {
 			ensureAntigravityDefaultPassthroughs(result, antigravityDefaultPassthroughModels)
 			applyAntigravityGemini31ProAliases(result)
@@ -960,12 +1047,16 @@ func mappingHasWildcardForModel(mapping map[string]string, model string) bool {
 // operator-controlled switch for Grok image/edit/video generation, so an
 // eligible Grok account may inherit only the built-in, known media aliases
 // without widening its chat allowlist or accepting arbitrary model names.
+// Explicit OAuth whitelist mode also limits media to its declared mappings.
 //
 // billing_unobserved remains a candidate here because the scheduler must be
 // able to select the account and let the request path perform its authoritative
 // media eligibility probe before forwarding.
 func (a *Account) resolveGrokMediaFallbackModel(requestedModel string) (string, bool) {
 	if a == nil || !a.IsGrok() {
+		return "", false
+	}
+	if a.Type == AccountTypeOAuth && a.GetCredential(OpenAIModelMappingModeKey) == "whitelist" && len(asAnyModelMapping(a.Credentials["model_mapping"])) > 0 {
 		return "", false
 	}
 
@@ -1041,6 +1132,17 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 }
 
 func (a *Account) isModelMappingSupported(requestedModel string) bool {
+	if !a.oauthInitialSelectionAllows(requestedModel) || !a.oauthInitialSelectionAllows(a.GetMappedModel(requestedModel)) {
+		return false
+	}
+	if a.hasOAuthInitialModelSelection() {
+		// Consult the stored exact scope before provider defaults can inject
+		// passthroughs, aliases, media fallbacks or an empty-map fallback.
+		target, ok := asAnyModelMapping(a.Credentials["model_mapping"])[requestedModel].(string)
+		if !ok || !a.oauthInitialSelectionAllows(target) {
+			return false
+		}
+	}
 	// Apply the credential boundary before passthrough's model allowlist bypass.
 	if a.IsExcelOAuth() && !a.IsExcelBPSEnabledForModel(requestedModel) {
 		return false
@@ -1660,6 +1762,9 @@ func (a *Account) GetAPIProtocol() string {
 	if a == nil || !a.IsMultiProtocolAPIKey() {
 		return APIProtocolChatCompletions
 	}
+	if a.QwenSessionCacheEnabled() {
+		return APIProtocolResponses
+	}
 	switch strings.TrimSpace(a.GetCredential("api_protocol")) {
 	case APIProtocolAdaptive:
 		return APIProtocolAdaptive
@@ -1795,6 +1900,12 @@ func (a *Account) GetCodingPlanProvider() string {
 	if a.IsCline() {
 		if a.clineAccountAPISupported() {
 			return PlatformCline
+		}
+		return ""
+	}
+	if a.IsMistral() {
+		if a.mistralUsageSupported() {
+			return PlatformMistral
 		}
 		return ""
 	}
@@ -2019,6 +2130,12 @@ func (a *Account) GetOpenAISessionID() string {
 }
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
+	if a.HasManagedOpenAIConnections() && a.AuthConnectionID == "" {
+		return a.managedConnectionSupports(string(capability))
+	}
+	if validateOpenAIConnectionKind(a) != nil {
+		return false
+	}
 	if a == nil {
 		return false
 	}
@@ -2221,6 +2338,9 @@ func (a *Account) openAIEndpointCapabilitySet() (map[string]bool, bool) {
 }
 
 func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapability) bool {
+	if a.HasManagedOpenAIConnections() && capability != "" {
+		return false
+	}
 	if capability == "" {
 		return true
 	}
@@ -2484,6 +2604,9 @@ func (a *Account) IsCopilotSDKEnabled() bool {
 // 1. 按账号类型读取分类型字段
 // 2. 分类型字段缺失时，回退兼容字段
 func (a *Account) IsOpenAIResponsesWebSocketV2Enabled() bool {
+	if a.HasManagedOpenAIConnections() {
+		return false
+	}
 	if a.IsSIWCEnabled() {
 		return false
 	}
@@ -2558,6 +2681,9 @@ func normalizeOpenAIWSIngressDefaultMode(mode string) string {
 // 3. 兼容 enabled 旧字段（bool）
 // 4. defaultMode（非法时回退 ctx_pool）
 func (a *Account) ResolveOpenAIResponsesWebSocketV2Mode(defaultMode string) string {
+	if a.HasManagedOpenAIConnections() {
+		return OpenAIWSIngressModeOff
+	}
 	if a.IsSIWCEnabled() {
 		return OpenAIWSIngressModeOff
 	}
@@ -2697,6 +2823,34 @@ func (a *Account) IsAnthropicStripClaudeCodeIdentityEnabled() bool {
 		return false
 	}
 	enabled, ok := a.Extra[anthropicStripClaudeCodeIdentityExtraKey].(bool)
+	return ok && enabled
+}
+
+const anthropicMimicClaudeCodeExtraKey = "anthropic_mimic_claude_code"
+
+// IsAnthropicMimicClaudeCodeEnabled 返回 Anthropic API Key 账号是否启用
+// "模拟 Claude Code 客户端"（上游只放行 Claude Code 时，给普通客户端的请求补齐
+// Claude Code 请求头、身份句和 metadata.user_id）。
+// 字段：accounts.extra.anthropic_mimic_claude_code。
+// 与"抹除 Claude Code 身份"互斥：两者同时开启时以抹除为准，本开关视为关闭。
+func (a *Account) IsAnthropicMimicClaudeCodeEnabled() bool {
+	if a == nil || a.Platform != PlatformAnthropic || a.Type != AccountTypeAPIKey || a.Extra == nil {
+		return false
+	}
+	if a.IsAnthropicStripClaudeCodeIdentityEnabled() {
+		return false
+	}
+	enabled, ok := a.Extra[anthropicMimicClaudeCodeExtraKey].(bool)
+	return ok && enabled
+}
+
+// IsAnthropicMimicClaudeCodeDeductTokensEnabled controls the optional estimate
+// for gateway-injected identity tokens. Missing or false preserves normal billing.
+func (a *Account) IsAnthropicMimicClaudeCodeDeductTokensEnabled() bool {
+	if !a.IsAnthropicMimicClaudeCodeEnabled() {
+		return false
+	}
+	enabled, ok := a.Extra["anthropic_mimic_claude_code_deduct_tokens"].(bool)
 	return ok && enabled
 }
 

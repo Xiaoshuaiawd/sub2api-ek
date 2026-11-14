@@ -11,6 +11,13 @@
       @submit.prevent="handleSubmit"
       class="space-y-5"
     >
+      <QwenPlatformNotice v-if="account?.platform === 'qwen'" :user-id="authStore.user?.id" />
+      <QwenCacheSettings v-if="account.platform === 'qwen' && account.type === 'apikey'" v-model:session-cache="qwenSessionCache" v-model:strict-affinity="qwenStrictAffinity" :user-id="authStore.user?.id" @base-url="setQwenBaseUrl" />
+      <div v-if="account.credentials?.oauth_initial_selected_models != null" data-testid="initial-model-scope-snapshot" class="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+        <div class="flex items-start gap-2"><p>{{ t('autoConfig.selection.accountHint') }}</p><NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.oauthInitialModelSelection" :user-id="authStore.user?.id" /></div>
+        <label class="mt-2 flex items-center gap-2"><input v-model="releaseInitialModelSelection" data-testid="release-initial-model-selection" type="checkbox" />{{ t('autoConfig.selection.takeOver') }}</label>
+      </div>
+      <AccountUpstreamChannelBinding v-if="show" :account-ids="[account.id]" />
       <div>
         <label class="input-label">{{ t('common.name') }}</label>
         <input v-model="form.name" type="text" required class="input" data-tour="edit-account-form-name" />
@@ -33,6 +40,8 @@
         </label>
         <p class="input-hint">{{ t('admin.accounts.intelligenceRoutingHint') }}</p>
       </div>
+      <OpenAIAuthConnections v-if="account.platform === 'openai' && account.type === 'oauth' && !isSparkShadow"
+        :account-id="account.id" :account-type="account.type" :active="show" />
 
       <SIWCAccountSettings v-if="account.platform === 'openai' && account.type === 'oauth' && !isSparkShadow"
         v-model:enabled="siwcEnabled" :account-id="account.id" :active="show" />
@@ -283,7 +292,9 @@
                     ? 'sk-...'
                     : account.platform === 'grok'
                       ? 'xai-...'
-                      : 'sk-ant-...'
+                      : account.platform === 'mistral'
+                        ? 'API Key'
+                        : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
@@ -400,7 +411,7 @@
               ref="grokApiKeyWhitelistRef"
               v-show="modelRestrictionMode === 'whitelist'"
               v-model="allowedModels"
-              :model-mappings="modelMappings"
+              v-model:model-mappings="modelMappings"
               :platform="account?.platform || 'anthropic'"
               :account-id="account?.id"
               :show-sync-button="account.platform !== 'grok' || !account.id"
@@ -1016,7 +1027,7 @@
             ref="grokOAuthWhitelistRef"
             v-show="modelRestrictionMode === 'whitelist'"
             v-model="allowedModels"
-            :model-mappings="modelMappings"
+            v-model:model-mappings="modelMappings"
             :platform="account?.platform || 'anthropic'"
             :account-id="account?.id"
             :show-sync-button="account.platform !== 'grok' || !account.id"
@@ -1287,7 +1298,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" />
+            <ModelWhitelistSelector v-model="allowedModels" v-model:model-mappings="modelMappings" :platform="account?.platform || 'anthropic'" :account-id="account?.id" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
@@ -1509,7 +1520,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :model-mappings="modelMappings" platform="anthropic" />
+            <ModelWhitelistSelector v-model="allowedModels" v-model:model-mappings="modelMappings" platform="anthropic" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
@@ -1831,6 +1842,7 @@
                     class="input"
                     :placeholder="t('admin.accounts.tempUnschedulable.durationPlaceholder')"
                   />
+                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.durationHint') }}</p>
                 </div>
                 <div class="sm:col-span-2">
                   <label class="input-label">{{ t('admin.accounts.tempUnschedulable.scope') }}</label>
@@ -1869,6 +1881,72 @@
                     </button>
                   </div>
                   <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.scopeHint') }}</p>
+                </div>
+                <div class="sm:col-span-2">
+                  <div class="flex items-center gap-2">
+                    <label class="input-label">{{ t('admin.accounts.tempUnschedulable.streamTiming') }}</label>
+                    <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.tempUnschedStreamCountWindow" :user-id="authStore.user?.id" />
+                  </div>
+                  <div
+                    class="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    :aria-label="t('admin.accounts.tempUnschedulable.streamTiming')"
+                  >
+                    <button
+                      v-for="option in tempUnschedStreamTimingOptions"
+                      :key="option.value"
+                      type="button"
+                      role="radio"
+                      :aria-checked="rule.stream_timing === option.value"
+                      :data-testid="`temp-unsched-stream-${option.value}`"
+                      @click="chooseTempUnschedStreamTiming(rule, option.value)"
+                      :class="[
+                        'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+                        rule.stream_timing === option.value
+                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                          : 'border-gray-200 hover:border-gray-400 dark:border-dark-600 dark:hover:border-gray-600'
+                      ]"
+                    >
+                      <span
+                        :class="[
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2',
+                          rule.stream_timing === option.value ? 'border-primary-500' : 'border-gray-300 dark:border-dark-500'
+                        ]"
+                      >
+                        <span v-if="rule.stream_timing === option.value" class="h-1.5 w-1.5 rounded-full bg-primary-500" />
+                      </span>
+                      <span>
+                        <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ option.label }}</span>
+                        <span class="text-xs text-gray-500 dark:text-gray-400">{{ option.description }}</span>
+                      </span>
+                    </button>
+                  </div>
+                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.streamTimingHint') }}</p>
+                </div>
+                <div class="sm:col-span-2">
+                  <label class="input-label">{{ t('admin.accounts.tempUnschedulable.triggerCount') }}</label>
+                  <input
+                    v-model.number="rule.trigger_count"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    class="input"
+                    data-testid="temp-unsched-trigger-count"
+                    :placeholder="t('admin.accounts.tempUnschedulable.triggerCountPlaceholder')"
+                  />
+                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.triggerCountHint') }}</p>
+                </div>
+                <div class="sm:col-span-2">
+                  <label class="input-label">{{ t('admin.accounts.tempUnschedulable.triggerWindowMinutes') }}</label>
+                  <input
+                    v-model.number="rule.trigger_window_minutes"
+                    type="number"
+                    min="1"
+                    class="input"
+                    data-testid="temp-unsched-trigger-window"
+                    :placeholder="t('admin.accounts.tempUnschedulable.triggerWindowPlaceholder')"
+                  />
+                  <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.triggerWindowHint') }}</p>
                 </div>
                 <div class="sm:col-span-2">
                   <label class="input-label">{{ t('admin.accounts.tempUnschedulable.keywords') }}</label>
@@ -2678,6 +2756,50 @@
         </div>
       </div>
 
+      <!-- Anthropic API Key 模拟 Claude Code 客户端开关（与抹除身份互斥） -->
+      <div
+        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.anthropic.mimicClaudeCode') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.mimicClaudeCodeDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="anthropic-mimic-claude-code-toggle"
+            @click="anthropicMimicClaudeCodeEnabled = !anthropicMimicClaudeCodeEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              anthropicMimicClaudeCodeEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                anthropicMimicClaudeCodeEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+        <div v-if="anthropicMimicClaudeCodeEnabled" class="mt-4 flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.anthropic.mimicClaudeCodeDeductTokens') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.mimicClaudeCodeDeductTokensDesc') }}
+            </p>
+          </div>
+          <Toggle
+            v-model="anthropicMimicClaudeCodeDeductTokens"
+            data-testid="anthropic-mimic-claude-code-deduct-tokens-toggle"
+            :aria-label="t('admin.accounts.anthropic.mimicClaudeCodeDeductTokens')"
+          />
+        </div>
+      </div>
+
       <div
         v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -2846,6 +2968,38 @@
               :class="[
                 'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
                 openAILongContextBillingEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.ultrafastBilling') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.ultrafastBillingDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="edit-openai-ultrafast-billing-toggle"
+            role="switch"
+            :aria-checked="openAIResponseTierBillingEnabled"
+            @click="openAIResponseTierBillingEnabled = !openAIResponseTierBillingEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              openAIResponseTierBillingEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                openAIResponseTierBillingEnabled ? 'translate-x-5' : 'translate-x-0'
               ]"
             />
           </button>
@@ -3628,10 +3782,14 @@
 </template>
 
 <script setup lang="ts">
+import QwenPlatformNotice from '@/components/common/QwenPlatformNotice.vue'
+import QwenCacheSettings from './QwenCacheSettings.vue'
+import { applyQwenCacheSettings } from './qwenCacheSettings'
 import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezoneField.vue'
 import ExtraImageModelsField from '@/components/account/ExtraImageModelsField.vue'
 import { parseExtraImageModels, readExtraImageModels } from '@/utils/extraImageModels'
 import SIWCAccountSettings from './SIWCAccountSettings.vue'
+import OpenAIAuthConnections from './OpenAIAuthConnections.vue'
 import ExcelBPSCredentialStatus from './ExcelBPSCredentialStatus.vue'
 import { DEFAULT_ACCOUNT_COST_MULTIPLIER, isValidAccountCostMultiplier, readAccountCostMultiplier } from '@/utils/accountCost'
 
@@ -3643,6 +3801,8 @@ import { useExcelBPSDefaults } from '@/composables/useExcelBPSDefaults'
 import { DEFAULT_BPS_RECOVERY_INTERVAL_MINUTES, MAX_BPS_RECOVERY_INTERVAL_MINUTES, isValidBPSRecoveryInterval, bpsRecoveryIntervalOrDefault } from '@/utils/excelBPSRecovery'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
+import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 
 import { adminAPI } from '@/api/admin'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
@@ -3662,9 +3822,11 @@ import type {
   GrokModelDiagnostics,
   OpenCodeGoUsageState,
   OpenCodeGoUsageWindow,
-  TempUnschedulableScope
+  TempUnschedulableScope,
+  TempUnschedulableStreamTiming
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import AccountUpstreamChannelBinding from './AccountUpstreamChannelBinding.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
@@ -3760,6 +3922,7 @@ import {
   commonErrorCodes,
   buildModelMappingObject,
   splitModelMappingObject,
+  reconcileUpstreamModelMapping,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 
@@ -3947,6 +4110,12 @@ interface TempUnschedRuleForm {
   description: string
   // 作用范围：account 暂停整个账号，model 只冷却本次请求的模型。
   scope: TempUnschedulableScope
+  stream_timing: TempUnschedulableStreamTiming
+  // 旧规则没有 stream_timing。表单可以按历史行为回显，但只有操作者改过这个选项，
+  // 或规则本来就写了明确值，保存时才把 stream_timing 写回去。
+  stream_timing_explicit: boolean
+  trigger_count: number
+  trigger_window_minutes: number
 }
 
 // State
@@ -4136,6 +4305,7 @@ const isBedrockAPIKeyMode = computed(() =>
 )
 const modelMappings = ref<ModelMapping[]>([])
 const openaiModelAliases = ref(false)
+const releaseInitialModelSelection = ref(false)
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
@@ -4185,6 +4355,12 @@ const customErrorCodesEnabled = ref(false)
 const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const headerOverrideEnabled = ref(false)
+const qwenSessionCache = ref(false)
+const qwenStrictAffinity = ref(false)
+const setQwenBaseUrl = (value: string) => {
+  editBaseUrl.value = value
+  editAdaptiveBaseUrls.value.chat_completions = value
+}
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 
 const headerOverrideCapable = computed(
@@ -4410,6 +4586,7 @@ const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist'
 const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
 const isSyncingAntigravityUpstream = ref(false)
+let antigravityUpstreamSyncVersion = 0
 const tempUnschedEnabled = ref(false)
 const accountSchedulingThresholdOverrideEnabled = ref(false)
 const accountSchedulingThresholdOverrideValue = ref(100)
@@ -4505,6 +4682,7 @@ const openaiPassthroughEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
+const openAIResponseTierBillingEnabled = ref(false)
 // OpenAI 订阅档位（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）手动覆盖值,
 // 存于 credentials.plan_type;'' 表示清空/自动识别
 const editPlanType = ref<string>('')
@@ -4525,6 +4703,21 @@ const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicStripClaudeCodeIdentityEnabled = ref(false)
+const anthropicMimicClaudeCodeEnabled = ref(false)
+const anthropicMimicClaudeCodeDeductTokens = ref(false)
+// 「模拟 Claude Code」与「抹除 Claude Code 身份」互斥：打开一个就关掉另一个
+watch(anthropicMimicClaudeCodeEnabled, (enabled) => {
+  if (enabled) {
+    anthropicStripClaudeCodeIdentityEnabled.value = false
+  } else {
+    anthropicMimicClaudeCodeDeductTokens.value = false
+  }
+})
+watch(anthropicStripClaudeCodeIdentityEnabled, (enabled) => {
+  if (enabled) {
+    anthropicMimicClaudeCodeEnabled.value = false
+  }
+})
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
@@ -4790,6 +4983,18 @@ const tempUnschedScopeOptions = computed<Array<{ value: TempUnschedulableScope; 
     description: t('admin.accounts.tempUnschedulable.scopeAccountDesc')
   }
 ])
+const tempUnschedStreamTimingOptions = computed<Array<{ value: TempUnschedulableStreamTiming; label: string; description: string }>>(() => [
+  {
+    value: 'before_stream',
+    label: t('admin.accounts.tempUnschedulable.streamTimingBefore'),
+    description: t('admin.accounts.tempUnschedulable.streamTimingBeforeDesc')
+  },
+  {
+    value: 'after_stream',
+    label: t('admin.accounts.tempUnschedulable.streamTimingAfter'),
+    description: t('admin.accounts.tempUnschedulable.streamTimingAfterDesc')
+  }
+])
 
 const tempUnschedPresets = computed(() => [
   {
@@ -4799,7 +5004,10 @@ const tempUnschedPresets = computed(() => [
       keywords: 'overloaded, too many',
       duration_minutes: 60,
       description: t('admin.accounts.tempUnschedulable.presets.overloadDesc'),
-      scope: 'model' as const
+      scope: 'model' as const,
+      stream_timing: 'after_stream' as const,
+      trigger_count: 1,
+      trigger_window_minutes: 5
     }
   },
   {
@@ -4809,7 +5017,10 @@ const tempUnschedPresets = computed(() => [
       keywords: 'rate limit, too many requests',
       duration_minutes: 10,
       description: t('admin.accounts.tempUnschedulable.presets.rateLimitDesc'),
-      scope: 'model' as const
+      scope: 'model' as const,
+      stream_timing: 'after_stream' as const,
+      trigger_count: 1,
+      trigger_window_minutes: 5
     }
   },
   {
@@ -4819,7 +5030,10 @@ const tempUnschedPresets = computed(() => [
       keywords: 'unavailable, maintenance',
       duration_minutes: 30,
       description: t('admin.accounts.tempUnschedulable.presets.unavailableDesc'),
-      scope: 'model' as const
+      scope: 'model' as const,
+      stream_timing: 'after_stream' as const,
+      trigger_count: 1,
+      trigger_window_minutes: 5
     }
   }
 ])
@@ -4952,6 +5166,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (!newAccount) {
     return
   }
+  releaseInitialModelSelection.value = false
   openaiModelAliases.value = newAccount.credentials?.model_mapping_mode === 'aliases'
   // 进入回填窗口：抑制 CN 模式/协议 watcher 联动重置 base_url（见 syncingForm 注释）。
   syncingForm.value = true
@@ -5042,6 +5257,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiPassthroughEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
+  openAIResponseTierBillingEnabled.value = false
   editPlanType.value = ''
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
@@ -5056,6 +5272,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicStripClaudeCodeIdentityEnabled.value = false
+  anthropicMimicClaudeCodeEnabled.value = false
+  anthropicMimicClaudeCodeDeductTokens.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
@@ -5094,6 +5312,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       newAccount.type === 'oauth' && extra?.openai_responses_flatten_namespaces === true
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
     openAILongContextBillingEnabled.value = longContextBillingValue === true
+    openAIResponseTierBillingEnabled.value =
+      newAccount.type === 'apikey' && extra?.openai_response_tier_billing_enabled === true
     // plan_type 手动覆盖仅 OAuth 有实际调度语义(IsOpenAIChatGPTSubscription 要求 oauth),故只对 oauth 回填
     editPlanType.value = newAccount.type === 'oauth'
       ? readPlanType(newAccount.credentials as Record<string, unknown> | undefined)
@@ -5152,6 +5372,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
     anthropicPassthroughEnabled.value = extra?.anthropic_passthrough === true
     anthropicStripClaudeCodeIdentityEnabled.value = extra?.anthropic_strip_claude_code_identity === true
+    anthropicMimicClaudeCodeEnabled.value =
+      extra?.anthropic_mimic_claude_code === true && !anthropicStripClaudeCodeIdentityEnabled.value
+    anthropicMimicClaudeCodeDeductTokens.value =
+      anthropicMimicClaudeCodeEnabled.value && extra?.anthropic_mimic_claude_code_deduct_tokens === true
     anthropicAPIKeyAuthScheme.value = extra?.anthropic_apikey_auth_scheme === 'authorization_bearer'
       ? 'authorization_bearer'
       : 'x_api_key'
@@ -5237,6 +5461,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
   // Load header override state for eligible account platforms/types
+  qwenSessionCache.value = credentials?.qwen_session_cache_enabled === true
+  qwenStrictAffinity.value = credentials?.qwen_strict_session_affinity === true
   headerOverrideEnabled.value = false
   headerOverrideRows.value = []
   if (newAccount.credentials && isHeaderOverrideCapable(newAccount.platform, newAccount.type)) {
@@ -5467,6 +5693,8 @@ async function loadTLSProfiles() {
 watch(
   [() => props.show, () => props.account],
   ([show, newAccount], [wasShow, previousAccount]) => {
+    antigravityUpstreamSyncVersion += 1
+    isSyncingAntigravityUpstream.value = false
     if (!show || !newAccount) {
       return
     }
@@ -5475,7 +5703,7 @@ watch(
       loadTLSProfiles()
     }
   },
-  { immediate: true }
+  { immediate: true, flush: 'sync' }
 )
 
 // Model mapping helpers
@@ -5522,25 +5750,36 @@ const addAntigravityPresetMapping = (from: string, to: string) => {
 }
 
 const syncAntigravityUpstreamModels = async () => {
-  if (!props.account?.id || isSyncingAntigravityUpstream.value) return
+  const account = props.account
+  if (!account?.id || isSyncingAntigravityUpstream.value) return
+  const syncVersion = antigravityUpstreamSyncVersion
+  const isCurrentSync = () => syncVersion === antigravityUpstreamSyncVersion && props.show && props.account === account
 
   isSyncingAntigravityUpstream.value = true
   try {
-    const result = await adminAPI.accounts.syncUpstreamModels(props.account.id)
-    const upstreamModels = result.models.map((model) => model.trim()).filter(Boolean)
+    const result = await adminAPI.accounts.syncUpstreamModels(account.id)
+    if (!isCurrentSync()) return
+    if (result.discovery_source !== 'upstream') {
+      appStore.showWarning(t('admin.accounts.syncUpstreamModelsUnverified'))
+      return
+    }
+    const upstreamModels = [...new Set(result.models.map(model => model.trim()).filter(model => model && !model.includes('*')))]
     if (upstreamModels.length === 0) {
       appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
       return
     }
 
-    let addedCount = 0
-    for (const model of upstreamModels) {
-      const exists = antigravityModelMappings.value.some((mapping) => mapping.from === model)
-      if (!exists) {
-        antigravityModelMappings.value.push({ from: model, to: model })
-        addedCount += 1
-      }
-    }
+    const next = reconcileUpstreamModelMapping(upstreamModels, antigravityModelMappings.value)
+    const updated = [
+      ...next.allowedModels.map(model => ({ from: model, to: model })),
+      ...next.modelMappings
+    ]
+    const previous = new Map(antigravityModelMappings.value.map(({ from, to }) => [from, to]))
+    const addedCount = updated.filter(({ from }) => !previous.has(from)).length
+    const updatedKeys = new Set(updated.map(({ from }) => from))
+    const removedCount = [...previous.keys()].filter(from => !updatedKeys.has(from)).length
+    const changed = previous.size !== updated.length || updated.some(({ from, to }) => previous.get(from) !== to)
+    antigravityModelMappings.value = updated
 
     const warnings = result.warnings ?? []
     const hasPartialMetadata = warnings.some(
@@ -5553,8 +5792,8 @@ const syncAntigravityUpstreamModels = async () => {
       appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataIncomplete'))
       return
     }
-    if (addedCount > 0) {
-      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: addedCount, total: upstreamModels.length }))
+    if (changed) {
+      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: addedCount, removed: removedCount, total: upstreamModels.length }))
     } else {
       appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
     }
@@ -5562,10 +5801,11 @@ const syncAntigravityUpstreamModels = async () => {
       appStore.showWarning(t('admin.accounts.syncUpstreamModelsMetadataPartial'))
     }
   } catch (error) {
+    if (!isCurrentSync()) return
     const message = extractApiErrorMessage(error, t('admin.accounts.syncUpstreamModelsFailed'))
     appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
   } finally {
-    isSyncingAntigravityUpstream.value = false
+    if (isCurrentSync()) isSyncingAntigravityUpstream.value = false
   }
 }
 
@@ -5622,9 +5862,9 @@ const removeErrorCode = (code: number) => {
   }
 }
 
-const addTempUnschedRule = (preset?: TempUnschedRuleForm) => {
+const addTempUnschedRule = (preset?: Omit<TempUnschedRuleForm, 'stream_timing_explicit'>) => {
   if (preset) {
-    tempUnschedRules.value.push({ ...preset })
+    tempUnschedRules.value.push({ ...preset, stream_timing_explicit: true })
     return
   }
   tempUnschedRules.value.push({
@@ -5632,8 +5872,17 @@ const addTempUnschedRule = (preset?: TempUnschedRuleForm) => {
     keywords: '',
     duration_minutes: 30,
     description: '',
-    scope: 'model'
+    scope: 'model',
+    stream_timing: 'before_stream',
+    stream_timing_explicit: true,
+    trigger_count: 1,
+    trigger_window_minutes: 5
   })
+}
+
+function chooseTempUnschedStreamTiming(rule: TempUnschedRuleForm, timing: TempUnschedulableStreamTiming) {
+  rule.stream_timing = timing
+  rule.stream_timing_explicit = true
 }
 
 const removeTempUnschedRule = (index: number) => {
@@ -5656,6 +5905,9 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
     duration_minutes: number
     description: string
     scope: TempUnschedulableScope
+    stream_timing?: TempUnschedulableStreamTiming
+    trigger_count: number
+    trigger_window_minutes: number
   }> = []
 
   for (const rule of rules) {
@@ -5671,13 +5923,19 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
     if (keywords.length === 0) {
       continue
     }
-    out.push({
+    const next: (typeof out)[number] = {
       error_code: Math.trunc(errorCode),
       keywords,
       duration_minutes: Math.trunc(duration),
       description: rule.description.trim(),
-      scope: rule.scope
-    })
+      scope: rule.scope,
+      trigger_count: resolveTempUnschedTriggerCount(rule.trigger_count),
+      trigger_window_minutes: resolveTempUnschedTriggerWindow(rule.trigger_window_minutes)
+    }
+    if (rule.stream_timing_explicit) {
+      next.stream_timing = rule.stream_timing === 'after_stream' ? 'after_stream' : 'before_stream'
+    }
+    out.push(next)
   }
 
   return out
@@ -5780,7 +6038,11 @@ function loadTempUnschedRules(credentials?: Record<string, unknown>) {
       keywords: formatTempUnschedKeywords(entry.keywords),
       duration_minutes: toPositiveNumber(entry.duration_minutes),
       description: typeof entry.description === 'string' ? entry.description : '',
-      scope: resolveTempUnschedScope(entry.scope, errorCode)
+      scope: resolveTempUnschedScope(entry.scope, errorCode),
+      stream_timing: explicitTempUnschedStreamTiming(entry.stream_timing) ?? resolveTempUnschedStreamTiming(entry.stream_timing, errorCode),
+      stream_timing_explicit: explicitTempUnschedStreamTiming(entry.stream_timing) !== null,
+      trigger_count: resolveTempUnschedTriggerCount(entry.trigger_count),
+      trigger_window_minutes: resolveTempUnschedTriggerWindow(entry.trigger_window_minutes)
     }
   })
 }
@@ -5896,6 +6158,46 @@ function resolveTempUnschedScope(value: unknown, errorCode: number | null): Temp
     return scope
   }
   return errorCode === 401 ? 'account' : 'model'
+}
+
+function explicitTempUnschedStreamTiming(value: unknown): TempUnschedulableStreamTiming | null {
+  const timing = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (timing === 'before_stream' || timing === 'after_stream') {
+    return timing
+  }
+  return null
+}
+
+// 旧规则没有 stream_timing。表单仍按当前后端行为回显一个选项：
+// 401/403/429/503/529 今天可以在部分流中途触发，其余错误码（含 502）不可以。
+// 回显不等于迁移。未改这个选项时保存必须继续省略 stream_timing，
+// 否则一次只改账号名的保存会把 Anthropic 529 旧规则写成 after_stream，
+// 让原本不处理的流输出后 overloaded_error 开始冷却。
+function resolveTempUnschedStreamTiming(value: unknown, errorCode: number | null): TempUnschedulableStreamTiming {
+  const explicit = explicitTempUnschedStreamTiming(value)
+  if (explicit) {
+    return explicit
+  }
+  if (errorCode != null && [401, 403, 429, 503, 529].includes(errorCode)) {
+    return 'after_stream'
+  }
+  return 'before_stream'
+}
+
+function resolveTempUnschedTriggerCount(value: unknown): number {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 1) {
+    return 1
+  }
+  return Math.min(1000, Math.trunc(num))
+}
+
+function resolveTempUnschedTriggerWindow(value: unknown): number {
+  const num = Number(value)
+  if (!Number.isFinite(num) || num < 1) {
+    return 1
+  }
+  return Math.trunc(num)
 }
 
 const splitTempUnschedKeywords = (value: string) => {
@@ -6049,6 +6351,9 @@ const saveAutoBPSRule = async (accountID: number) => {
 }
 
 const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
+  if (releaseInitialModelSelection.value) {
+    updatePayload.credentials = { ...(updatePayload.credentials as Record<string, unknown> ?? props.account?.credentials), oauth_initial_selected_models: null }
+  }
   submitting.value = true
   try {
     let updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
@@ -6109,6 +6414,11 @@ const handleSubmit = async () => {
 	}
 
   const updatePayload: Record<string, unknown> = { ...form }
+  // An unchanged OAuth status is a settings save, not an instruction to undo
+  // an authentication failure or recovery that happened while the form was open.
+  if (props.account.platform === 'openai' && props.account.type === 'oauth' && form.status === props.account.status) {
+    delete updatePayload.status
+  }
   try {
     if (authStore.isObserver) {
       delete updatePayload.proxy_id
@@ -6179,6 +6489,10 @@ const handleSubmit = async () => {
             delete newCredentials.zhipu_project
           }
         }
+      }
+
+      if (props.account.platform === 'qwen') {
+        applyQwenCacheSettings(newCredentials, qwenSessionCache.value, qwenStrictAffinity.value)
       }
 
       // Handle API key
@@ -6651,6 +6965,16 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.anthropic_strip_claude_code_identity
       }
+      if (anthropicMimicClaudeCodeEnabled.value) {
+        newExtra.anthropic_mimic_claude_code = true
+      } else {
+        delete newExtra.anthropic_mimic_claude_code
+      }
+      if (anthropicMimicClaudeCodeEnabled.value && anthropicMimicClaudeCodeDeductTokens.value) {
+        newExtra.anthropic_mimic_claude_code_deduct_tokens = true
+      } else {
+        delete newExtra.anthropic_mimic_claude_code_deduct_tokens
+      }
       if (anthropicAPIKeyAuthScheme.value === 'authorization_bearer') {
         newExtra.anthropic_apikey_auth_scheme = 'authorization_bearer'
       } else {
@@ -6786,6 +7110,11 @@ const handleSubmit = async () => {
         delete newExtra.openai_long_context_billing_enabled
       } else {
         newExtra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
+      }
+      if (props.account.type === 'apikey' && openAIResponseTierBillingEnabled.value) {
+        newExtra.openai_response_tier_billing_enabled = true
+      } else {
+        delete newExtra.openai_response_tier_billing_enabled
       }
       if (openAICompactMode.value === 'auto') {
         delete newExtra.openai_compact_mode

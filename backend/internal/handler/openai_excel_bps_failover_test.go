@@ -141,10 +141,11 @@ func newExcelBPSFailoverTestContext(ctx context.Context, stream bool) (*gin.Cont
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = req
 	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		ID:      99,
-		GroupID: &groupID,
-		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI},
-		User:    &service.User{ID: 100},
+		ID:               99,
+		GroupID:          &groupID,
+		Group:            &service.Group{ID: groupID, Platform: service.PlatformOpenAI},
+		User:             &service.User{ID: 100},
+		AllowLongContext: true,
 	})
 	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100, Concurrency: 0})
 	return c, rec
@@ -258,4 +259,49 @@ func TestOpenAIResponsesExcelBPS429StopsWhenClientCancels(t *testing.T) {
 	require.Len(t, upstream.calls(), 1, "a gone client must not be replayed on another account")
 	require.Equal(t, statusClientClosedRequest, c.Writer.Status())
 	require.Zero(t, rec.Body.Len())
+}
+
+// Exercise the HTTP handler against the upstream rejection that triggered the
+// regression, including streaming and the production load-aware scheduler.
+func TestOpenAIResponsesExcelBPSServiceTierCompatibility(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tier := range []string{"", "priority", "auto", "fast", "default"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("tier=%s/stream=%t", tier, stream), func(t *testing.T) {
+				upstream := &excelBPSFailoverUpstream{}
+				upstream.answer = func(call int) *http.Response {
+					if gjson.GetBytes(upstream.bodies[call], "service_tier").Exists() {
+						return &http.Response{
+							StatusCode: http.StatusUnprocessableEntity,
+							Header:     http.Header{"Content-Type": {"application/json"}},
+							Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Invalid request body"}}`)),
+						}
+					}
+					return excelBPSCompleted()
+				}
+				handler := newExcelBPSFailoverTestHandler(t, upstream, true)
+				c, rec := newExcelBPSFailoverTestContext(context.Background(), stream)
+				body := fmt.Sprintf(excelBPSFailoverRequestBody, stream)
+				if tier != "" {
+					body = strings.TrimSuffix(body, "}") + fmt.Sprintf(`,"service_tier":%q}`, tier)
+				}
+				c.Request.Body = io.NopCloser(strings.NewReader(body))
+				c.Request.ContentLength = int64(len(body))
+
+				handler.Responses(c)
+
+				require.Equal(t, http.StatusOK, rec.Code)
+				require.Contains(t, rec.Body.String(), "done")
+				require.NotContains(t, rec.Body.String(), "response.failed")
+				if stream {
+					require.Contains(t, rec.Body.String(), "event: response.completed")
+				} else {
+					require.Equal(t, "completed", gjson.Get(rec.Body.String(), "status").String())
+				}
+				require.Len(t, upstream.calls(), 1, "compatibility input must succeed without account failover")
+				require.Equal(t, basispoints.ResponsesURL, upstream.urls[0])
+				require.False(t, gjson.GetBytes(upstream.bodies[0], "service_tier").Exists())
+			})
+		}
+	}
 }
