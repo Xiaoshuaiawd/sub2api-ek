@@ -35,6 +35,14 @@ const (
 	FieldWeeklyLimitUsd = "weekly_limit_usd"
 	// FieldMonthlyLimitUsd holds the string denoting the monthly_limit_usd field in the database.
 	FieldMonthlyLimitUsd = "monthly_limit_usd"
+	// FieldPendingPlanID holds the string denoting the pending_plan_id field in the database.
+	FieldPendingPlanID = "pending_plan_id"
+	// FieldPendingDailyLimitUsd holds the string denoting the pending_daily_limit_usd field in the database.
+	FieldPendingDailyLimitUsd = "pending_daily_limit_usd"
+	// FieldPendingWeeklyLimitUsd holds the string denoting the pending_weekly_limit_usd field in the database.
+	FieldPendingWeeklyLimitUsd = "pending_weekly_limit_usd"
+	// FieldPendingMonthlyLimitUsd holds the string denoting the pending_monthly_limit_usd field in the database.
+	FieldPendingMonthlyLimitUsd = "pending_monthly_limit_usd"
 	// FieldStartsAt holds the string denoting the starts_at field in the database.
 	FieldStartsAt = "starts_at"
 	// FieldExpiresAt holds the string denoting the expires_at field in the database.
@@ -112,6 +120,10 @@ var Columns = []string{
 	FieldDailyLimitUsd,
 	FieldWeeklyLimitUsd,
 	FieldMonthlyLimitUsd,
+	FieldPendingPlanID,
+	FieldPendingDailyLimitUsd,
+	FieldPendingWeeklyLimitUsd,
+	FieldPendingMonthlyLimitUsd,
 	FieldStartsAt,
 	FieldExpiresAt,
 	FieldStatus,
@@ -217,6 +229,26 @@ func ByWeeklyLimitUsd(opts ...sql.OrderTermOption) OrderOption {
 // ByMonthlyLimitUsd orders the results by the monthly_limit_usd field.
 func ByMonthlyLimitUsd(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldMonthlyLimitUsd, opts...).ToFunc()
+}
+
+// ByPendingPlanID orders the results by the pending_plan_id field.
+func ByPendingPlanID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPendingPlanID, opts...).ToFunc()
+}
+
+// ByPendingDailyLimitUsd orders the results by the pending_daily_limit_usd field.
+func ByPendingDailyLimitUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPendingDailyLimitUsd, opts...).ToFunc()
+}
+
+// ByPendingWeeklyLimitUsd orders the results by the pending_weekly_limit_usd field.
+func ByPendingWeeklyLimitUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPendingWeeklyLimitUsd, opts...).ToFunc()
+}
+
+// ByPendingMonthlyLimitUsd orders the results by the pending_monthly_limit_usd field.
+func ByPendingMonthlyLimitUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPendingMonthlyLimitUsd, opts...).ToFunc()
 }
 
 // ByStartsAt orders the results by the starts_at field.

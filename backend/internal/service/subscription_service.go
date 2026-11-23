@@ -2,14 +2,17 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand/v2"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -70,6 +73,8 @@ type SubscriptionService struct {
 	// L1 缓存：加速中间件热路径的订阅查询
 	subCacheL1     *ristretto.Cache
 	subCacheGroup  singleflight.Group
+	subCacheFillMu sync.Mutex
+	subCacheFills  map[string]*bool
 	subCacheTTL    time.Duration
 	subCacheJitter int // 抖动百分比
 
@@ -160,10 +165,7 @@ func (s *SubscriptionService) jitteredTTL(ttl time.Duration) time.Duration {
 
 // InvalidateSubCache 失效指定用户+分组的订阅 L1 缓存
 func (s *SubscriptionService) InvalidateSubCache(userID, groupID int64) {
-	if s.subCacheL1 == nil {
-		return
-	}
-	s.subCacheL1.Del(subCacheKey(userID, groupID))
+	s.invalidateSubCacheKey(subCacheKey(userID, groupID), false)
 }
 
 // InvalidateSubCacheSync 失效订阅 L1 缓存并等待 Ristretto 删除操作生效。
@@ -172,11 +174,21 @@ func (s *SubscriptionService) InvalidateSubCacheSync(userID, groupID int64) {
 }
 
 func (s *SubscriptionService) invalidateSubCacheKeySync(key string) {
+	s.invalidateSubCacheKey(key, true)
+}
+
+func (s *SubscriptionService) invalidateSubCacheKey(key string, wait bool) {
 	if s.subCacheL1 == nil {
 		return
 	}
+	s.subCacheFillMu.Lock()
+	defer s.subCacheFillMu.Unlock()
+	delete(s.subCacheFills, key)
+	s.subCacheGroup.Forget(key)
 	s.subCacheL1.Del(key)
-	s.subCacheL1.Wait()
+	if wait {
+		s.subCacheL1.Wait()
+	}
 }
 
 // StartSubCacheInvalidationSubscriber 启动跨实例订阅 L1 缓存失效订阅。
@@ -341,8 +353,20 @@ func (s *SubscriptionService) assignOrRenewPaidSubscription(
 	}
 
 	existingSub, err := s.userSubRepo.GetByUserIDAndGroupID(ctx, input.UserID, input.GroupID)
-	if err != nil {
-		existingSub = nil
+	if err != nil && !errors.Is(err, ErrSubscriptionNotFound) {
+		return nil, false, fmt.Errorf("load subscription for paid renewal: %w", err)
+	}
+	if input.PlanID != nil {
+		// Use the same precedence as billing across all purchased groups. An
+		// older primary row can otherwise be updated while a newer row still
+		// owns one of the purchased groups.
+		overlap, err := s.findOverlappingSubscription(ctx, input.UserID, input.GroupID, input.GroupIDs)
+		if err != nil {
+			return nil, false, err
+		}
+		if overlap != nil {
+			existingSub = overlap
+		}
 	}
 
 	validityDays := normalizeAssignValidityDays(input.ValidityDays)
@@ -356,6 +380,15 @@ func (s *SubscriptionService) assignOrRenewPaidSubscription(
 			return nil, false, err
 		}
 
+		// Paid orders carry the purchased plan snapshot: a customer who buys
+		// another plan must end up with that plan's entitlements, otherwise the
+		// old plan's limits stay in place while the term/usage gets renewed.
+		if input.PlanID != nil {
+			if switchErr := s.applyPurchasedPlanSwitch(ctx, existingSub.ID, existingSub, input, mode); switchErr != nil {
+				return nil, false, switchErr
+			}
+		}
+
 		s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, deferCacheInvalidation)
 		sub, getErr := s.userSubRepo.GetByID(ctx, existingSub.ID)
 		return sub, true, getErr
@@ -367,6 +400,104 @@ func (s *SubscriptionService) assignOrRenewPaidSubscription(
 	}
 	s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, deferCacheInvalidation)
 	return sub, false, nil
+}
+
+// findOverlappingSubscription returns an active subscription that already grants
+// access to any of the purchased groups, so a paid plan whose group set overlaps
+// an existing subscription is merged into it rather than duplicated.
+// Lookup failures are returned instead of swallowed: falling back to "no
+// subscription" on a transient error would create a duplicate row, which is
+// exactly what this path exists to prevent.
+func (s *SubscriptionService) findOverlappingSubscription(ctx context.Context, userID, primaryGroupID int64, groupIDs []int64) (*UserSubscription, error) {
+	if userID <= 0 {
+		return nil, nil
+	}
+	candidates := make([]int64, 0, len(groupIDs)+1)
+	candidates = append(candidates, primaryGroupID)
+	candidates = append(candidates, groupIDs...)
+	activeSubs, err := s.userSubRepo.ListActiveByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list active subscriptions for plan switch: %w", err)
+	}
+	var best *UserSubscription
+	for i := range activeSubs {
+		candidate := &activeSubs[i]
+		for _, groupID := range candidates {
+			if groupID > 0 && candidate.CanUseGroup(groupID) {
+				if best == nil || subscriptionBillingPrecedes(candidate, best) {
+					best = candidate
+				}
+				break
+			}
+		}
+	}
+	return best, nil
+}
+
+// applyPurchasedPlanSwitch stores the purchased plan on an existing subscription
+// inside the caller's transaction (or its own when called standalone).
+//
+// 口径（issue #6）：降级时当前周期保留旧额度，新套餐从下个周期起生效。
+// 因此当续期方式是 extend、且这次购买把某个窗口的额度收紧了，那个窗口的旧额度
+// 继续留在当前周期（已用量超过新额度的用户付完钱当窗仍然可用），新额度记到
+// pending_*，由该窗口下一次滚动落地。restart 会重开窗口并清零用量，或是原期限
+// 已过期、期限整体重算，这两种情况都不需要延后，直接生效。
+func (s *SubscriptionService) applyPurchasedPlanSwitch(ctx context.Context, subscriptionID int64, previous *UserSubscription, input *AssignSubscriptionInput, mode SubscriptionRenewalMode) error {
+	return s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
+		current, err := s.userSubRepo.GetByIDForUpdate(txCtx, subscriptionID)
+		if err != nil {
+			return fmt.Errorf("lock subscription for plan switch: %w", err)
+		}
+		now := time.Now()
+		if s.now != nil {
+			now = s.now()
+		}
+		previousActive := previous != nil && previous.Status == SubscriptionStatusActive && !now.Before(previous.StartsAt) && previous.ExpiresAt.After(now)
+
+		// 只有仍在运行的期限（extend 合并进旧期限）才谈得上「当前周期」；
+		// 旧额度必须在被购买套餐覆盖之前取出来。
+		deferToNextWindow := mode == SubscriptionRenewalModeExtend && previousActive
+		var oldDaily, oldWeekly, oldMonthly *float64
+		if deferToNextWindow {
+			// Complete any window that already ended before recording this
+			// purchase. Otherwise its first request would apply the new pending
+			// limit to the window that was already current at purchase time.
+			if _, err := s.advanceSubscriptionWindows(txCtx, current, now); err != nil {
+				return fmt.Errorf("advance windows before plan switch: %w", err)
+			}
+			oldDaily, oldWeekly, oldMonthly, err = s.currentWindowPlanLimits(txCtx, current)
+			if err != nil {
+				return err
+			}
+		}
+
+		if err := applySwitchedPlanBundle(current, previous, previousActive, input); err != nil {
+			return fmt.Errorf("apply purchased plan: %w", err)
+		}
+		if !deferToNextWindow || !deferTightenedPlanLimits(current, input, oldDaily, oldWeekly, oldMonthly) {
+			// 立即生效的路径：不要留下上一次降级遗留的待生效值。
+			current.ClearPendingPlanLimits()
+		}
+		if err := s.userSubRepo.Update(txCtx, current); err != nil {
+			return fmt.Errorf("apply purchased plan: %w", err)
+		}
+		return nil
+	})
+}
+
+// Legacy subscriptions without a plan snapshot read their limits from the primary group.
+func (s *SubscriptionService) currentWindowPlanLimits(ctx context.Context, sub *UserSubscription) (daily, weekly, monthly *float64, err error) {
+	group := sub.Group
+	if sub.PlanID == nil && group == nil {
+		group, err = s.groupRepo.GetByID(ctx, sub.GroupID)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("load current subscription group limits: %w", err)
+		}
+		if group == nil {
+			return nil, nil, nil, ErrSubscriptionNotFound
+		}
+	}
+	return sub.DailyLimit(group), sub.WeeklyLimit(group), sub.MonthlyLimit(group), nil
 }
 
 func (s *SubscriptionService) maybeInvalidateAssignmentCaches(userID, groupID int64, deferred bool) {
@@ -505,6 +636,9 @@ func (s *SubscriptionService) withSubscriptionUpdateTx(ctx context.Context, fn f
 
 func renewedSubscriptionTerm(existingSub *UserSubscription, notes string, startsAt, expiresAt time.Time) *UserSubscription {
 	renewed := *existingSub
+	// 期限重开意味着用量清零、窗口从新起点计时，这正是「下个周期」本身：
+	// 待生效套餐的额度可以直接落地，不必再等一次窗口滚动。
+	renewed.ApplyAllPendingLimits()
 	// 日窗口按日历日对齐（0 点刷新）；周/月窗口按订阅期限对齐（锚点为新周期起点）。
 	dailyWindowStart := timezone.StartOfDay(startsAt)
 	periodicWindowStart := startsAt
@@ -878,15 +1012,29 @@ func (s *SubscriptionService) GetActiveSubscription(ctx context.Context, userID,
 
 	// singleflight 防止并发击穿
 	value, err, _ := s.subCacheGroup.Do(key, func() (any, error) {
+		if s.subCacheL1 == nil {
+			return s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
+		}
+		// Invalidation detaches an in-flight read. It can finish for callers
+		// already waiting, but it cannot repopulate the cache with the old row.
+		fill := new(bool)
+		s.subCacheFillMu.Lock()
+		if s.subCacheFills == nil {
+			s.subCacheFills = make(map[string]*bool)
+		}
+		s.subCacheFills[key] = fill
+		s.subCacheFillMu.Unlock()
+
 		sub, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
-		if err != nil {
-			return nil, err // 直接透传 repo 已翻译的错误（NotFound → ErrSubscriptionNotFound，其他错误原样返回）
+		s.subCacheFillMu.Lock()
+		if s.subCacheFills[key] == fill {
+			delete(s.subCacheFills, key)
+			if err == nil && sub != nil {
+				_ = s.subCacheL1.SetWithTTL(key, sub, 1, s.jitteredTTL(s.subCacheTTL))
+			}
 		}
-		// 写入 L1 缓存
-		if s.subCacheL1 != nil {
-			_ = s.subCacheL1.SetWithTTL(key, sub, 1, s.jitteredTTL(s.subCacheTTL))
-		}
-		return sub, nil
+		s.subCacheFillMu.Unlock()
+		return sub, err
 	})
 	if err != nil {
 		return nil, err
@@ -908,6 +1056,7 @@ func (s *SubscriptionService) ListUserSubscriptions(ctx context.Context, userID 
 	}
 	normalizeExpiredWindows(subs)
 	normalizeSubscriptionStatus(subs)
+	s.loadPendingPlanNames(ctx, subs)
 	return subs, nil
 }
 
@@ -918,7 +1067,43 @@ func (s *SubscriptionService) ListActiveUserSubscriptions(ctx context.Context, u
 		return nil, err
 	}
 	normalizeExpiredWindows(subs)
+	s.loadPendingPlanNames(ctx, subs)
 	return subs, nil
+}
+
+// Pending plan names are display metadata. Keep the limits visible if a
+// historical plan was deleted or its name cannot be loaded.
+func (s *SubscriptionService) loadPendingPlanNames(ctx context.Context, subs []UserSubscription) {
+	if s.entClient == nil {
+		return
+	}
+	ids := make(map[int64]string)
+	for i := range subs {
+		if id := subs[i].PendingPlanID; id != nil {
+			ids[*id] = ""
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	keys := make([]int64, 0, len(ids))
+	for id := range ids {
+		keys = append(keys, id)
+	}
+	plans, err := s.entClient.SubscriptionPlan.Query().Where(subscriptionplan.IDIn(keys...)).
+		Select(subscriptionplan.FieldID, subscriptionplan.FieldName).All(ctx)
+	if err != nil {
+		log.Printf("Warning: failed to load pending subscription plan names: %v", err)
+		return
+	}
+	for _, plan := range plans {
+		ids[plan.ID] = plan.Name
+	}
+	for i := range subs {
+		if id := subs[i].PendingPlanID; id != nil {
+			subs[i].PendingPlanName = ids[*id]
+		}
+	}
 }
 
 // ListGroupSubscriptions 获取分组的所有订阅
@@ -954,6 +1139,7 @@ func normalizeExpiredWindows(subs []UserSubscription) {
 func normalizeExpiredWindowsAt(subs []UserSubscription, now time.Time) {
 	for i := range subs {
 		sub := &subs[i]
+		sub.projectRolledPendingLimits(now)
 		// 日窗口过期：清零展示数据
 		if sub.canAutomaticallyResetDailyAt(now) {
 			sub.DailyWindowStart = nil
@@ -1029,52 +1215,43 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 	return s.userSubRepo.GetByID(ctx, subscriptionID)
 }
 
-// CheckAndResetWindows 检查并重置过期的窗口
+// CheckAndResetWindows advances expired windows and invalidates the bundle.
 func (s *SubscriptionService) CheckAndResetWindows(ctx context.Context, sub *UserSubscription) error {
-	now := s.now()
-	needsInvalidateCache := false
-
-	// 日窗口重置（每天 0 点刷新，按日历日对齐）
-	if windowStart, ok := sub.automaticDailyWindowStartAt(now); ok {
-		expectedWindowStart := sub.DailyWindowStart
-		if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, expectedWindowStart, windowStart); err != nil {
-			return err
-		}
-		sub.DailyWindowStart = &windowStart
-		sub.DailyUsageUSD = 0
-		needsInvalidateCache = true
+	changed, err := s.advanceSubscriptionWindows(ctx, sub, s.now())
+	if changed {
+		return errors.Join(err, s.invalidateBundleCaches(sub))
 	}
+	return err
+}
 
-	// 周窗口重置（7天）
-	if windowStart, ok := sub.automaticWindowStartAt(sub.WeeklyWindowStart, 7*24*time.Hour, now); ok {
-		expectedWindowStart := sub.WeeklyWindowStart
-		if err := s.userSubRepo.ResetWeeklyUsage(ctx, sub.ID, expectedWindowStart, windowStart); err != nil {
-			return err
+func (s *SubscriptionService) advanceSubscriptionWindows(ctx context.Context, sub *UserSubscription, now time.Time) (bool, error) {
+	daily, weekly, monthly := sub.WindowResetStartsAt(now)
+	changed := false
+	if daily != nil {
+		if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, sub.DailyWindowStart, *daily); err != nil {
+			return changed, err
 		}
-		sub.WeeklyWindowStart = &windowStart
-		sub.WeeklyUsageUSD = 0
-		needsInvalidateCache = true
+		sub.DailyWindowStart, sub.DailyUsageUSD = daily, 0
+		sub.applyWindowPendingLimit(SubscriptionQuotaWindowDaily)
+		changed = true
 	}
-
-	// 月窗口重置（30天）
-	if windowStart, ok := sub.automaticWindowStartAt(sub.MonthlyWindowStart, 30*24*time.Hour, now); ok {
-		expectedWindowStart := sub.MonthlyWindowStart
-		if err := s.userSubRepo.ResetMonthlyUsage(ctx, sub.ID, expectedWindowStart, windowStart); err != nil {
-			return err
+	if weekly != nil {
+		if err := s.userSubRepo.ResetWeeklyUsage(ctx, sub.ID, sub.WeeklyWindowStart, *weekly); err != nil {
+			return changed, err
 		}
-		sub.MonthlyWindowStart = &windowStart
-		sub.MonthlyUsageUSD = 0
-		needsInvalidateCache = true
+		sub.WeeklyWindowStart, sub.WeeklyUsageUSD = weekly, 0
+		sub.applyWindowPendingLimit(SubscriptionQuotaWindowWeekly)
+		changed = true
 	}
-
-	// 如果有窗口被重置，失效缓存以保持一致性
-	if needsInvalidateCache {
-		if err := s.invalidateBundleCaches(sub); err != nil {
-			return err
+	if monthly != nil {
+		if err := s.userSubRepo.ResetMonthlyUsage(ctx, sub.ID, sub.MonthlyWindowStart, *monthly); err != nil {
+			return changed, err
 		}
+		sub.MonthlyWindowStart, sub.MonthlyUsageUSD = monthly, 0
+		sub.applyWindowPendingLimit(SubscriptionQuotaWindowMonthly)
+		changed = true
 	}
-
-	return nil
+	return changed, nil
 }
 
 // EnsureWindowMaintenance advances expired usage windows before a request is
@@ -1264,6 +1441,9 @@ func (s *SubscriptionService) GetSubscriptionProgress(ctx context.Context, subsc
 
 // calculateProgress 根据已加载的订阅和分组数据计算使用进度（纯内存计算，无 DB 查询）
 func (s *SubscriptionService) calculateProgress(sub *UserSubscription, group *Group) *SubscriptionProgress {
+	snapshot := *sub
+	snapshot.projectRolledPendingLimits(time.Now())
+	sub = &snapshot
 	progress := &SubscriptionProgress{
 		ID:            sub.ID,
 		GroupName:     group.Name,

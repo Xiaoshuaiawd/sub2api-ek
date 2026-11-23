@@ -508,24 +508,21 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 		return
 	}
 
-	if result != nil && result.SubscriptionWindowReset && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil && deps.billingCacheService != nil {
-		if err := deps.billingCacheService.InvalidateSubscription(ctx, p.User.ID, *p.APIKey.GroupID); err != nil {
-			logger.LegacyPrintf("service.gateway", "Warning: invalidate reset subscription cache failed user=%d group=%d: %v", p.User.ID, *p.APIKey.GroupID, err)
+	windowReset := result != nil && result.SubscriptionWindowReset
+	if (windowReset || (p.IsSubscriptionBill && p.Cost.ActualCost > 0)) &&
+		p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil && deps.billingCacheService != nil {
+		groupIDs := []int64{*p.APIKey.GroupID}
+		if result != nil {
+			groupIDs = append(groupIDs, result.SubscriptionCacheGroupIDs...)
+		}
+		if p.Subscription != nil {
+			groupIDs = append(groupIDs, p.Subscription.AccessibleGroupIDs()...)
+		}
+		if err := deps.billingCacheService.invalidateSubscriptionGroupCaches(ctx, p.User.ID, groupIDs, windowReset); err != nil {
+			logger.LegacyPrintf("service.gateway", "Warning: invalidate subscription cache failed user=%d group=%d: %v", p.User.ID, *p.APIKey.GroupID, err)
 		}
 	}
-	if p.IsSubscriptionBill {
-		if p.Cost.ActualCost > 0 && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil && deps.billingCacheService != nil {
-			if p.Subscription != nil && len(p.Subscription.AccessibleGroupIDs()) > 1 {
-				for _, groupID := range p.Subscription.AccessibleGroupIDs() {
-					if err := deps.billingCacheService.InvalidateSubscription(ctx, p.User.ID, groupID); err != nil {
-						logger.LegacyPrintf("service.gateway", "Warning: invalidate shared subscription cache failed user=%d group=%d: %v", p.User.ID, groupID, err)
-					}
-				}
-			} else if result == nil || !result.SubscriptionWindowReset {
-				deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, p.Cost.ActualCost)
-			}
-		}
-	} else if p.Cost.ActualCost > 0 && p.User != nil {
+	if !p.IsSubscriptionBill && p.Cost.ActualCost > 0 && p.User != nil {
 		syncBalanceCacheAfterDeduction(ctx, p, deps, result)
 	}
 

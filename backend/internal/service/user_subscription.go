@@ -18,6 +18,15 @@ type UserSubscription struct {
 	WeeklyLimitUSD  *float64
 	MonthlyLimitUSD *float64
 
+	// Pending* 保存「已付钱、但要等窗口滚动才生效」的套餐额度（降级口径，issue #6）。
+	// 三个窗口各自独立落地：日额度下一次日窗口滚动生效，周/月同理。
+	// 全部为 nil 时表示没有待生效切换，行为与没有这些字段时一致。
+	PendingPlanID          *int64
+	PendingPlanName        string
+	PendingDailyLimitUSD   *float64
+	PendingWeeklyLimitUSD  *float64
+	PendingMonthlyLimitUSD *float64
+
 	StartsAt  time.Time
 	ExpiresAt time.Time
 	Status    string
@@ -253,4 +262,122 @@ func (s *UserSubscription) CheckAllLimits(group *Group, additionalCost float64) 
 	weekly = s.CheckWeeklyLimit(group, additionalCost)
 	monthly = s.CheckMonthlyLimit(group, additionalCost)
 	return
+}
+
+// SubscriptionQuotaWindow 标识额度的三个窗口。降级套餐的收紧额度按窗口分别落地：
+// 日额度等下一次日窗口滚动，周/月额度等各自的窗口滚动。
+type SubscriptionQuotaWindow string
+
+const (
+	SubscriptionQuotaWindowDaily   SubscriptionQuotaWindow = "daily"
+	SubscriptionQuotaWindowWeekly  SubscriptionQuotaWindow = "weekly"
+	SubscriptionQuotaWindowMonthly SubscriptionQuotaWindow = "monthly"
+)
+
+// PendingLimit 返回该窗口待生效的额度。nil 表示没有待生效切换（或本来就不限额）。
+func (s *UserSubscription) PendingLimit(window SubscriptionQuotaWindow) *float64 {
+	if s == nil {
+		return nil
+	}
+	switch window {
+	case SubscriptionQuotaWindowDaily:
+		return s.PendingDailyLimitUSD
+	case SubscriptionQuotaWindowWeekly:
+		return s.PendingWeeklyLimitUSD
+	case SubscriptionQuotaWindowMonthly:
+		return s.PendingMonthlyLimitUSD
+	default:
+		return nil
+	}
+}
+
+// HasPendingPlanLimit 表示订阅上还有窗口在等下一个周期才切换到新套餐额度。
+func (s *UserSubscription) HasPendingPlanLimit() bool {
+	if s == nil {
+		return false
+	}
+	return s.PendingDailyLimitUSD != nil || s.PendingWeeklyLimitUSD != nil || s.PendingMonthlyLimitUSD != nil
+}
+
+// ApplyPendingLimit 把该窗口的待生效额度写进当前生效额度并清空该项 pending。
+func (s *UserSubscription) ApplyPendingLimit(window SubscriptionQuotaWindow, limit *float64) {
+	if s == nil {
+		return
+	}
+	switch window {
+	case SubscriptionQuotaWindowDaily:
+		s.DailyLimitUSD = limit
+		s.PendingDailyLimitUSD = nil
+	case SubscriptionQuotaWindowWeekly:
+		s.WeeklyLimitUSD = limit
+		s.PendingWeeklyLimitUSD = nil
+	case SubscriptionQuotaWindowMonthly:
+		s.MonthlyLimitUSD = limit
+		s.PendingMonthlyLimitUSD = nil
+	}
+}
+
+// applyWindowPendingLimit updates an in-memory snapshot after the window advances.
+func (s *UserSubscription) applyWindowPendingLimit(window SubscriptionQuotaWindow) {
+	if limit := s.PendingLimit(window); limit != nil {
+		s.ApplyPendingLimit(window, limit)
+		s.ClearPendingPlanIDIfSettled()
+	}
+}
+
+// projectRolledPendingLimits lets read-only views show the same new limits
+// that the gateway would apply when it first uses an already-rolled window.
+func (s *UserSubscription) projectRolledPendingLimits(now time.Time) {
+	if !s.HasPendingPlanLimit() {
+		return
+	}
+	daily, weekly, monthly := s.WindowResetStartsAt(now)
+	if daily != nil && s.PendingDailyLimitUSD != nil {
+		s.DailyWindowStart, s.DailyUsageUSD = daily, 0
+		s.applyWindowPendingLimit(SubscriptionQuotaWindowDaily)
+	}
+	if weekly != nil && s.PendingWeeklyLimitUSD != nil {
+		s.WeeklyWindowStart, s.WeeklyUsageUSD = weekly, 0
+		s.applyWindowPendingLimit(SubscriptionQuotaWindowWeekly)
+	}
+	if monthly != nil && s.PendingMonthlyLimitUSD != nil {
+		s.MonthlyWindowStart, s.MonthlyUsageUSD = monthly, 0
+		s.applyWindowPendingLimit(SubscriptionQuotaWindowMonthly)
+	}
+}
+
+// ApplyAllPendingLimits 把所有待生效额度立刻落地（期限重开、用量清零时使用）。
+func (s *UserSubscription) ApplyAllPendingLimits() {
+	if s == nil {
+		return
+	}
+	for _, window := range []SubscriptionQuotaWindow{
+		SubscriptionQuotaWindowDaily, SubscriptionQuotaWindowWeekly, SubscriptionQuotaWindowMonthly,
+	} {
+		if limit := s.PendingLimit(window); limit != nil {
+			s.ApplyPendingLimit(window, limit)
+		}
+	}
+	s.ClearPendingPlanIDIfSettled()
+}
+
+// ClearPendingPlanLimits 丢弃所有待生效切换（换套餐立即生效时使用）。
+func (s *UserSubscription) ClearPendingPlanLimits() {
+	if s == nil {
+		return
+	}
+	s.PendingPlanID = nil
+	s.PendingPlanName = ""
+	s.PendingDailyLimitUSD = nil
+	s.PendingWeeklyLimitUSD = nil
+	s.PendingMonthlyLimitUSD = nil
+}
+
+// ClearPendingPlanIDIfSettled 在三个窗口都不再有待生效额度时清掉 pending_plan_id。
+func (s *UserSubscription) ClearPendingPlanIDIfSettled() {
+	if s == nil || s.HasPendingPlanLimit() {
+		return
+	}
+	s.PendingPlanID = nil
+	s.PendingPlanName = ""
 }

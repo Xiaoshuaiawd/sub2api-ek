@@ -65,13 +65,32 @@ func invalidateDurableUsageBilling(ctx context.Context, recovered *UsageBillingR
 	e := &recovered.Event
 	var err error
 	if cache != nil {
-		if e.Command.BalanceCost > 0 {
+		balanceCharged := e.Command.BalanceCost > 0
+		subscriptionCharged := e.Command.SubscriptionCost > 0
+		keyRateCharged := e.Command.APIKeyRateLimitCost > 0
+		if e.Command.HybridGroupID > 0 {
+			// The staged command is the preflight quote on recovery. Use the
+			// committed source and receipts to replay the cache effects.
+			balanceCharged = recovered.Result.NewBalance != nil
+			subscriptionCharged = recovered.Result.BillingType == BillingTypeSubscription &&
+				recovered.Result.SubscriptionID != nil &&
+				(e.Command.SubscriptionCost > 0 || e.Command.HybridSubscriptionCostUSD > 0)
+			if e.Command.HybridSplitPricing {
+				keyRateCharged = e.Command.HybridAPIKeyRateLimit && (subscriptionCharged || balanceCharged)
+			}
+		}
+		if balanceCharged {
 			err = errors.Join(err, cache.InvalidateUserBalance(ctx, e.Command.UserID))
 		}
-		if e.Command.SubscriptionCost > 0 && e.Usage.GroupID != nil {
-			err = errors.Join(err, cache.InvalidateSubscription(ctx, e.Command.UserID, *e.Usage.GroupID))
+		if subscriptionCharged || recovered.Result.SubscriptionWindowReset {
+			groups := recovered.Result.SubscriptionCacheGroupIDs
+			if len(groups) == 0 && e.Usage.GroupID != nil {
+				// Receipts from before bundle targets were persisted.
+				groups = []int64{*e.Usage.GroupID}
+			}
+			err = errors.Join(err, cache.invalidateSubscriptionGroupCaches(ctx, e.Command.UserID, groups, recovered.Result.SubscriptionWindowReset))
 		}
-		if e.Command.APIKeyRateLimitCost > 0 {
+		if keyRateCharged {
 			err = errors.Join(err, cache.InvalidateAPIKeyRateLimit(ctx, e.Command.APIKeyID))
 		}
 		if e.Command.PlatformQuotaCost > 0 {

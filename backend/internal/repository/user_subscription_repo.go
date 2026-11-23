@@ -4,6 +4,7 @@ import (
 	"context"
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqljson"
+	"fmt"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -44,6 +45,10 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 		SetNillableDailyLimitUsd(sub.DailyLimitUSD).
 		SetNillableWeeklyLimitUsd(sub.WeeklyLimitUSD).
 		SetNillableMonthlyLimitUsd(sub.MonthlyLimitUSD).
+		SetNillablePendingPlanID(sub.PendingPlanID).
+		SetNillablePendingDailyLimitUsd(sub.PendingDailyLimitUSD).
+		SetNillablePendingWeeklyLimitUsd(sub.PendingWeeklyLimitUSD).
+		SetNillablePendingMonthlyLimitUsd(sub.PendingMonthlyLimitUSD).
 		SetExpiresAt(sub.ExpiresAt).
 		SetNillableDailyWindowStart(sub.DailyWindowStart).
 		SetNillableWeeklyWindowStart(sub.WeeklyWindowStart).
@@ -129,20 +134,35 @@ func (r *userSubscriptionRepository) GetByUserIDAndGroupID(ctx context.Context, 
 
 func (r *userSubscriptionRepository) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 	client := clientFromContext(ctx, r.client)
-	m, err := client.UserSubscription.Query().
+	now := time.Now()
+	rows, err := client.UserSubscription.Query().
 		Where(
 			usersubscription.UserIDEQ(userID),
 			subscriptionGroupPredicate(groupID),
 			usersubscription.StatusEQ(service.SubscriptionStatusActive),
-			usersubscription.ExpiresAtGT(time.Now()),
+			usersubscription.StartsAtLTE(now),
+			usersubscription.ExpiresAtGT(now),
 		).
 		WithGroup().
 		Order(usersubscription.ByStartsAt(sql.OrderDesc()), usersubscription.ByID(sql.OrderDesc())).
-		First(ctx)
+		Limit(service.ActiveSubscriptionCandidateLimit).
+		All(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 	}
-	return userSubscriptionEntityToService(m), nil
+	// A purchased plan merges group sets, so more than one active subscription can
+	// reach the same group. Billing must resolve that the same way every time:
+	// newest starts_at first, highest id on a tie (re-applied in the selector, and
+	// reported through a warn log when it happens).
+	candidates := make([]service.UserSubscription, 0, len(rows))
+	for _, row := range rows {
+		candidates = append(candidates, *userSubscriptionEntityToService(row))
+	}
+	selected, ok := service.SelectActiveSubscriptionCandidate(userID, groupID, candidates)
+	if !ok {
+		return nil, service.ErrSubscriptionNotFound
+	}
+	return selected, nil
 }
 
 func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.UserSubscription) error {
@@ -186,6 +206,26 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 		builder.SetMonthlyLimitUsd(*sub.MonthlyLimitUSD)
 	} else {
 		builder.ClearMonthlyLimitUsd()
+	}
+	if sub.PendingPlanID != nil {
+		builder.SetPendingPlanID(*sub.PendingPlanID)
+	} else {
+		builder.ClearPendingPlanID()
+	}
+	if sub.PendingDailyLimitUSD != nil {
+		builder.SetPendingDailyLimitUsd(*sub.PendingDailyLimitUSD)
+	} else {
+		builder.ClearPendingDailyLimitUsd()
+	}
+	if sub.PendingWeeklyLimitUSD != nil {
+		builder.SetPendingWeeklyLimitUsd(*sub.PendingWeeklyLimitUSD)
+	} else {
+		builder.ClearPendingWeeklyLimitUsd()
+	}
+	if sub.PendingMonthlyLimitUSD != nil {
+		builder.SetPendingMonthlyLimitUsd(*sub.PendingMonthlyLimitUSD)
+	} else {
+		builder.ClearPendingMonthlyLimitUsd()
 	}
 
 	updated, err := builder.Save(ctx)
@@ -232,11 +272,13 @@ func (r *userSubscriptionRepository) ListByUserID(ctx context.Context, userID in
 
 func (r *userSubscriptionRepository) ListActiveByUserID(ctx context.Context, userID int64) ([]service.UserSubscription, error) {
 	client := clientFromContext(ctx, r.client)
+	now := time.Now()
 	subs, err := client.UserSubscription.Query().
 		Where(
 			usersubscription.UserIDEQ(userID),
 			usersubscription.StatusEQ(service.SubscriptionStatusActive),
-			usersubscription.ExpiresAtGT(time.Now()),
+			usersubscription.StartsAtLTE(now),
+			usersubscription.ExpiresAtGT(now),
 		).
 		WithGroup().
 		Order(dbent.Desc(usersubscription.FieldCreatedAt)).
@@ -437,48 +479,40 @@ func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id i
 }
 
 func (r *userSubscriptionRepository) ResetDailyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.DailyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.DailyWindowStartEQ(*expectedWindowStart))
-	}
-	n, err := query.
-		SetDailyUsageUsd(0).
-		SetDailyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	return r.resetWindow(ctx, id, expectedWindowStart, newWindowStart, "daily", "weekly", "monthly")
 }
 
 func (r *userSubscriptionRepository) ResetWeeklyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
-	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.WeeklyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.WeeklyWindowStartEQ(*expectedWindowStart))
-	}
-	n, err := query.
-		SetWeeklyUsageUsd(0).
-		SetWeeklyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	return r.resetWindow(ctx, id, expectedWindowStart, newWindowStart, "weekly", "daily", "monthly")
 }
 
 func (r *userSubscriptionRepository) ResetMonthlyUsage(ctx context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
+	return r.resetWindow(ctx, id, expectedWindowStart, newWindowStart, "monthly", "daily", "weekly")
+}
+
+// The window CAS and quota transition use the same row update. Read the pending
+// value from the row, since the caller may have loaded it before a purchase.
+func (r *userSubscriptionRepository) resetWindow(ctx context.Context, id int64, expectedStart *time.Time, newStart time.Time, window, otherWindow, remainingWindow string) error {
+	query := fmt.Sprintf(`
+		UPDATE user_subscriptions
+		SET %[1]s_usage_usd = 0,
+		    %[1]s_window_start = $1,
+		    %[1]s_limit_usd = COALESCE(pending_%[1]s_limit_usd, %[1]s_limit_usd),
+		    pending_%[1]s_limit_usd = NULL,
+		    pending_plan_id = CASE
+		        WHEN pending_%[2]s_limit_usd IS NULL AND pending_%[3]s_limit_usd IS NULL THEN NULL
+		        ELSE pending_plan_id END,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2 AND deleted_at IS NULL
+		  AND %[1]s_window_start IS NOT DISTINCT FROM $3
+	`, window, otherWindow, remainingWindow)
 	client := clientFromContext(ctx, r.client)
-	query := client.UserSubscription.Update().Where(usersubscription.IDEQ(id))
-	if expectedWindowStart == nil {
-		query = query.Where(usersubscription.MonthlyWindowStartIsNil())
-	} else {
-		query = query.Where(usersubscription.MonthlyWindowStartEQ(*expectedWindowStart))
+	result, err := client.ExecContext(ctx, query, newStart, id, expectedStart)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
 	}
-	n, err := query.
-		SetMonthlyUsageUsd(0).
-		SetMonthlyWindowStart(newWindowStart).
-		Save(ctx)
-	return r.translateConditionalWindowReset(ctx, client, id, n, err)
+	n, err := result.RowsAffected()
+	return r.translateConditionalWindowReset(ctx, client, id, int(n), err)
 }
 
 func (r *userSubscriptionRepository) translateConditionalWindowReset(ctx context.Context, client *dbent.Client, id int64, affected int, err error) error {
@@ -677,29 +711,33 @@ func userSubscriptionEntityToServiceWithStatusMapping(m *dbent.UserSubscription,
 		status = service.SubscriptionStatusRevoked
 	}
 	out := &service.UserSubscription{
-		ID:                 m.ID,
-		UserID:             m.UserID,
-		GroupID:            m.GroupID,
-		GroupIDs:           m.GroupIds,
-		PlanID:             m.PlanID,
-		DailyLimitUSD:      m.DailyLimitUsd,
-		WeeklyLimitUSD:     m.WeeklyLimitUsd,
-		MonthlyLimitUSD:    m.MonthlyLimitUsd,
-		StartsAt:           m.StartsAt,
-		ExpiresAt:          m.ExpiresAt,
-		Status:             status,
-		DailyWindowStart:   m.DailyWindowStart,
-		WeeklyWindowStart:  m.WeeklyWindowStart,
-		MonthlyWindowStart: m.MonthlyWindowStart,
-		DailyUsageUSD:      m.DailyUsageUsd,
-		WeeklyUsageUSD:     m.WeeklyUsageUsd,
-		MonthlyUsageUSD:    m.MonthlyUsageUsd,
-		AssignedBy:         m.AssignedBy,
-		AssignedAt:         m.AssignedAt,
-		Notes:              derefString(m.Notes),
-		CreatedAt:          m.CreatedAt,
-		UpdatedAt:          m.UpdatedAt,
-		DeletedAt:          m.DeletedAt,
+		ID:                     m.ID,
+		UserID:                 m.UserID,
+		GroupID:                m.GroupID,
+		GroupIDs:               m.GroupIds,
+		PlanID:                 m.PlanID,
+		DailyLimitUSD:          m.DailyLimitUsd,
+		WeeklyLimitUSD:         m.WeeklyLimitUsd,
+		MonthlyLimitUSD:        m.MonthlyLimitUsd,
+		PendingPlanID:          m.PendingPlanID,
+		PendingDailyLimitUSD:   m.PendingDailyLimitUsd,
+		PendingWeeklyLimitUSD:  m.PendingWeeklyLimitUsd,
+		PendingMonthlyLimitUSD: m.PendingMonthlyLimitUsd,
+		StartsAt:               m.StartsAt,
+		ExpiresAt:              m.ExpiresAt,
+		Status:                 status,
+		DailyWindowStart:       m.DailyWindowStart,
+		WeeklyWindowStart:      m.WeeklyWindowStart,
+		MonthlyWindowStart:     m.MonthlyWindowStart,
+		DailyUsageUSD:          m.DailyUsageUsd,
+		WeeklyUsageUSD:         m.WeeklyUsageUsd,
+		MonthlyUsageUSD:        m.MonthlyUsageUsd,
+		AssignedBy:             m.AssignedBy,
+		AssignedAt:             m.AssignedAt,
+		Notes:                  derefString(m.Notes),
+		CreatedAt:              m.CreatedAt,
+		UpdatedAt:              m.UpdatedAt,
+		DeletedAt:              m.DeletedAt,
 	}
 	if m.Edges.User != nil {
 		out.User = userEntityToService(m.Edges.User)

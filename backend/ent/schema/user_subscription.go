@@ -43,6 +43,15 @@ func (UserSubscription) Fields() []ent.Field {
 		field.Float("weekly_limit_usd").SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).Optional().Nillable(),
 		field.Float("monthly_limit_usd").SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).Optional().Nillable(),
 
+		// pending_* 保存「已付钱但按口径要等下个周期才生效」的套餐额度快照。
+		// 降级（额度收紧）在 extend 续期下不立刻收紧当前窗口，否则已用量超过新额度
+		// 的用户付完钱当窗就不可用；这些值由各自窗口的下一次滚动负责落地。
+		// 全部为 NULL 时行为与加列前完全一致。
+		field.Int64("pending_plan_id").Optional().Nillable(),
+		field.Float("pending_daily_limit_usd").SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).Optional().Nillable(),
+		field.Float("pending_weekly_limit_usd").SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).Optional().Nillable(),
+		field.Float("pending_monthly_limit_usd").SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).Optional().Nillable(),
+
 		field.Time("starts_at").
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
 		field.Time("expires_at").

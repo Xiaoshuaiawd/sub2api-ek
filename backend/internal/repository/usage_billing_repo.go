@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -237,6 +238,7 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 }
 
 func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand, result *service.UsageBillingApplyResult) error {
+	selectedSubscriptionID := cmd.SubscriptionID
 	if cmd.HybridGroupID > 0 {
 		if err := settleHybridFunding(ctx, tx, cmd, result); err != nil {
 			return err
@@ -245,6 +247,16 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		if err := incrementUsageBillingSubscription(ctx, tx, *cmd.SubscriptionID, cmd.SubscriptionCost, cmd.SubscriptionGroupID); err != nil {
 			return err
 		}
+	}
+
+	// Keep cache targets in the committed receipt. In a hybrid request the
+	// subscription may have rolled even if the wallet ultimately paid.
+	if selectedSubscriptionID != nil && (cmd.SubscriptionCost > 0 || result.SubscriptionWindowReset) {
+		groupIDs, err := usageBillingSubscriptionGroupIDs(ctx, tx, *selectedSubscriptionID)
+		if err != nil {
+			return err
+		}
+		result.SubscriptionCacheGroupIDs = groupIDs
 	}
 
 	if cmd.BalanceCost > 0 {
@@ -292,6 +304,22 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	}
 
 	return nil
+}
+
+func usageBillingSubscriptionGroupIDs(ctx context.Context, tx *sql.Tx, subscriptionID int64) ([]int64, error) {
+	var primary int64
+	var raw []byte
+	if err := tx.QueryRowContext(ctx, `SELECT group_id, group_ids FROM user_subscriptions WHERE id = $1`, subscriptionID).
+		Scan(&primary, &raw); err != nil {
+		return nil, err
+	}
+	var ids []int64
+	if len(raw) != 0 {
+		if err := json.Unmarshal(raw, &ids); err != nil {
+			return nil, fmt.Errorf("decode subscription cache groups: %w", err)
+		}
+	}
+	return append(ids, primary), nil
 }
 
 func loadHybridBillingOutcome(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64) (*service.UsageBillingApplyResult, error) {
@@ -393,11 +421,25 @@ func settleHybridFunding(ctx context.Context, tx *sql.Tx, cmd *service.UsageBill
 						UPDATE user_subscriptions
 						SET daily_usage_usd = CASE WHEN $1::timestamptz IS NULL THEN daily_usage_usd ELSE 0 END,
 						    daily_window_start = COALESCE($1::timestamptz, daily_window_start),
+						    daily_limit_usd = CASE WHEN $1::timestamptz IS NOT NULL AND pending_daily_limit_usd IS NOT NULL
+						        THEN pending_daily_limit_usd ELSE daily_limit_usd END,
+						    pending_daily_limit_usd = CASE WHEN $1::timestamptz IS NULL THEN pending_daily_limit_usd ELSE NULL END,
 						    weekly_usage_usd = CASE WHEN $2::timestamptz IS NULL THEN weekly_usage_usd ELSE 0 END,
 						    weekly_window_start = COALESCE($2::timestamptz, weekly_window_start),
+						    weekly_limit_usd = CASE WHEN $2::timestamptz IS NOT NULL AND pending_weekly_limit_usd IS NOT NULL
+						        THEN pending_weekly_limit_usd ELSE weekly_limit_usd END,
+						    pending_weekly_limit_usd = CASE WHEN $2::timestamptz IS NULL THEN pending_weekly_limit_usd ELSE NULL END,
 						    monthly_usage_usd = CASE WHEN $3::timestamptz IS NULL THEN monthly_usage_usd ELSE 0 END,
 						    monthly_window_start = COALESCE($3::timestamptz, monthly_window_start),
-						    updated_at = NOW()
+						    monthly_limit_usd = CASE WHEN $3::timestamptz IS NOT NULL AND pending_monthly_limit_usd IS NOT NULL
+						        THEN pending_monthly_limit_usd ELSE monthly_limit_usd END,
+						    pending_monthly_limit_usd = CASE WHEN $3::timestamptz IS NULL THEN pending_monthly_limit_usd ELSE NULL END,
+						    pending_plan_id = CASE
+						        WHEN (pending_daily_limit_usd IS NULL OR $1::timestamptz IS NOT NULL)
+						         AND (pending_weekly_limit_usd IS NULL OR $2::timestamptz IS NOT NULL)
+						         AND (pending_monthly_limit_usd IS NULL OR $3::timestamptz IS NOT NULL)
+						        THEN NULL ELSE pending_plan_id END,
+						    updated_at = clock_timestamp()
 						WHERE id = $4
 					`, dailyStart, weeklyStart, monthlyStart, *cmd.SubscriptionID); resetErr != nil {
 						return resetErr
@@ -409,7 +451,7 @@ func settleHybridFunding(ctx context.Context, tx *sql.Tx, cmd *service.UsageBill
 				SET daily_usage_usd = us.daily_usage_usd + $1,
 				    weekly_usage_usd = us.weekly_usage_usd + $1,
 				    monthly_usage_usd = us.monthly_usage_usd + $1,
-				    updated_at = NOW()
+				    updated_at = clock_timestamp()
 				FROM groups AS g
 				WHERE us.id = $2 AND us.user_id = $3
 				  AND g.id = $4 AND g.deleted_at IS NULL
@@ -471,7 +513,7 @@ func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscrip
 			daily_usage_usd = us.daily_usage_usd + $1,
 			weekly_usage_usd = us.weekly_usage_usd + $1,
 			monthly_usage_usd = us.monthly_usage_usd + $1,
-			updated_at = NOW()
+			updated_at = clock_timestamp()
 		FROM groups g
 		WHERE us.id = $2
 			AND us.deleted_at IS NULL

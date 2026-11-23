@@ -37,7 +37,7 @@ func TestCheckBillingEligibility_HybridFallsBackWhenSubscriptionCacheIsExhausted
 	cache := &hybridEligibilityCacheStub{
 		balanceEligibilityCacheStub: &balanceEligibilityCacheStub{balance: 2},
 		subscription: &SubscriptionCacheData{
-			Status: SubscriptionStatusActive, ExpiresAt: time.Now().Add(time.Hour), DailyUsage: limit,
+			SubscriptionID: 20, Status: SubscriptionStatusActive, ExpiresAt: time.Now().Add(time.Hour), DailyUsage: limit,
 		},
 	}
 	group := &Group{ID: 10, SubscriptionType: SubscriptionTypeSubscriptionBalance, DailyLimitUSD: &limit}
@@ -47,6 +47,30 @@ func TestCheckBillingEligibility_HybridFallsBackWhenSubscriptionCacheIsExhausted
 
 	cache.balance = 0
 	require.ErrorIs(t, svc.CheckBillingEligibility(context.Background(), &User{ID: 1}, nil, group, &UserSubscription{ID: 20}, ""), ErrInsufficientBalance)
+}
+
+func TestCheckBillingEligibilityReloadsSubscriptionWhenCachedOwnerDiffers(t *testing.T) {
+	now := time.Now()
+	limit := 5.0
+	sub := &UserSubscription{ID: 20, Status: SubscriptionStatusActive, ExpiresAt: now.Add(time.Hour), UpdatedAt: now, DailyUsageUSD: 1}
+	cache := &hybridEligibilityCacheStub{
+		balanceEligibilityCacheStub: &balanceEligibilityCacheStub{},
+		subscription: &SubscriptionCacheData{
+			SubscriptionID: 19, Status: SubscriptionStatusActive, ExpiresAt: sub.ExpiresAt, DailyUsage: 5, Version: now.UnixMicro(),
+		},
+	}
+	repo := &fixedChargeSubscriptionRepoStub{sub: sub}
+	svc := NewBillingCacheService(cache, nil, repo, nil, nil, nil, &config.Config{}, nil)
+	t.Cleanup(svc.Stop)
+	group := &Group{ID: 10, SubscriptionType: SubscriptionTypeSubscription, DailyLimitUSD: &limit}
+	require.NoError(t, svc.CheckBillingEligibility(context.Background(), &User{ID: 1}, nil, group, sub, ""))
+
+	// If the authentication snapshot itself is stale, fail instead of billing
+	// the previous owner or pairing its limits with fresh usage.
+	stale := *sub
+	stale.ID = 19
+	cache.subscription = nil
+	require.ErrorIs(t, svc.CheckBillingEligibility(context.Background(), &User{ID: 1}, nil, group, &stale, ""), ErrSubscriptionInvalid)
 }
 
 func (s *balanceEligibilityCacheStub) GetUserBalance(context.Context, int64) (float64, error) {

@@ -206,6 +206,114 @@ func (_u *UserSubscriptionUpdate) ClearMonthlyLimitUsd() *UserSubscriptionUpdate
 	return _u
 }
 
+// SetPendingPlanID sets the "pending_plan_id" field.
+func (_u *UserSubscriptionUpdate) SetPendingPlanID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetPendingPlanID()
+	_u.mutation.SetPendingPlanID(v)
+	return _u
+}
+
+// SetNillablePendingPlanID sets the "pending_plan_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePendingPlanID(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPendingPlanID(*v)
+	}
+	return _u
+}
+
+// AddPendingPlanID adds value to the "pending_plan_id" field.
+func (_u *UserSubscriptionUpdate) AddPendingPlanID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddPendingPlanID(v)
+	return _u
+}
+
+// ClearPendingPlanID clears the value of the "pending_plan_id" field.
+func (_u *UserSubscriptionUpdate) ClearPendingPlanID() *UserSubscriptionUpdate {
+	_u.mutation.ClearPendingPlanID()
+	return _u
+}
+
+// SetPendingDailyLimitUsd sets the "pending_daily_limit_usd" field.
+func (_u *UserSubscriptionUpdate) SetPendingDailyLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.ResetPendingDailyLimitUsd()
+	_u.mutation.SetPendingDailyLimitUsd(v)
+	return _u
+}
+
+// SetNillablePendingDailyLimitUsd sets the "pending_daily_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePendingDailyLimitUsd(v *float64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPendingDailyLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddPendingDailyLimitUsd adds value to the "pending_daily_limit_usd" field.
+func (_u *UserSubscriptionUpdate) AddPendingDailyLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.AddPendingDailyLimitUsd(v)
+	return _u
+}
+
+// ClearPendingDailyLimitUsd clears the value of the "pending_daily_limit_usd" field.
+func (_u *UserSubscriptionUpdate) ClearPendingDailyLimitUsd() *UserSubscriptionUpdate {
+	_u.mutation.ClearPendingDailyLimitUsd()
+	return _u
+}
+
+// SetPendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field.
+func (_u *UserSubscriptionUpdate) SetPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.ResetPendingWeeklyLimitUsd()
+	_u.mutation.SetPendingWeeklyLimitUsd(v)
+	return _u
+}
+
+// SetNillablePendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePendingWeeklyLimitUsd(v *float64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPendingWeeklyLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddPendingWeeklyLimitUsd adds value to the "pending_weekly_limit_usd" field.
+func (_u *UserSubscriptionUpdate) AddPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.AddPendingWeeklyLimitUsd(v)
+	return _u
+}
+
+// ClearPendingWeeklyLimitUsd clears the value of the "pending_weekly_limit_usd" field.
+func (_u *UserSubscriptionUpdate) ClearPendingWeeklyLimitUsd() *UserSubscriptionUpdate {
+	_u.mutation.ClearPendingWeeklyLimitUsd()
+	return _u
+}
+
+// SetPendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field.
+func (_u *UserSubscriptionUpdate) SetPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.ResetPendingMonthlyLimitUsd()
+	_u.mutation.SetPendingMonthlyLimitUsd(v)
+	return _u
+}
+
+// SetNillablePendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillablePendingMonthlyLimitUsd(v *float64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetPendingMonthlyLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddPendingMonthlyLimitUsd adds value to the "pending_monthly_limit_usd" field.
+func (_u *UserSubscriptionUpdate) AddPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpdate {
+	_u.mutation.AddPendingMonthlyLimitUsd(v)
+	return _u
+}
+
+// ClearPendingMonthlyLimitUsd clears the value of the "pending_monthly_limit_usd" field.
+func (_u *UserSubscriptionUpdate) ClearPendingMonthlyLimitUsd() *UserSubscriptionUpdate {
+	_u.mutation.ClearPendingMonthlyLimitUsd()
+	return _u
+}
+
 // SetStartsAt sets the "starts_at" field.
 func (_u *UserSubscriptionUpdate) SetStartsAt(v time.Time) *UserSubscriptionUpdate {
 	_u.mutation.SetStartsAt(v)
@@ -636,6 +744,42 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 	if _u.mutation.MonthlyLimitUsdCleared() {
 		_spec.ClearField(usersubscription.FieldMonthlyLimitUsd, field.TypeFloat64)
 	}
+	if value, ok := _u.mutation.PendingPlanID(); ok {
+		_spec.SetField(usersubscription.FieldPendingPlanID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPendingPlanID(); ok {
+		_spec.AddField(usersubscription.FieldPendingPlanID, field.TypeInt64, value)
+	}
+	if _u.mutation.PendingPlanIDCleared() {
+		_spec.ClearField(usersubscription.FieldPendingPlanID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.PendingDailyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingDailyLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPendingDailyLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldPendingDailyLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.PendingDailyLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldPendingDailyLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.PendingWeeklyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingWeeklyLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPendingWeeklyLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldPendingWeeklyLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.PendingWeeklyLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldPendingWeeklyLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.PendingMonthlyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingMonthlyLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPendingMonthlyLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldPendingMonthlyLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.PendingMonthlyLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldPendingMonthlyLimitUsd, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)
 	}
@@ -1013,6 +1157,114 @@ func (_u *UserSubscriptionUpdateOne) AddMonthlyLimitUsd(v float64) *UserSubscrip
 // ClearMonthlyLimitUsd clears the value of the "monthly_limit_usd" field.
 func (_u *UserSubscriptionUpdateOne) ClearMonthlyLimitUsd() *UserSubscriptionUpdateOne {
 	_u.mutation.ClearMonthlyLimitUsd()
+	return _u
+}
+
+// SetPendingPlanID sets the "pending_plan_id" field.
+func (_u *UserSubscriptionUpdateOne) SetPendingPlanID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetPendingPlanID()
+	_u.mutation.SetPendingPlanID(v)
+	return _u
+}
+
+// SetNillablePendingPlanID sets the "pending_plan_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePendingPlanID(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPendingPlanID(*v)
+	}
+	return _u
+}
+
+// AddPendingPlanID adds value to the "pending_plan_id" field.
+func (_u *UserSubscriptionUpdateOne) AddPendingPlanID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddPendingPlanID(v)
+	return _u
+}
+
+// ClearPendingPlanID clears the value of the "pending_plan_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearPendingPlanID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPendingPlanID()
+	return _u
+}
+
+// SetPendingDailyLimitUsd sets the "pending_daily_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) SetPendingDailyLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetPendingDailyLimitUsd()
+	_u.mutation.SetPendingDailyLimitUsd(v)
+	return _u
+}
+
+// SetNillablePendingDailyLimitUsd sets the "pending_daily_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePendingDailyLimitUsd(v *float64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPendingDailyLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddPendingDailyLimitUsd adds value to the "pending_daily_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) AddPendingDailyLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddPendingDailyLimitUsd(v)
+	return _u
+}
+
+// ClearPendingDailyLimitUsd clears the value of the "pending_daily_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) ClearPendingDailyLimitUsd() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPendingDailyLimitUsd()
+	return _u
+}
+
+// SetPendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) SetPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetPendingWeeklyLimitUsd()
+	_u.mutation.SetPendingWeeklyLimitUsd(v)
+	return _u
+}
+
+// SetNillablePendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePendingWeeklyLimitUsd(v *float64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPendingWeeklyLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddPendingWeeklyLimitUsd adds value to the "pending_weekly_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) AddPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddPendingWeeklyLimitUsd(v)
+	return _u
+}
+
+// ClearPendingWeeklyLimitUsd clears the value of the "pending_weekly_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) ClearPendingWeeklyLimitUsd() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPendingWeeklyLimitUsd()
+	return _u
+}
+
+// SetPendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) SetPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetPendingMonthlyLimitUsd()
+	_u.mutation.SetPendingMonthlyLimitUsd(v)
+	return _u
+}
+
+// SetNillablePendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillablePendingMonthlyLimitUsd(v *float64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetPendingMonthlyLimitUsd(*v)
+	}
+	return _u
+}
+
+// AddPendingMonthlyLimitUsd adds value to the "pending_monthly_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) AddPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddPendingMonthlyLimitUsd(v)
+	return _u
+}
+
+// ClearPendingMonthlyLimitUsd clears the value of the "pending_monthly_limit_usd" field.
+func (_u *UserSubscriptionUpdateOne) ClearPendingMonthlyLimitUsd() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearPendingMonthlyLimitUsd()
 	return _u
 }
 
@@ -1475,6 +1727,42 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 	}
 	if _u.mutation.MonthlyLimitUsdCleared() {
 		_spec.ClearField(usersubscription.FieldMonthlyLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.PendingPlanID(); ok {
+		_spec.SetField(usersubscription.FieldPendingPlanID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPendingPlanID(); ok {
+		_spec.AddField(usersubscription.FieldPendingPlanID, field.TypeInt64, value)
+	}
+	if _u.mutation.PendingPlanIDCleared() {
+		_spec.ClearField(usersubscription.FieldPendingPlanID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.PendingDailyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingDailyLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPendingDailyLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldPendingDailyLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.PendingDailyLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldPendingDailyLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.PendingWeeklyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingWeeklyLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPendingWeeklyLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldPendingWeeklyLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.PendingWeeklyLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldPendingWeeklyLimitUsd, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.PendingMonthlyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingMonthlyLimitUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedPendingMonthlyLimitUsd(); ok {
+		_spec.AddField(usersubscription.FieldPendingMonthlyLimitUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.PendingMonthlyLimitUsdCleared() {
+		_spec.ClearField(usersubscription.FieldPendingMonthlyLimitUsd, field.TypeFloat64)
 	}
 	if value, ok := _u.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)

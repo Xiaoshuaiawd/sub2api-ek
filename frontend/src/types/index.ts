@@ -2400,6 +2400,13 @@ export interface UserSubscription {
   daily_limit_usd?: number | null
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
+  // 套餐已切换，收紧的额度在各自的窗口重置时生效。
+  // 字段缺失表示该窗口没有待生效值。保留 null 作为「不限额」的显示约定。
+  pending_plan_id?: number | null
+  pending_plan_name?: string | null
+  pending_daily_limit_usd?: number | null
+  pending_weekly_limit_usd?: number | null
+  pending_monthly_limit_usd?: number | null
   status: 'active' | 'expired' | 'revoked' | 'suspended'
   starts_at: string
   daily_usage_usd: number

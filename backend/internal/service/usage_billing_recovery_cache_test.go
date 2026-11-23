@@ -64,3 +64,55 @@ func TestUsageRecoveryCacheFailureDoesNotStopAnotherEventOrReplayDeltas(t *testi
 		// path only invalidates, under both legacy flusher configurations.
 	}
 }
+
+type subscriptionInvalidationTestCache struct {
+	billingCacheWorkerStub
+	groups   []int64
+	balance  []int64
+	notices  []string
+	failOnce int64
+}
+
+func (c *subscriptionInvalidationTestCache) InvalidateUserBalance(_ context.Context, userID int64) error {
+	c.balance = append(c.balance, userID)
+	return nil
+}
+
+func (c *subscriptionInvalidationTestCache) InvalidateSubscriptionCache(_ context.Context, _, groupID int64) error {
+	c.groups = append(c.groups, groupID)
+	if groupID == c.failOnce {
+		c.failOnce = 0
+		return errors.New("injected subscription cache failure")
+	}
+	return nil
+}
+
+func (c *subscriptionInvalidationTestCache) PublishSubscriptionCacheInvalidation(_ context.Context, key string) error {
+	c.notices = append(c.notices, key)
+	return nil
+}
+
+func (*subscriptionInvalidationTestCache) SubscribeSubscriptionCacheInvalidation(context.Context, func(string)) error {
+	return nil
+}
+
+func TestUsageRecoveryInvalidatesSharedSubscriptionAfterHybridWindowRollAndWalletFallback(t *testing.T) {
+	groupID, newBalance := int64(7), 20.0
+	recovery := &UsageBillingRecovery{
+		NeedsCache: true,
+		Event: UsageBillingEvent{
+			// A replay reads the command as staged before the wallet was charged.
+			Command: UsageBillingCommand{UserID: 42, HybridGroupID: groupID, SubscriptionCost: 2},
+			Usage:   UsageLog{GroupID: &groupID},
+		},
+		Result: UsageBillingApplyResult{
+			BillingType: BillingTypeBalance, NewBalance: &newBalance, SubscriptionWindowReset: true,
+			SubscriptionCacheGroupIDs: []int64{7, 9, 7},
+		},
+	}
+	cache := &subscriptionInvalidationTestCache{}
+	require.NoError(t, invalidateDurableUsageBilling(context.Background(), recovery, &BillingCacheService{cache: cache}, nil))
+	require.Equal(t, []int64{42}, cache.balance)
+	require.Equal(t, []int64{7, 9}, cache.groups)
+	require.Equal(t, []string{subCacheKey(42, 7), subCacheKey(42, 9)}, cache.notices)
+}

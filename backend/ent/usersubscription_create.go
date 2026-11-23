@@ -141,6 +141,62 @@ func (_c *UserSubscriptionCreate) SetNillableMonthlyLimitUsd(v *float64) *UserSu
 	return _c
 }
 
+// SetPendingPlanID sets the "pending_plan_id" field.
+func (_c *UserSubscriptionCreate) SetPendingPlanID(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetPendingPlanID(v)
+	return _c
+}
+
+// SetNillablePendingPlanID sets the "pending_plan_id" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePendingPlanID(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPendingPlanID(*v)
+	}
+	return _c
+}
+
+// SetPendingDailyLimitUsd sets the "pending_daily_limit_usd" field.
+func (_c *UserSubscriptionCreate) SetPendingDailyLimitUsd(v float64) *UserSubscriptionCreate {
+	_c.mutation.SetPendingDailyLimitUsd(v)
+	return _c
+}
+
+// SetNillablePendingDailyLimitUsd sets the "pending_daily_limit_usd" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePendingDailyLimitUsd(v *float64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPendingDailyLimitUsd(*v)
+	}
+	return _c
+}
+
+// SetPendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field.
+func (_c *UserSubscriptionCreate) SetPendingWeeklyLimitUsd(v float64) *UserSubscriptionCreate {
+	_c.mutation.SetPendingWeeklyLimitUsd(v)
+	return _c
+}
+
+// SetNillablePendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePendingWeeklyLimitUsd(v *float64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPendingWeeklyLimitUsd(*v)
+	}
+	return _c
+}
+
+// SetPendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field.
+func (_c *UserSubscriptionCreate) SetPendingMonthlyLimitUsd(v float64) *UserSubscriptionCreate {
+	_c.mutation.SetPendingMonthlyLimitUsd(v)
+	return _c
+}
+
+// SetNillablePendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillablePendingMonthlyLimitUsd(v *float64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetPendingMonthlyLimitUsd(*v)
+	}
+	return _c
+}
+
 // SetStartsAt sets the "starts_at" field.
 func (_c *UserSubscriptionCreate) SetStartsAt(v time.Time) *UserSubscriptionCreate {
 	_c.mutation.SetStartsAt(v)
@@ -526,6 +582,22 @@ func (_c *UserSubscriptionCreate) createSpec() (*UserSubscription, *sqlgraph.Cre
 		_spec.SetField(usersubscription.FieldMonthlyLimitUsd, field.TypeFloat64, value)
 		_node.MonthlyLimitUsd = &value
 	}
+	if value, ok := _c.mutation.PendingPlanID(); ok {
+		_spec.SetField(usersubscription.FieldPendingPlanID, field.TypeInt64, value)
+		_node.PendingPlanID = &value
+	}
+	if value, ok := _c.mutation.PendingDailyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingDailyLimitUsd, field.TypeFloat64, value)
+		_node.PendingDailyLimitUsd = &value
+	}
+	if value, ok := _c.mutation.PendingWeeklyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingWeeklyLimitUsd, field.TypeFloat64, value)
+		_node.PendingWeeklyLimitUsd = &value
+	}
+	if value, ok := _c.mutation.PendingMonthlyLimitUsd(); ok {
+		_spec.SetField(usersubscription.FieldPendingMonthlyLimitUsd, field.TypeFloat64, value)
+		_node.PendingMonthlyLimitUsd = &value
+	}
 	if value, ok := _c.mutation.StartsAt(); ok {
 		_spec.SetField(usersubscription.FieldStartsAt, field.TypeTime, value)
 		_node.StartsAt = value
@@ -848,6 +920,102 @@ func (u *UserSubscriptionUpsert) AddMonthlyLimitUsd(v float64) *UserSubscription
 // ClearMonthlyLimitUsd clears the value of the "monthly_limit_usd" field.
 func (u *UserSubscriptionUpsert) ClearMonthlyLimitUsd() *UserSubscriptionUpsert {
 	u.SetNull(usersubscription.FieldMonthlyLimitUsd)
+	return u
+}
+
+// SetPendingPlanID sets the "pending_plan_id" field.
+func (u *UserSubscriptionUpsert) SetPendingPlanID(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPendingPlanID, v)
+	return u
+}
+
+// UpdatePendingPlanID sets the "pending_plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePendingPlanID() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPendingPlanID)
+	return u
+}
+
+// AddPendingPlanID adds v to the "pending_plan_id" field.
+func (u *UserSubscriptionUpsert) AddPendingPlanID(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldPendingPlanID, v)
+	return u
+}
+
+// ClearPendingPlanID clears the value of the "pending_plan_id" field.
+func (u *UserSubscriptionUpsert) ClearPendingPlanID() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPendingPlanID)
+	return u
+}
+
+// SetPendingDailyLimitUsd sets the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsert) SetPendingDailyLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPendingDailyLimitUsd, v)
+	return u
+}
+
+// UpdatePendingDailyLimitUsd sets the "pending_daily_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePendingDailyLimitUsd() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPendingDailyLimitUsd)
+	return u
+}
+
+// AddPendingDailyLimitUsd adds v to the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsert) AddPendingDailyLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldPendingDailyLimitUsd, v)
+	return u
+}
+
+// ClearPendingDailyLimitUsd clears the value of the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsert) ClearPendingDailyLimitUsd() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPendingDailyLimitUsd)
+	return u
+}
+
+// SetPendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsert) SetPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPendingWeeklyLimitUsd, v)
+	return u
+}
+
+// UpdatePendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePendingWeeklyLimitUsd() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPendingWeeklyLimitUsd)
+	return u
+}
+
+// AddPendingWeeklyLimitUsd adds v to the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsert) AddPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldPendingWeeklyLimitUsd, v)
+	return u
+}
+
+// ClearPendingWeeklyLimitUsd clears the value of the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsert) ClearPendingWeeklyLimitUsd() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPendingWeeklyLimitUsd)
+	return u
+}
+
+// SetPendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsert) SetPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldPendingMonthlyLimitUsd, v)
+	return u
+}
+
+// UpdatePendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdatePendingMonthlyLimitUsd() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldPendingMonthlyLimitUsd)
+	return u
+}
+
+// AddPendingMonthlyLimitUsd adds v to the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsert) AddPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldPendingMonthlyLimitUsd, v)
+	return u
+}
+
+// ClearPendingMonthlyLimitUsd clears the value of the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsert) ClearPendingMonthlyLimitUsd() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldPendingMonthlyLimitUsd)
 	return u
 }
 
@@ -1274,6 +1442,118 @@ func (u *UserSubscriptionUpsertOne) UpdateMonthlyLimitUsd() *UserSubscriptionUps
 func (u *UserSubscriptionUpsertOne) ClearMonthlyLimitUsd() *UserSubscriptionUpsertOne {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.ClearMonthlyLimitUsd()
+	})
+}
+
+// SetPendingPlanID sets the "pending_plan_id" field.
+func (u *UserSubscriptionUpsertOne) SetPendingPlanID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPendingPlanID(v)
+	})
+}
+
+// AddPendingPlanID adds v to the "pending_plan_id" field.
+func (u *UserSubscriptionUpsertOne) AddPendingPlanID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPendingPlanID(v)
+	})
+}
+
+// UpdatePendingPlanID sets the "pending_plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePendingPlanID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePendingPlanID()
+	})
+}
+
+// ClearPendingPlanID clears the value of the "pending_plan_id" field.
+func (u *UserSubscriptionUpsertOne) ClearPendingPlanID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPendingPlanID()
+	})
+}
+
+// SetPendingDailyLimitUsd sets the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) SetPendingDailyLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPendingDailyLimitUsd(v)
+	})
+}
+
+// AddPendingDailyLimitUsd adds v to the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) AddPendingDailyLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPendingDailyLimitUsd(v)
+	})
+}
+
+// UpdatePendingDailyLimitUsd sets the "pending_daily_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePendingDailyLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePendingDailyLimitUsd()
+	})
+}
+
+// ClearPendingDailyLimitUsd clears the value of the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) ClearPendingDailyLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPendingDailyLimitUsd()
+	})
+}
+
+// SetPendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) SetPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPendingWeeklyLimitUsd(v)
+	})
+}
+
+// AddPendingWeeklyLimitUsd adds v to the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) AddPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPendingWeeklyLimitUsd(v)
+	})
+}
+
+// UpdatePendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePendingWeeklyLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePendingWeeklyLimitUsd()
+	})
+}
+
+// ClearPendingWeeklyLimitUsd clears the value of the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) ClearPendingWeeklyLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPendingWeeklyLimitUsd()
+	})
+}
+
+// SetPendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) SetPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPendingMonthlyLimitUsd(v)
+	})
+}
+
+// AddPendingMonthlyLimitUsd adds v to the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) AddPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPendingMonthlyLimitUsd(v)
+	})
+}
+
+// UpdatePendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdatePendingMonthlyLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePendingMonthlyLimitUsd()
+	})
+}
+
+// ClearPendingMonthlyLimitUsd clears the value of the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsertOne) ClearPendingMonthlyLimitUsd() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPendingMonthlyLimitUsd()
 	})
 }
 
@@ -1898,6 +2178,118 @@ func (u *UserSubscriptionUpsertBulk) UpdateMonthlyLimitUsd() *UserSubscriptionUp
 func (u *UserSubscriptionUpsertBulk) ClearMonthlyLimitUsd() *UserSubscriptionUpsertBulk {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.ClearMonthlyLimitUsd()
+	})
+}
+
+// SetPendingPlanID sets the "pending_plan_id" field.
+func (u *UserSubscriptionUpsertBulk) SetPendingPlanID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPendingPlanID(v)
+	})
+}
+
+// AddPendingPlanID adds v to the "pending_plan_id" field.
+func (u *UserSubscriptionUpsertBulk) AddPendingPlanID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPendingPlanID(v)
+	})
+}
+
+// UpdatePendingPlanID sets the "pending_plan_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePendingPlanID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePendingPlanID()
+	})
+}
+
+// ClearPendingPlanID clears the value of the "pending_plan_id" field.
+func (u *UserSubscriptionUpsertBulk) ClearPendingPlanID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPendingPlanID()
+	})
+}
+
+// SetPendingDailyLimitUsd sets the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) SetPendingDailyLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPendingDailyLimitUsd(v)
+	})
+}
+
+// AddPendingDailyLimitUsd adds v to the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) AddPendingDailyLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPendingDailyLimitUsd(v)
+	})
+}
+
+// UpdatePendingDailyLimitUsd sets the "pending_daily_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePendingDailyLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePendingDailyLimitUsd()
+	})
+}
+
+// ClearPendingDailyLimitUsd clears the value of the "pending_daily_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) ClearPendingDailyLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPendingDailyLimitUsd()
+	})
+}
+
+// SetPendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) SetPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPendingWeeklyLimitUsd(v)
+	})
+}
+
+// AddPendingWeeklyLimitUsd adds v to the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) AddPendingWeeklyLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPendingWeeklyLimitUsd(v)
+	})
+}
+
+// UpdatePendingWeeklyLimitUsd sets the "pending_weekly_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePendingWeeklyLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePendingWeeklyLimitUsd()
+	})
+}
+
+// ClearPendingWeeklyLimitUsd clears the value of the "pending_weekly_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) ClearPendingWeeklyLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPendingWeeklyLimitUsd()
+	})
+}
+
+// SetPendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) SetPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetPendingMonthlyLimitUsd(v)
+	})
+}
+
+// AddPendingMonthlyLimitUsd adds v to the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) AddPendingMonthlyLimitUsd(v float64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddPendingMonthlyLimitUsd(v)
+	})
+}
+
+// UpdatePendingMonthlyLimitUsd sets the "pending_monthly_limit_usd" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdatePendingMonthlyLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdatePendingMonthlyLimitUsd()
+	})
+}
+
+// ClearPendingMonthlyLimitUsd clears the value of the "pending_monthly_limit_usd" field.
+func (u *UserSubscriptionUpsertBulk) ClearPendingMonthlyLimitUsd() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearPendingMonthlyLimitUsd()
 	})
 }
 

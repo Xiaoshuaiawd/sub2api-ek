@@ -236,16 +236,17 @@ type AccountQuotaState struct {
 }
 
 type UsageBillingApplyResult struct {
-	Applied                 bool
-	BillingType             int8
-	SubscriptionID          *int64
-	SubscriptionWindowReset bool
-	AutoCreditIssued        bool
-	APIKeyQuotaExhausted    bool
-	PlatformQuotaApplied    bool
-	NewBalance              *float64
-	BalanceOverdrafted      bool
-	QuotaState              *AccountQuotaState
+	Applied                   bool
+	BillingType               int8
+	SubscriptionID            *int64
+	SubscriptionWindowReset   bool
+	SubscriptionCacheGroupIDs []int64 `json:",omitempty"`
+	AutoCreditIssued          bool
+	APIKeyQuotaExhausted      bool
+	PlatformQuotaApplied      bool
+	NewBalance                *float64
+	BalanceOverdrafted        bool
+	QuotaState                *AccountQuotaState
 }
 
 // BatchImageBalanceHoldCommand describes an idempotent balance hold operation.

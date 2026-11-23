@@ -803,6 +803,12 @@ type UserSubscription struct {
 	WeeklyLimitUSD  *float64 `json:"weekly_limit_usd,omitempty"`
 	MonthlyLimitUSD *float64 `json:"monthly_limit_usd,omitempty"`
 
+	PendingPlanID          *int64   `json:"pending_plan_id,omitempty"`
+	PendingPlanName        string   `json:"pending_plan_name,omitempty"`
+	PendingDailyLimitUSD   *float64 `json:"pending_daily_limit_usd,omitempty"`
+	PendingWeeklyLimitUSD  *float64 `json:"pending_weekly_limit_usd,omitempty"`
+	PendingMonthlyLimitUSD *float64 `json:"pending_monthly_limit_usd,omitempty"`
+
 	StartsAt  time.Time `json:"starts_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Status    string    `json:"status"`

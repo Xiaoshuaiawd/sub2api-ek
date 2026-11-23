@@ -1063,6 +1063,137 @@ func TestExecuteSubscriptionFulfillmentRecoversCommittedAssignmentWithoutExtendi
 	require.Equal(t, 1, assignmentAuditCount)
 }
 
+// A plan switch can merge the subscription an order paid for onto another group,
+// which breaks the reverse lookup by the order's primary group. The order's own
+// subscription_id still knows the entitlement, so replaying the fulfillment must
+// recover it instead of granting the order a second time (usage cleared again or
+// another period stacked on top).
+func TestExecuteSubscriptionFulfillmentRecoversMergedSubscriptionThroughOrderPointer(t *testing.T) {
+	// Both renewal modes must be inert on a replay: extend would stack another
+	// period, restart would clear the consumed quota a second time.
+	for _, mode := range []SubscriptionRenewalMode{SubscriptionRenewalModeExtend, SubscriptionRenewalModeRestart} {
+		t.Run(string(mode), func(t *testing.T) {
+			testExecuteSubscriptionFulfillmentRecoversMergedSubscription(t, mode)
+		})
+	}
+}
+
+func TestExecuteSubscriptionFulfillmentRetriesEveryAffectedGroupAfterCommit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPaid, time.Now())
+	daily := 20.0
+	order, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetSubscriptionLimitsSnapshot(true).SetSubscriptionDailyLimitUsd(daily).Save(ctx)
+	require.NoError(t, err)
+	repo := newSubscriptionUserSubRepoStub()
+	existing := seededExhaustedPlan1(99)
+	existing.UserID, existing.GroupID, existing.GroupIDs = order.UserID, 9, []int64{9, 7, 11}
+	repo.seed(existing)
+	groups := &subscriptionGroupRepoStub{groups: map[int64]*Group{
+		7: {ID: 7, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}}
+	cache := &subscriptionInvalidationTestCache{failOnce: 11}
+	subSvc := NewSubscriptionService(groups, repo, &BillingCacheService{cache: cache}, nil, nil)
+	t.Cleanup(subSvc.Stop)
+	svc := &PaymentService{entClient: client, groupRepo: groups, subscriptionSvc: subSvc}
+
+	require.ErrorContains(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID), "injected subscription cache failure")
+	require.Equal(t, []int64{7, 9, 11}, cache.groups)
+	committed, err := repo.GetByID(ctx, 99)
+	require.NoError(t, err)
+	require.Equal(t, &daily, committed.DailyLimitUSD)
+	// The original audit retains group 11 even if the subscription changes
+	// again before the payment worker retries.
+	committed.GroupIDs = []int64{9, 7}
+	repo.seed(committed)
+	cache.groups = nil
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+	require.Equal(t, []int64{7, 9, 11}, cache.groups)
+	after, err := repo.GetByID(ctx, 99)
+	require.NoError(t, err)
+	require.Equal(t, committed.ExpiresAt, after.ExpiresAt)
+}
+
+func testExecuteSubscriptionFulfillmentRecoversMergedSubscription(t *testing.T, mode SubscriptionRenewalMode) {
+	t.Helper()
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	staleAt := time.Now().Add(-paymentFulfillmentLeaseDuration - time.Minute)
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusRecharging, staleAt)
+	require.Equal(t, int64(7), *order.SubscriptionGroupID)
+
+	startsAt := time.Now().Add(-19 * 24 * time.Hour).Truncate(time.Second)
+	expiresAt := startsAt.AddDate(0, 0, 30)
+	dailyWindowStart := startOfDay(startsAt)
+	weeklyWindowStart := startsAt
+	monthlyWindowStart := startsAt
+	// Already granted once and partly consumed: the subscription was merged onto
+	// group 9 afterwards, so only the bundle still reaches the order's group 7.
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:                 99,
+		UserID:             order.UserID,
+		GroupID:            9,
+		GroupIDs:           []int64{9, 7},
+		StartsAt:           startsAt,
+		ExpiresAt:          expiresAt,
+		Status:             SubscriptionStatusActive,
+		DailyWindowStart:   &dailyWindowStart,
+		WeeklyWindowStart:  &weeklyWindowStart,
+		MonthlyWindowStart: &monthlyWindowStart,
+		DailyUsageUSD:      3.5,
+		WeeklyUsageUSD:     4.5,
+		MonthlyUsageUSD:    5.5,
+		Notes:              "retained note\n" + paymentSubscriptionOrderNote(order.ID),
+	})
+	// Keep the row stale so the fulfillment lease is acquirable again.
+	order, err := client.PaymentOrder.UpdateOneID(order.ID).
+		SetSubscriptionID(99).
+		SetSubscriptionRenewalMode(string(mode)).
+		SetUpdatedAt(staleAt).
+		Save(ctx)
+	require.NoError(t, err)
+
+	groups := &subscriptionGroupRepoStub{groups: map[int64]*Group{
+		7: {ID: 7, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}}
+	subSvc := NewSubscriptionService(groups, subRepo, nil, nil, nil)
+	t.Cleanup(subSvc.Stop)
+	svc := &PaymentService{entClient: client, groupRepo: groups, subscriptionSvc: subSvc}
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+
+	sub, err := subRepo.GetByID(ctx, 99)
+	require.NoError(t, err)
+	require.Equal(t, 0, subRepo.createCalls, "recovered fulfillment must not create a second subscription")
+	// Usage is cleared exactly once, by the original fulfillment. The replay must
+	// leave the consumed quota and the running period untouched.
+	require.Equal(t, 3.5, sub.DailyUsageUSD)
+	require.Equal(t, 4.5, sub.WeeklyUsageUSD)
+	require.Equal(t, 5.5, sub.MonthlyUsageUSD)
+	require.True(t, sub.ExpiresAt.Equal(expiresAt), "expiry was stacked from %s to %s", expiresAt, sub.ExpiresAt)
+	require.True(t, sub.StartsAt.Equal(startsAt), "period was restarted from %s to %s", startsAt, sub.StartsAt)
+	require.Equal(t, []int64{9, 7}, sub.AccessibleGroupIDs())
+
+	completed, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, completed.Status)
+	require.NotNil(t, completed.SubscriptionID)
+	require.Equal(t, int64(99), *completed.SubscriptionID)
+
+	assignmentAuditCount, err := client.PaymentAuditLog.Query().
+		Where(
+			paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+			paymentauditlog.ActionEQ("SUBSCRIPTION_ASSIGNED"),
+		).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, assignmentAuditCount)
+}
+
 func TestHasPaymentSubscriptionOrderNoteRequiresIndependentExactLine(t *testing.T) {
 	t.Parallel()
 	require.True(t, hasPaymentSubscriptionOrderNote("before\r\npayment order 42\r\nafter", "payment order 42"))

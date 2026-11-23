@@ -100,6 +100,26 @@ func MonthlyLimitUsd(v float64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldMonthlyLimitUsd, v))
 }
 
+// PendingPlanID applies equality check predicate on the "pending_plan_id" field. It's identical to PendingPlanIDEQ.
+func PendingPlanID(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPendingPlanID, v))
+}
+
+// PendingDailyLimitUsd applies equality check predicate on the "pending_daily_limit_usd" field. It's identical to PendingDailyLimitUsdEQ.
+func PendingDailyLimitUsd(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPendingDailyLimitUsd, v))
+}
+
+// PendingWeeklyLimitUsd applies equality check predicate on the "pending_weekly_limit_usd" field. It's identical to PendingWeeklyLimitUsdEQ.
+func PendingWeeklyLimitUsd(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPendingWeeklyLimitUsd, v))
+}
+
+// PendingMonthlyLimitUsd applies equality check predicate on the "pending_monthly_limit_usd" field. It's identical to PendingMonthlyLimitUsdEQ.
+func PendingMonthlyLimitUsd(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPendingMonthlyLimitUsd, v))
+}
+
 // StartsAt applies equality check predicate on the "starts_at" field. It's identical to StartsAtEQ.
 func StartsAt(v time.Time) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldStartsAt, v))
@@ -528,6 +548,206 @@ func MonthlyLimitUsdIsNil() predicate.UserSubscription {
 // MonthlyLimitUsdNotNil applies the NotNil predicate on the "monthly_limit_usd" field.
 func MonthlyLimitUsdNotNil() predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldNotNull(FieldMonthlyLimitUsd))
+}
+
+// PendingPlanIDEQ applies the EQ predicate on the "pending_plan_id" field.
+func PendingPlanIDEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPendingPlanID, v))
+}
+
+// PendingPlanIDNEQ applies the NEQ predicate on the "pending_plan_id" field.
+func PendingPlanIDNEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldPendingPlanID, v))
+}
+
+// PendingPlanIDIn applies the In predicate on the "pending_plan_id" field.
+func PendingPlanIDIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldPendingPlanID, vs...))
+}
+
+// PendingPlanIDNotIn applies the NotIn predicate on the "pending_plan_id" field.
+func PendingPlanIDNotIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldPendingPlanID, vs...))
+}
+
+// PendingPlanIDGT applies the GT predicate on the "pending_plan_id" field.
+func PendingPlanIDGT(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldPendingPlanID, v))
+}
+
+// PendingPlanIDGTE applies the GTE predicate on the "pending_plan_id" field.
+func PendingPlanIDGTE(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldPendingPlanID, v))
+}
+
+// PendingPlanIDLT applies the LT predicate on the "pending_plan_id" field.
+func PendingPlanIDLT(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldPendingPlanID, v))
+}
+
+// PendingPlanIDLTE applies the LTE predicate on the "pending_plan_id" field.
+func PendingPlanIDLTE(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldPendingPlanID, v))
+}
+
+// PendingPlanIDIsNil applies the IsNil predicate on the "pending_plan_id" field.
+func PendingPlanIDIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldPendingPlanID))
+}
+
+// PendingPlanIDNotNil applies the NotNil predicate on the "pending_plan_id" field.
+func PendingPlanIDNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldPendingPlanID))
+}
+
+// PendingDailyLimitUsdEQ applies the EQ predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPendingDailyLimitUsd, v))
+}
+
+// PendingDailyLimitUsdNEQ applies the NEQ predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdNEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldPendingDailyLimitUsd, v))
+}
+
+// PendingDailyLimitUsdIn applies the In predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldPendingDailyLimitUsd, vs...))
+}
+
+// PendingDailyLimitUsdNotIn applies the NotIn predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdNotIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldPendingDailyLimitUsd, vs...))
+}
+
+// PendingDailyLimitUsdGT applies the GT predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdGT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldPendingDailyLimitUsd, v))
+}
+
+// PendingDailyLimitUsdGTE applies the GTE predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdGTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldPendingDailyLimitUsd, v))
+}
+
+// PendingDailyLimitUsdLT applies the LT predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdLT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldPendingDailyLimitUsd, v))
+}
+
+// PendingDailyLimitUsdLTE applies the LTE predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdLTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldPendingDailyLimitUsd, v))
+}
+
+// PendingDailyLimitUsdIsNil applies the IsNil predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldPendingDailyLimitUsd))
+}
+
+// PendingDailyLimitUsdNotNil applies the NotNil predicate on the "pending_daily_limit_usd" field.
+func PendingDailyLimitUsdNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldPendingDailyLimitUsd))
+}
+
+// PendingWeeklyLimitUsdEQ applies the EQ predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPendingWeeklyLimitUsd, v))
+}
+
+// PendingWeeklyLimitUsdNEQ applies the NEQ predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdNEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldPendingWeeklyLimitUsd, v))
+}
+
+// PendingWeeklyLimitUsdIn applies the In predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldPendingWeeklyLimitUsd, vs...))
+}
+
+// PendingWeeklyLimitUsdNotIn applies the NotIn predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdNotIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldPendingWeeklyLimitUsd, vs...))
+}
+
+// PendingWeeklyLimitUsdGT applies the GT predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdGT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldPendingWeeklyLimitUsd, v))
+}
+
+// PendingWeeklyLimitUsdGTE applies the GTE predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdGTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldPendingWeeklyLimitUsd, v))
+}
+
+// PendingWeeklyLimitUsdLT applies the LT predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdLT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldPendingWeeklyLimitUsd, v))
+}
+
+// PendingWeeklyLimitUsdLTE applies the LTE predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdLTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldPendingWeeklyLimitUsd, v))
+}
+
+// PendingWeeklyLimitUsdIsNil applies the IsNil predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldPendingWeeklyLimitUsd))
+}
+
+// PendingWeeklyLimitUsdNotNil applies the NotNil predicate on the "pending_weekly_limit_usd" field.
+func PendingWeeklyLimitUsdNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldPendingWeeklyLimitUsd))
+}
+
+// PendingMonthlyLimitUsdEQ applies the EQ predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldPendingMonthlyLimitUsd, v))
+}
+
+// PendingMonthlyLimitUsdNEQ applies the NEQ predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdNEQ(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldPendingMonthlyLimitUsd, v))
+}
+
+// PendingMonthlyLimitUsdIn applies the In predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldPendingMonthlyLimitUsd, vs...))
+}
+
+// PendingMonthlyLimitUsdNotIn applies the NotIn predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdNotIn(vs ...float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldPendingMonthlyLimitUsd, vs...))
+}
+
+// PendingMonthlyLimitUsdGT applies the GT predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdGT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldPendingMonthlyLimitUsd, v))
+}
+
+// PendingMonthlyLimitUsdGTE applies the GTE predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdGTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldPendingMonthlyLimitUsd, v))
+}
+
+// PendingMonthlyLimitUsdLT applies the LT predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdLT(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldPendingMonthlyLimitUsd, v))
+}
+
+// PendingMonthlyLimitUsdLTE applies the LTE predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdLTE(v float64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldPendingMonthlyLimitUsd, v))
+}
+
+// PendingMonthlyLimitUsdIsNil applies the IsNil predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldPendingMonthlyLimitUsd))
+}
+
+// PendingMonthlyLimitUsdNotNil applies the NotNil predicate on the "pending_monthly_limit_usd" field.
+func PendingMonthlyLimitUsdNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldPendingMonthlyLimitUsd))
 }
 
 // StartsAtEQ applies the EQ predicate on the "starts_at" field.

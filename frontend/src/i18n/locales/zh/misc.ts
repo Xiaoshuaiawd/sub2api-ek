@@ -134,7 +134,11 @@ export default {
     resetIn: '{time} 后重置',
     quotaEndsIn: '额度将在 {time} 后结束',
     windowNotActive: '等待首次使用',
-    usageOf: '已用 {used} / {limit}'
+    usageOf: '已用 {used} / {limit}',
+    pendingSwitch: {
+      title: '下个周期生效',
+      desc: '当前周期仍按现额度计算，各项新额度在对应窗口重置时生效'
+    }
   },
 
   // Onboarding Tour

@@ -137,7 +137,11 @@ export default {
     resetIn: 'Resets in {time}',
     quotaEndsIn: 'Quota ends in {time}',
     windowNotActive: 'Awaiting first use',
-    usageOf: '{used} of {limit}'
+    usageOf: '{used} of {limit}',
+    pendingSwitch: {
+      title: 'Takes effect next cycle',
+      desc: 'Current limits stay in effect until each listed window resets.'
+    }
   },
 
   // Onboarding Tour

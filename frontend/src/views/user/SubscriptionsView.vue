@@ -244,6 +244,23 @@
                 </div>
               </div>
             </div>
+
+            <!-- Pending plan switch: paid downgrade takes effect at the next window roll -->
+            <div
+              v-if="hasPendingSwitch(subscription)"
+              class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/40 dark:bg-amber-900/20"
+              data-test="pending-plan-switch"
+            >
+              <p class="text-xs font-medium text-amber-800 dark:text-amber-200">
+                {{ t('userSubscriptions.pendingSwitch.title') }}<template v-if="subscription.pending_plan_name">: {{ subscription.pending_plan_name }}</template>
+              </p>
+              <p v-if="pendingLimitParts(subscription).length" class="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                {{ pendingLimitParts(subscription).join(' · ') }}
+              </p>
+              <p class="mt-1 text-[11px] text-amber-700/70 dark:text-amber-300/70">
+                {{ t('userSubscriptions.pendingSwitch.desc') }}
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -301,6 +318,34 @@ async function renewSubscription(groupId: number) {
 function effectiveLimit(subscription: UserSubscription, window: 'daily' | 'weekly' | 'monthly'): number | null | undefined {
   const field = `${window}_limit_usd` as const
   return subscription.plan_id != null ? subscription[field] : subscription.group?.[field]
+}
+
+type QuotaWindow = 'daily' | 'weekly' | 'monthly'
+
+/** 该窗口的待生效额度：undefined = 没有待生效值，null = 待生效为「不限额」。 */
+function pendingWindowLimit(subscription: UserSubscription, window: QuotaWindow): number | null | undefined {
+  return subscription[`pending_${window}_limit_usd` as const]
+}
+
+/** 是否还有「已付款但下个周期才生效」的套餐切换（降级口径，issue #6）。 */
+function hasPendingSwitch(subscription: UserSubscription): boolean {
+  if (subscription.pending_plan_id != null) return true
+  return (['daily', 'weekly', 'monthly'] as const).some(window => pendingWindowLimit(subscription, window) !== undefined)
+}
+
+function pendingLimitParts(subscription: UserSubscription): string[] {
+  const labels: Record<QuotaWindow, string> = {
+    daily: t('userSubscriptions.daily'),
+    weekly: t('userSubscriptions.weekly'),
+    monthly: t('userSubscriptions.monthly'),
+  }
+  const parts: string[] = []
+  for (const window of ['daily', 'weekly', 'monthly'] as const) {
+    const limit = pendingWindowLimit(subscription, window)
+    if (limit === undefined) continue
+    parts.push(`${labels[window]} ${limit == null ? t('userSubscriptions.unlimited') : `$${limit.toFixed(2)}`}`)
+  }
+  return parts
 }
 
 function subscriptionHasPeakRate(subscription: UserSubscription): boolean {

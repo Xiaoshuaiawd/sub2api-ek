@@ -691,7 +691,14 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 
 	txCtx := dbent.NewTxContext(ctx, tx)
 	txClient := tx.Client()
-	alreadyAssigned, err := hasPaymentSubscriptionAssignmentAudit(txCtx, txClient, o.ID)
+	if paymentAuditDialect(txClient) == dialect.Postgres {
+		// Purchases for distinct orders can overlap in their group bundles.
+		// Serialize their lookup and assignment without locking the wallet row.
+		if _, err := txClient.ExecContext(txCtx, `SELECT pg_advisory_xact_lock(hashtextextended('paid-subscription:' || $1::text, 0))`, o.UserID); err != nil {
+			return fmt.Errorf("lock paid subscriptions for user: %w", err)
+		}
+	}
+	audit, err := findPaymentSubscriptionAssignmentAudit(txCtx, txClient, o.ID)
 	if err != nil {
 		return fmt.Errorf("check subscription assignment audit: %w", err)
 	}
@@ -699,7 +706,14 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	recoveredFromNote := false
 	var assignedSubID int64
 	affectedGroupIDs := append([]int64(nil), groupIDs...)
-	if !alreadyAssigned {
+	assignedByOrder, err := s.findSubscriptionAssignedByOrder(txCtx, o)
+	if err != nil {
+		return fmt.Errorf("check subscription assigned by order: %w", err)
+	}
+	if assignedByOrder != nil {
+		affectedGroupIDs = append(affectedGroupIDs, assignedByOrder.AccessibleGroupIDs()...)
+	}
+	if audit == nil {
 		renewalMode, normalizeErr := NormalizeSubscriptionRenewalMode(o.SubscriptionRenewalMode)
 		if normalizeErr != nil {
 			return fmt.Errorf("normalize subscription renewal mode: %w", normalizeErr)
@@ -710,6 +724,14 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 			affectedGroupIDs = append(affectedGroupIDs, existing.AccessibleGroupIDs()...)
 		}
 		switch {
+		case assignedByOrder != nil:
+			// The order already recorded the subscription it paid for. Trust that
+			// pointer instead of reverse-looking-up by the order's primary group:
+			// once a plan switch merges the subscription into another group the
+			// reverse lookup misses it and the same order gets granted twice
+			// (usage cleared again, or another period stacked on top).
+			recoveredFromNote = true
+			assignedSubID = assignedByOrder.ID
 		case lookupErr == nil && existing != nil && hasPaymentSubscriptionOrderNote(existing.Notes, orderNote):
 			recoveredFromNote = true
 			assignedSubID = existing.ID
@@ -736,6 +758,9 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 				return fmt.Errorf("assign subscription: %w", err)
 			}
 			assignedSubID = assigned.ID
+			// A plan switch can land on a subscription keyed by another group,
+			// so every group that subscription reaches needs its cache dropped.
+			affectedGroupIDs = append(affectedGroupIDs, assigned.AccessibleGroupIDs()...)
 		}
 		if assignedSubID > 0 {
 			updated, err := txClient.PaymentOrder.Update().Where(
@@ -754,6 +779,7 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 			"validityDays":      days,
 			"renewalMode":       renewalMode,
 			"recoveredFromNote": recoveredFromNote,
+			"affectedGroupIDs":  affectedGroupIDs,
 		})
 		if _, err := txClient.PaymentAuditLog.Create().
 			SetOrderID(strconv.FormatInt(o.ID, 10)).
@@ -763,14 +789,15 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 			Save(txCtx); err != nil {
 			if dbent.IsConstraintError(err) {
 				_ = tx.Rollback()
-				claimed, checkErr := hasPaymentSubscriptionAssignmentAudit(ctx, s.entClient, o.ID)
-				if checkErr == nil && claimed {
-					return s.invalidatePaymentSubscriptionGroupCaches(o.UserID, affectedGroupIDs)
+				committed, checkErr := findPaymentSubscriptionAssignmentAudit(ctx, s.entClient, o.ID)
+				if checkErr == nil && committed != nil {
+					return s.invalidatePaymentSubscriptionGroupCaches(o.UserID, append(affectedGroupIDs, paymentSubscriptionAuditGroups(committed)...))
 				}
 			}
 			return fmt.Errorf("record subscription assignment audit: %w", err)
 		}
 	} else {
+		affectedGroupIDs = append(affectedGroupIDs, paymentSubscriptionAuditGroups(audit)...)
 		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", groupID)
 	}
 
@@ -785,9 +812,38 @@ func (s *PaymentService) ensurePaymentSubscriptionAssigned(ctx context.Context, 
 	return nil
 }
 
+// findSubscriptionAssignedByOrder returns the subscription this order already
+// paid for, located through the order's own subscription_id. Reverse lookup by the
+// order's primary group is not enough: a purchased plan may merge the subscription
+// into a different group, and missing that row would fulfill the order a second
+// time (clearing usage again, or stacking another period).
+func (s *PaymentService) findSubscriptionAssignedByOrder(ctx context.Context, o *dbent.PaymentOrder) (*UserSubscription, error) {
+	if s.subscriptionSvc == nil || o == nil || o.SubscriptionID == nil || *o.SubscriptionID <= 0 {
+		return nil, nil
+	}
+	// Include revoked rows: the pointer still proves the assignment happened, and a
+	// re-fulfillment must not create a second entitlement for the same order.
+	sub, err := s.subscriptionSvc.userSubRepo.GetByIDIncludeDeleted(ctx, *o.SubscriptionID)
+	if err != nil {
+		if errors.Is(err, ErrSubscriptionNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if sub == nil || sub.UserID != o.UserID {
+		return nil, nil
+	}
+	return sub, nil
+}
+
 func (s *PaymentService) invalidatePaymentSubscriptionGroupCaches(userID int64, groupIDs []int64) error {
 	var firstErr error
+	seen := make(map[int64]bool, len(groupIDs))
 	for _, groupID := range groupIDs {
+		if groupID <= 0 || seen[groupID] {
+			continue
+		}
+		seen[groupID] = true
 		if err := s.subscriptionSvc.invalidateSubscriptionCaches(userID, groupID); err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -797,15 +853,28 @@ func (s *PaymentService) invalidatePaymentSubscriptionGroupCaches(userID int64, 
 	return firstErr
 }
 
-func hasPaymentSubscriptionAssignmentAudit(ctx context.Context, client *dbent.Client, orderID int64) (bool, error) {
-	count, err := client.PaymentAuditLog.Query().
+func findPaymentSubscriptionAssignmentAudit(ctx context.Context, client *dbent.Client, orderID int64) (*dbent.PaymentAuditLog, error) {
+	audit, err := client.PaymentAuditLog.Query().
 		Where(
 			paymentauditlog.OrderIDEQ(strconv.FormatInt(orderID, 10)),
 			paymentauditlog.ActionIn("SUBSCRIPTION_ASSIGNED", "SUBSCRIPTION_SUCCESS"),
 		).
-		Limit(1).
-		Count(ctx)
-	return count > 0, err
+		Order(paymentauditlog.ByAction(), paymentauditlog.ByID()).
+		First(ctx)
+	if dbent.IsNotFound(err) {
+		return nil, nil
+	}
+	return audit, err
+}
+
+func paymentSubscriptionAuditGroups(audit *dbent.PaymentAuditLog) []int64 {
+	var detail struct {
+		AffectedGroupIDs []int64 `json:"affectedGroupIDs"`
+	}
+	if audit == nil || json.Unmarshal([]byte(audit.Detail), &detail) != nil {
+		return nil
+	}
+	return detail.AffectedGroupIDs
 }
 
 func paymentSubscriptionOrderNote(orderID int64) string {

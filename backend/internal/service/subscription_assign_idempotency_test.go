@@ -194,6 +194,8 @@ type subscriptionUserSubRepoStub struct {
 	byID        map[int64]*UserSubscription
 	byUserGroup map[string]*UserSubscription
 	createCalls int
+
+	appliedPendingWindows []SubscriptionQuotaWindow
 }
 
 func newSubscriptionUserSubRepoStub() *subscriptionUserSubRepoStub {
@@ -216,6 +218,9 @@ func (s *subscriptionUserSubRepoStub) seed(sub *UserSubscription) {
 	if cp.ID == 0 {
 		cp.ID = s.nextID
 		s.nextID++
+	}
+	if cp.ID >= s.nextID {
+		s.nextID = cp.ID + 1
 	}
 	s.byID[cp.ID] = &cp
 	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
@@ -264,8 +269,49 @@ func (s *subscriptionUserSubRepoStub) GetByIDIncludeDeleted(ctx context.Context,
 	return s.GetByID(ctx, id)
 }
 
+func (s *subscriptionUserSubRepoStub) ListActiveByUserID(_ context.Context, userID int64) ([]UserSubscription, error) {
+	out := make([]UserSubscription, 0, len(s.byID))
+	for _, sub := range s.byID {
+		if sub == nil || sub.UserID != userID {
+			continue
+		}
+		if sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(time.Now()) {
+			continue
+		}
+		out = append(out, *sub)
+	}
+	return out, nil
+}
+
 func (s *subscriptionUserSubRepoStub) GetByIDForUpdate(ctx context.Context, id int64) (*UserSubscription, error) {
 	return s.GetByID(ctx, id)
+}
+
+func (s *subscriptionUserSubRepoStub) ExtendExpiry(_ context.Context, id int64, expiresAt time.Time) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	sub.ExpiresAt = expiresAt
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) UpdateStatus(_ context.Context, id int64, status string) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	sub.Status = status
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) UpdateNotes(_ context.Context, id int64, notes string) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	sub.Notes = notes
+	return nil
 }
 
 func (s *subscriptionUserSubRepoStub) Update(_ context.Context, sub *UserSubscription) error {
@@ -284,6 +330,67 @@ func (s *subscriptionUserSubRepoStub) Update(_ context.Context, sub *UserSubscri
 	}
 	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
 	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ResetDailyUsage(_ context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	if !sameWindowStart(sub.DailyWindowStart, expectedWindowStart) {
+		return nil
+	}
+	sub.DailyUsageUSD = 0
+	start := newWindowStart
+	sub.DailyWindowStart = &start
+	if sub.PendingDailyLimitUSD != nil {
+		sub.applyWindowPendingLimit(SubscriptionQuotaWindowDaily)
+		s.appliedPendingWindows = append(s.appliedPendingWindows, SubscriptionQuotaWindowDaily)
+	}
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ResetWeeklyUsage(_ context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	if !sameWindowStart(sub.WeeklyWindowStart, expectedWindowStart) {
+		return nil
+	}
+	sub.WeeklyUsageUSD = 0
+	start := newWindowStart
+	sub.WeeklyWindowStart = &start
+	if sub.PendingWeeklyLimitUSD != nil {
+		sub.applyWindowPendingLimit(SubscriptionQuotaWindowWeekly)
+		s.appliedPendingWindows = append(s.appliedPendingWindows, SubscriptionQuotaWindowWeekly)
+	}
+	return nil
+}
+
+func (s *subscriptionUserSubRepoStub) ResetMonthlyUsage(_ context.Context, id int64, expectedWindowStart *time.Time, newWindowStart time.Time) error {
+	sub := s.byID[id]
+	if sub == nil {
+		return ErrSubscriptionNotFound
+	}
+	if !sameWindowStart(sub.MonthlyWindowStart, expectedWindowStart) {
+		return nil
+	}
+	sub.MonthlyUsageUSD = 0
+	start := newWindowStart
+	sub.MonthlyWindowStart = &start
+	if sub.PendingMonthlyLimitUSD != nil {
+		sub.applyWindowPendingLimit(SubscriptionQuotaWindowMonthly)
+		s.appliedPendingWindows = append(s.appliedPendingWindows, SubscriptionQuotaWindowMonthly)
+	}
+	return nil
+}
+
+func sameWindowStart(current, expected *time.Time) bool {
+	if current == nil || expected == nil {
+		return current == nil && expected == nil
+	}
+	return current.Equal(*expected)
 }
 
 func TestAssignSubscriptionReuseWhenSemanticsMatch(t *testing.T) {

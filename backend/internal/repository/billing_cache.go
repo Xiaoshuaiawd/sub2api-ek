@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -49,13 +50,18 @@ func billingSubKey(userID, groupID int64) string {
 	return fmt.Sprintf("%s%d:%d", billingSubKeyPrefix, userID, groupID)
 }
 
+func billingSubGenerationKey(userID, groupID int64) string {
+	return fmt.Sprintf("billing:sub-generation:%d:%d", userID, groupID)
+}
+
 const (
-	subFieldStatus       = "status"
-	subFieldExpiresAt    = "expires_at"
-	subFieldDailyUsage   = "daily_usage"
-	subFieldWeeklyUsage  = "weekly_usage"
-	subFieldMonthlyUsage = "monthly_usage"
-	subFieldVersion      = "version"
+	subFieldSubscriptionID = "subscription_id"
+	subFieldStatus         = "status"
+	subFieldExpiresAt      = "expires_at"
+	subFieldDailyUsage     = "daily_usage"
+	subFieldWeeklyUsage    = "weekly_usage"
+	subFieldMonthlyUsage   = "monthly_usage"
+	subFieldVersion        = "version"
 )
 
 // billingRateLimitKey generates the Redis key for API key rate limit cache.
@@ -80,6 +86,19 @@ var (
 		end
 		local newVal = tonumber(current) - tonumber(ARGV[1])
 		redis.call('SET', KEYS[1], newVal)
+		redis.call('EXPIRE', KEYS[1], ARGV[2])
+		return 1
+	`)
+
+	// Publish only if no debit or plan switch invalidated the key after the
+	// database load began. Within a generation, keep the newer snapshot.
+	setSubSnapshotScript = redis.NewScript(`
+		local generation = redis.call('GET', KEYS[2]) or ''
+		if generation ~= ARGV[1] then return 0 end
+		local id = redis.call('HGET', KEYS[1], 'subscription_id')
+		local version = redis.call('HGET', KEYS[1], 'version')
+		if id == ARGV[4] and version and tonumber(version) > tonumber(ARGV[3]) then return 0 end
+		redis.call('HSET', KEYS[1], unpack(ARGV, 5))
 		redis.call('EXPIRE', KEYS[1], ARGV[2])
 		return 1
 	`)
@@ -188,6 +207,7 @@ func (c *billingCache) GetSubscriptionCache(ctx context.Context, userID, groupID
 func (c *billingCache) parseSubscriptionCache(data map[string]string) (*service.SubscriptionCacheData, error) {
 	result := &service.SubscriptionCacheData{}
 
+	result.SubscriptionID, _ = strconv.ParseInt(data[subFieldSubscriptionID], 10, 64)
 	result.Status = data[subFieldStatus]
 	if result.Status == "" {
 		return nil, errors.New("invalid cache: missing status")
@@ -219,27 +239,42 @@ func (c *billingCache) parseSubscriptionCache(data map[string]string) (*service.
 	return result, nil
 }
 
+func subscriptionCacheFields(data *service.SubscriptionCacheData) []any {
+	return []any{
+		subFieldSubscriptionID, data.SubscriptionID,
+		subFieldStatus, data.Status,
+		subFieldExpiresAt, data.ExpiresAt.Unix(),
+		subFieldDailyUsage, data.DailyUsage,
+		subFieldWeeklyUsage, data.WeeklyUsage,
+		subFieldMonthlyUsage, data.MonthlyUsage,
+		subFieldVersion, data.Version,
+	}
+}
+
 func (c *billingCache) SetSubscriptionCache(ctx context.Context, userID, groupID int64, data *service.SubscriptionCacheData) error {
 	if data == nil {
 		return nil
 	}
-
 	key := billingSubKey(userID, groupID)
-
-	fields := map[string]any{
-		subFieldStatus:       data.Status,
-		subFieldExpiresAt:    data.ExpiresAt.Unix(),
-		subFieldDailyUsage:   data.DailyUsage,
-		subFieldWeeklyUsage:  data.WeeklyUsage,
-		subFieldMonthlyUsage: data.MonthlyUsage,
-		subFieldVersion:      data.Version,
-	}
-
 	pipe := c.rdb.Pipeline()
-	pipe.HSet(ctx, key, fields)
+	pipe.HSet(ctx, key, subscriptionCacheFields(data)...)
 	pipe.Expire(ctx, key, jitteredTTL())
 	_, err := pipe.Exec(ctx)
 	return err
+}
+
+func (c *billingCache) GetSubscriptionCacheGeneration(ctx context.Context, userID, groupID int64) (string, error) {
+	generation, err := c.rdb.Get(ctx, billingSubGenerationKey(userID, groupID)).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", nil
+	}
+	return generation, err
+}
+
+func (c *billingCache) SetSubscriptionCacheIfGeneration(ctx context.Context, userID, groupID int64, data *service.SubscriptionCacheData, generation string) error {
+	args := append([]any{generation, int(jitteredTTL().Seconds()), data.Version, data.SubscriptionID}, subscriptionCacheFields(data)...)
+	keys := []string{billingSubKey(userID, groupID), billingSubGenerationKey(userID, groupID)}
+	return setSubSnapshotScript.Run(ctx, c.rdb, keys, args...).Err()
 }
 
 func (c *billingCache) UpdateSubscriptionUsage(ctx context.Context, userID, groupID int64, cost float64) error {
@@ -253,8 +288,12 @@ func (c *billingCache) UpdateSubscriptionUsage(ctx context.Context, userID, grou
 }
 
 func (c *billingCache) InvalidateSubscriptionCache(ctx context.Context, userID, groupID int64) error {
-	key := billingSubKey(userID, groupID)
-	return c.rdb.Del(ctx, key).Err()
+	_, err := c.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Set(ctx, billingSubGenerationKey(userID, groupID), uuid.NewString(), billingCacheTTL)
+		pipe.Del(ctx, billingSubKey(userID, groupID))
+		return nil
+	})
+	return err
 }
 
 func (c *billingCache) PublishSubscriptionCacheInvalidation(ctx context.Context, cacheKey string) error {

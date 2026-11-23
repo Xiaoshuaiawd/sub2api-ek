@@ -40,6 +40,14 @@ type UserSubscription struct {
 	WeeklyLimitUsd *float64 `json:"weekly_limit_usd,omitempty"`
 	// MonthlyLimitUsd holds the value of the "monthly_limit_usd" field.
 	MonthlyLimitUsd *float64 `json:"monthly_limit_usd,omitempty"`
+	// PendingPlanID holds the value of the "pending_plan_id" field.
+	PendingPlanID *int64 `json:"pending_plan_id,omitempty"`
+	// PendingDailyLimitUsd holds the value of the "pending_daily_limit_usd" field.
+	PendingDailyLimitUsd *float64 `json:"pending_daily_limit_usd,omitempty"`
+	// PendingWeeklyLimitUsd holds the value of the "pending_weekly_limit_usd" field.
+	PendingWeeklyLimitUsd *float64 `json:"pending_weekly_limit_usd,omitempty"`
+	// PendingMonthlyLimitUsd holds the value of the "pending_monthly_limit_usd" field.
+	PendingMonthlyLimitUsd *float64 `json:"pending_monthly_limit_usd,omitempty"`
 	// StartsAt holds the value of the "starts_at" field.
 	StartsAt time.Time `json:"starts_at,omitempty"`
 	// ExpiresAt holds the value of the "expires_at" field.
@@ -134,9 +142,9 @@ func (*UserSubscription) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case usersubscription.FieldGroupIds:
 			values[i] = new([]byte)
-		case usersubscription.FieldDailyLimitUsd, usersubscription.FieldWeeklyLimitUsd, usersubscription.FieldMonthlyLimitUsd, usersubscription.FieldDailyUsageUsd, usersubscription.FieldWeeklyUsageUsd, usersubscription.FieldMonthlyUsageUsd:
+		case usersubscription.FieldDailyLimitUsd, usersubscription.FieldWeeklyLimitUsd, usersubscription.FieldMonthlyLimitUsd, usersubscription.FieldPendingDailyLimitUsd, usersubscription.FieldPendingWeeklyLimitUsd, usersubscription.FieldPendingMonthlyLimitUsd, usersubscription.FieldDailyUsageUsd, usersubscription.FieldWeeklyUsageUsd, usersubscription.FieldMonthlyUsageUsd:
 			values[i] = new(sql.NullFloat64)
-		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldGroupID, usersubscription.FieldPlanID, usersubscription.FieldAssignedBy:
+		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldGroupID, usersubscription.FieldPlanID, usersubscription.FieldPendingPlanID, usersubscription.FieldAssignedBy:
 			values[i] = new(sql.NullInt64)
 		case usersubscription.FieldStatus, usersubscription.FieldNotes:
 			values[i] = new(sql.NullString)
@@ -229,6 +237,34 @@ func (_m *UserSubscription) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.MonthlyLimitUsd = new(float64)
 				*_m.MonthlyLimitUsd = value.Float64
+			}
+		case usersubscription.FieldPendingPlanID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field pending_plan_id", values[i])
+			} else if value.Valid {
+				_m.PendingPlanID = new(int64)
+				*_m.PendingPlanID = value.Int64
+			}
+		case usersubscription.FieldPendingDailyLimitUsd:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field pending_daily_limit_usd", values[i])
+			} else if value.Valid {
+				_m.PendingDailyLimitUsd = new(float64)
+				*_m.PendingDailyLimitUsd = value.Float64
+			}
+		case usersubscription.FieldPendingWeeklyLimitUsd:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field pending_weekly_limit_usd", values[i])
+			} else if value.Valid {
+				_m.PendingWeeklyLimitUsd = new(float64)
+				*_m.PendingWeeklyLimitUsd = value.Float64
+			}
+		case usersubscription.FieldPendingMonthlyLimitUsd:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field pending_monthly_limit_usd", values[i])
+			} else if value.Valid {
+				_m.PendingMonthlyLimitUsd = new(float64)
+				*_m.PendingMonthlyLimitUsd = value.Float64
 			}
 		case usersubscription.FieldStartsAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -400,6 +436,26 @@ func (_m *UserSubscription) String() string {
 	builder.WriteString(", ")
 	if v := _m.MonthlyLimitUsd; v != nil {
 		builder.WriteString("monthly_limit_usd=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.PendingPlanID; v != nil {
+		builder.WriteString("pending_plan_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.PendingDailyLimitUsd; v != nil {
+		builder.WriteString("pending_daily_limit_usd=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.PendingWeeklyLimitUsd; v != nil {
+		builder.WriteString("pending_weekly_limit_usd=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.PendingMonthlyLimitUsd; v != nil {
+		builder.WriteString("pending_monthly_limit_usd=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")
