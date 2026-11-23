@@ -260,12 +260,22 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	}
 
 	if cmd.BalanceCost > 0 {
-		newBalance, sufficient, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.BalanceCost)
-		if err != nil {
-			return err
+		if cmd.HybridGroupID > 0 {
+			// Quota-first admission can happen even with a negative wallet.
+			// The wallet fallback must be fully funded when the debit runs.
+			newBalance, err := deductFundedUsageBillingBalance(ctx, tx, cmd.UserID, cmd.BalanceCost)
+			if err != nil {
+				return err
+			}
+			result.NewBalance = &newBalance
+		} else {
+			newBalance, sufficient, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.BalanceCost)
+			if err != nil {
+				return err
+			}
+			result.NewBalance = &newBalance
+			result.BalanceOverdrafted = !sufficient
 		}
-		result.NewBalance = &newBalance
-		result.BalanceOverdrafted = !sufficient
 	}
 
 	// Key 已不存在时跳过其自身的额度/限速计数，其余结算项不受影响。
@@ -557,7 +567,7 @@ func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscrip
 	return service.ErrSubscriptionNotFound
 }
 
-func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, bool, error) {
+func tryDeductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, error) {
 	var newBalance float64
 	err := tx.QueryRowContext(ctx, `
 		UPDATE users
@@ -566,6 +576,26 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 		WHERE id = $2 AND deleted_at IS NULL AND balance >= $1
 		RETURNING balance
 	`, amount, userID).Scan(&newBalance)
+	return newBalance, err
+}
+
+func deductFundedUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, error) {
+	balance, err := tryDeductUsageBillingBalance(ctx, tx, userID, amount)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return balance, err
+	}
+	exists, err := userExistsForBilling(ctx, tx, userID)
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, service.ErrUserNotFound
+	}
+	return 0, service.ErrInsufficientBalance
+}
+
+func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, bool, error) {
+	newBalance, err := tryDeductUsageBillingBalance(ctx, tx, userID, amount)
 	if err == nil {
 		return newBalance, true, nil
 	}

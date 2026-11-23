@@ -54,8 +54,8 @@ func inflightNoop() {}
 // 成功时把预留句柄挂到 c.Request 的 context 上：之后通过 submit*UsageRecordTask 提交的
 // 计费任务会接管一个引用，直到余额缓存实际扣减后才释放。返回的 done 必须 defer 调用
 // （停止续期并归还 handler 引用；没有提交计费任务时即刻释放）。
-// 开关关闭、订阅模式、Redis 故障时返回 no-op（fail-open）；无法定价时默认 fail-open，
-// 配置 fail_closed_on_unpriced=true 时返回 ErrInsufficientBalance。
+// 普通余额预留在开关关闭或 Redis 故障时跳过。混合分组在钱包不可用时仍需检查
+// 订阅余量能否覆盖预计费用。
 func reserveInflightBalance(
 	c *gin.Context,
 	billing *service.BillingCacheService,
@@ -92,10 +92,23 @@ func reserveInflightBalanceCtx(
 			return ctx, inflightNoop, funds.Check(ctx)
 		}
 	}
-	if billing == nil || estimator == nil || apiKey == nil || apiKey.User == nil || !billing.InflightReservationEnabled() {
+	if billing == nil || estimator == nil || apiKey == nil || apiKey.User == nil {
 		return ctx, inflightNoop, nil
 	}
 	if apiKey.Group != nil && apiKey.Group.IsSubscriptionType() && subscription != nil {
+		if !apiKey.Group.AllowsBalanceFallback() || req.Model == "" {
+			return ctx, inflightNoop, nil
+		}
+		res, err := billing.ReserveHybridSubscription(ctx, apiKey, subscription, func(subscriptionQuota bool) (float64, bool) {
+			req.SubscriptionQuota = subscriptionQuota
+			return estimator.EstimateInflightReservation(ctx, apiKey, req)
+		})
+		if err != nil || res == nil {
+			return ctx, inflightNoop, err
+		}
+		return service.WithInflightReservation(ctx, res), res.HandlerDone, nil
+	}
+	if !billing.InflightReservationEnabled() {
 		return ctx, inflightNoop, nil
 	}
 	estimate, priced := estimator.EstimateInflightReservation(ctx, apiKey, req)

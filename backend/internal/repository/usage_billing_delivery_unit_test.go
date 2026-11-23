@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -13,6 +14,43 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUsageBillingDeliveryBlocksUnfundedHybridWalletCharge(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	cmd := service.UsageBillingCommand{
+		RequestID: "unfunded-hybrid", APIKeyID: 2, UserID: 1, AccountID: 3,
+		HybridGroupID: 7, HybridCostUSD: 0.25,
+	}
+	cmd.Normalize()
+	usage := service.UsageLog{
+		RequestID: cmd.RequestID, APIKeyID: cmd.APIKeyID, UserID: cmd.UserID, AccountID: cmd.AccountID,
+		Model: "fixture", ActualCost: 0.25, CreatedAt: time.Now(),
+	}
+	payload, err := json.Marshal(service.UsageBillingEvent{Version: 1, Command: cmd, Usage: usage})
+	require.NoError(t, err)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT schema_version,payload,state,result,request_fingerprint").WillReturnRows(
+		sqlmock.NewRows([]string{"schema_version", "payload", "state", "result", "request_fingerprint"}).
+			AddRow(1, payload, "pending", nil, cmd.RequestFingerprint))
+	mock.ExpectQuery("INSERT INTO usage_billing_dedup").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery("SELECT request_fingerprint.*FROM usage_billing_dedup_archive").WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint"}))
+	mock.ExpectQuery("SELECT EXISTS.*FROM usage_logs").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(conditionalBalanceDeductSQL).WithArgs(0.25, int64(1)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(userExistsForBillingSQL).WithArgs(int64(1)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(1))
+	mock.ExpectRollback()
+	mock.ExpectExec("UPDATE usage_billing_events SET state=\\$3,failure_code=\\$4").
+		WithArgs(cmd.RequestID, cmd.APIKeyID, "blocked", "insufficient_balance").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	_, err = (&usageBillingRepository{db: db}).ApplyStagedUsageBilling(context.Background(), service.UsageBillingEventKey{
+		RequestID: cmd.RequestID, APIKeyID: cmd.APIKeyID,
+	})
+	require.ErrorIs(t, err, service.ErrInsufficientBalance)
+	require.NoError(t, mock.ExpectationsWereMet(), "failure must roll back the charge and retain the staged event")
+}
 
 func TestUsageBillingDeliveryCommitUnknownChecksReceiptBeforeReplay(t *testing.T) {
 	db, mock, err := sqlmock.New()

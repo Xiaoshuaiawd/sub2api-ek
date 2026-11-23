@@ -81,12 +81,45 @@ func TestReserveInflightBalance_UnpricedFailOpenByDefaultFailClosedOptIn(t *test
 	require.ErrorIs(t, err, service.ErrInsufficientBalance)
 }
 
+func TestReserveInflightBalance_HybridWithoutWalletMustFitSubscription(t *testing.T) {
+	limit := 1.0
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cache := newHandlerInflightCache(-0.50)
+	cache.subscription = &service.SubscriptionCacheData{
+		SubscriptionID: 20, Status: service.SubscriptionStatusActive,
+		ExpiresAt: time.Now().Add(time.Hour), DailyUsage: 0.90,
+	}
+	billing := service.NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billing.Stop)
+	key := &service.APIKey{
+		User:  &service.User{ID: 1, Balance: -0.50},
+		Group: &service.Group{ID: 7, SubscriptionType: service.SubscriptionTypeSubscriptionBalance, DailyLimitUSD: &limit},
+	}
+	subscription := &service.UserSubscription{ID: 20}
+	req := tokenInflightEstimate("model", []byte(`{}`))
+
+	_, err := reserveInflightBalance(newInflightTestGinContext(), billing, &countingEstimator{cost: 0.25, priced: true}, key, subscription, req)
+	require.ErrorIs(t, err, service.ErrDailyLimitExceeded)
+	done, err := reserveInflightBalance(newInflightTestGinContext(), billing, &countingEstimator{cost: 0.05, priced: true}, key, subscription, req)
+	require.NoError(t, err)
+	done()
+
+	cache.balance = 0.10
+	_, err = reserveInflightBalance(newInflightTestGinContext(), billing, &countingEstimator{cost: 0.25, priced: true}, key, subscription, req)
+	require.ErrorIs(t, err, service.ErrDailyLimitExceeded)
+	cache.balance = 0.25
+	done, err = reserveInflightBalance(newInflightTestGinContext(), billing, &countingEstimator{cost: 0.25, priced: true}, key, subscription, req)
+	require.NoError(t, err)
+	done()
+}
+
 // handlerInflightCache 内存版余额缓存 + 在途预留（语义同 Redis Lua）。
 type handlerInflightCache struct {
 	service.BillingCache
-	mu      sync.Mutex
-	balance float64
-	res     map[string]float64
+	mu           sync.Mutex
+	balance      float64
+	res          map[string]float64
+	subscription *service.SubscriptionCacheData
 }
 
 func newHandlerInflightCache(balance float64) *handlerInflightCache {
@@ -97,6 +130,10 @@ func (m *handlerInflightCache) GetUserBalance(context.Context, int64) (float64, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.balance, nil
+}
+
+func (m *handlerInflightCache) GetSubscriptionCache(context.Context, int64, int64) (*service.SubscriptionCacheData, error) {
+	return m.subscription, nil
 }
 
 func (m *handlerInflightCache) GetUserPlatformQuotaCache(context.Context, int64, string) (*service.UserPlatformQuotaCacheEntry, bool, error) {

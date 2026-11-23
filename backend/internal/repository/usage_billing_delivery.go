@@ -115,6 +115,10 @@ func (r *usageBillingRepository) ApplyStagedUsageBilling(ctx context.Context, ke
 		code, state := "apply_failed", "pending"
 		if errors.Is(err, service.ErrUsageBillingRequestConflict) || errors.Is(err, service.ErrUsageBillingEventVersion) {
 			code, state = "identity_or_version_conflict", "blocked"
+		} else if errors.Is(err, service.ErrInsufficientBalance) {
+			// The observed usage is already in the immutable journal. Do not
+			// replay this charge against a later subscription window or top-up.
+			code, state = "insufficient_balance", "blocked"
 		}
 		retry, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		defer cancel()

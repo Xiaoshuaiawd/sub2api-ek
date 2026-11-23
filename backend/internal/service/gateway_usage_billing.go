@@ -445,14 +445,6 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 			invalidator.InvalidateAuthCacheByKey(billingCtx, p.APIKey.Key)
 		}
 	}
-	if cmd.HybridGroupID > 0 && result.BalanceOverdrafted {
-		balance := 0.0
-		if result.NewBalance != nil {
-			balance = *result.NewBalance
-		}
-		logger.LegacyPrintf("service.gateway", "ALERT: hybrid wallet fallback overdrafted user=%d group=%d request=%s balance=%f",
-			cmd.UserID, cmd.HybridGroupID, cmd.RequestID, balance)
-	}
 
 	finalizePostUsageBilling(billingCtx, p, deps, result)
 	return true, nil

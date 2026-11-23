@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
@@ -101,6 +102,43 @@ func TestApplyUsageBillingEffects_FlagsBalanceOverdraft(t *testing.T) {
 	require.InDelta(t, -5.0, *result.NewBalance, 0.000001)
 	require.True(t, result.BalanceOverdrafted)
 	require.NoError(t, tx.Commit())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestApplyUsageBillingEffects_HybridWalletCannotOverdraw(t *testing.T) {
+	ctx := context.Background()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	subID := int64(20)
+	now := time.Now()
+	mock.ExpectQuery("SELECT id FROM groups WHERE id = \\$1").
+		WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
+	mock.ExpectQuery("SELECT status, starts_at, expires_at").
+		WithArgs(subID, int64(42), int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"status", "starts_at", "expires_at", "daily_window_start", "weekly_window_start", "monthly_window_start",
+		}).AddRow(service.SubscriptionStatusActive, now.Add(-time.Hour), now.Add(time.Hour), nil, nil, nil))
+	mock.ExpectExec("UPDATE user_subscriptions AS us").
+		WithArgs(0.25, subID, int64(42), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(conditionalBalanceDeductSQL).
+		WithArgs(0.25, int64(42)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(userExistsForBillingSQL).
+		WithArgs(int64(42)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(1))
+	mock.ExpectRollback()
+
+	result := &service.UsageBillingApplyResult{}
+	err = (&usageBillingRepository{}).applyUsageBillingEffects(ctx, tx, &service.UsageBillingCommand{
+		UserID: 42, SubscriptionID: &subID, HybridGroupID: 7, HybridSubscriptionCostUSD: 0.25, HybridBalanceCostUSD: 0.25,
+	}, result)
+	require.ErrorIs(t, err, service.ErrInsufficientBalance)
+	require.Nil(t, result.NewBalance)
+	require.NoError(t, tx.Rollback())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -257,6 +257,39 @@ func (s *BillingCacheService) ReserveInflight(ctx context.Context, user *User, g
 	return s.reserveInflight(ctx, user, group, subscription, estimate, true, true)
 }
 
+// ReserveHybridSubscription checks capped subscription requests when the
+// wallet cannot provide fallback. Settlement still enforces the actual cost.
+func (s *BillingCacheService) ReserveHybridSubscription(ctx context.Context, key *APIKey, subscription *UserSubscription, estimate func(subscriptionQuota bool) (float64, bool)) (*InflightReservation, error) {
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		return nil, nil
+	}
+	if subscription.DailyLimit(key.Group) == nil && subscription.WeeklyLimit(key.Group) == nil && subscription.MonthlyLimit(key.Group) == nil {
+		return nil, nil
+	}
+	balance, err := s.GetUserBalance(ctx, key.User.ID)
+	if err == nil && !s.balanceBelowEligibilityThreshold(balance) {
+		walletCost, priced := estimate(false)
+		if !priced || balance >= walletCost {
+			return nil, nil
+		}
+	}
+	// A wallet read error cannot authorize spending on the wallet. The
+	// subscription can still cover the request on its own.
+	amount, priced := estimate(true)
+	if !priced || amount < 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return nil, ErrInsufficientBalance
+	}
+	if amount == 0 {
+		return nil, nil
+	}
+	res, pending := s.reserveInflightScope(ctx, nil, key.User.ID, inflightSubscriptionScope(subscription.ID), amount)
+	if err := s.checkFixedChargeSubscription(ctx, key.User.ID, key.Group, subscription, amount+pending); err != nil {
+		res.Release()
+		return nil, err
+	}
+	return res, nil
+}
+
 // inflightSubscriptionScope / inflightAPIKeyScope 是订阅 / API Key 维度在途预留的 scope 名。
 func inflightSubscriptionScope(subscriptionID int64) string {
 	return "sub:" + strconv.FormatInt(subscriptionID, 10)
@@ -384,6 +417,8 @@ type InflightEstimateRequest struct {
 	// 音频：模式（tts/stt/realtime）与计量单位（百万字符/小时/分钟）。
 	AudioMode  string
 	AudioUnits float64
+	// SubscriptionQuota uses the hybrid group's subscription multiplier.
+	SubscriptionQuota bool
 }
 
 // inflightEstimateDeps 两种网关 service 共用的估算依赖。
@@ -489,13 +524,16 @@ func inflightBillingModelCandidates(ctx context.Context, deps inflightEstimateDe
 	return primary, fallbacks, upstreamInput
 }
 
-func (d inflightEstimateDeps) rates(ctx context.Context, apiKey *APIKey) (text, image float64) {
+func (d inflightEstimateDeps) rates(ctx context.Context, apiKey *APIKey, subscriptionQuota bool) (text, image float64) {
 	rate := 1.0
 	if d.cfg != nil && d.cfg.Default.RateMultiplier > 0 {
 		rate = d.cfg.Default.RateMultiplier
 	}
 	if apiKey != nil && apiKey.GroupID != nil && apiKey.Group != nil {
 		rate = apiKey.Group.RateMultiplier
+		if subscriptionQuota {
+			rate = apiKey.Group.SubscriptionBillingRateMultiplier()
+		}
 		if d.userGroupRate != nil && apiKey.User != nil {
 			rate = d.userGroupRate(ctx, apiKey.User.ID, *apiKey.GroupID, rate)
 		}
@@ -638,7 +676,11 @@ func (d inflightEstimateDeps) estimateOne(ctx context.Context, apiKey *APIKey, m
 // estimate 返回保守的单请求费用（USD，已乘倍率）；无法定价返回 (0,false)。
 func (d inflightEstimateDeps) estimate(ctx context.Context, apiKey *APIKey, req InflightEstimateRequest) (float64, bool) {
 	if req.MiniMaxH3BaseCost != nil && apiKey != nil && apiKey.Group != nil {
-		cost := *req.MiniMaxH3BaseCost * math.Max(0, apiKey.Group.RateMultiplier)
+		rate := apiKey.Group.RateMultiplier
+		if req.SubscriptionQuota {
+			rate = apiKey.Group.SubscriptionBillingRateMultiplier()
+		}
+		cost := *req.MiniMaxH3BaseCost * math.Max(0, rate)
 		return cost, validCost(cost)
 	}
 	if apiKey == nil || apiKey.User == nil {
@@ -648,7 +690,7 @@ func (d inflightEstimateDeps) estimate(ctx context.Context, apiKey *APIKey, req 
 		// 非计量请求（媒体状态查询、custom-voices 等）：无需预留，也不算「无法定价」。
 		return 0, true
 	}
-	textRate, imageRate := d.rates(ctx, apiKey)
+	textRate, imageRate := d.rates(ctx, apiKey, req.SubscriptionQuota)
 	if textRate <= 0 && imageRate <= 0 {
 		// 免费分组：不计费，也无需预留。
 		return 0, true
