@@ -836,6 +836,8 @@ export default {
       monthly: 'Monthly',
       noLimits: 'No limits configured',
       unlimited: 'Unlimited',
+      quotaUsed: 'Used {used} / {limit}',
+      quotaRemaining: 'Remaining {amount}',
       resetNow: 'Resetting soon',
       windowNotActive: 'Window not active',
       resetInMinutes: 'Resets in {minutes}m',

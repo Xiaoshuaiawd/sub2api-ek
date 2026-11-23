@@ -23,7 +23,9 @@ type scopedSubscriptionRepo struct {
 }
 
 func (*scopedSubscriptionRepo) GetByID(context.Context, int64) (*service.UserSubscription, error) {
+	planID, dailyLimit := int64(7), 10.5
 	return &service.UserSubscription{ID: 1, UserID: 2, GroupID: 3, DailyUsageUSD: 4, ExpiresAt: time.Now().Add(time.Hour),
+		PlanID: &planID, DailyLimitUSD: &dailyLimit,
 		User:           &service.User{ID: 2, Email: "private-user@example.com", Balance: 987},
 		AssignedByUser: &service.User{ID: 8, Email: "private-admin@example.com", Balance: 654},
 		Group:          &service.Group{ID: 3, Name: "group", RateMultiplier: 42}}, nil
@@ -44,6 +46,10 @@ func TestScopedAdminSubscriptionDoesNotExposeAssociatedUserAndPricing(t *testing
 		h.GetByID(c)
 		require.Equal(t, 200, w.Code)
 		require.Contains(t, w.Body.String(), `"daily_usage_usd":4`)
+		require.Contains(t, w.Body.String(), `"daily_limit_usd":10.5`)
+		if scoped {
+			require.NotContains(t, w.Body.String(), `"plan_id"`)
+		}
 		for _, field := range []string{"private-user@example.com", "private-admin@example.com", `"balance"`, `"rate_multiplier"`} {
 			if scoped {
 				require.NotContains(t, w.Body.String(), field)
@@ -118,6 +124,7 @@ func TestScopedAdminSubscriptionExtendReplayRespectsReadPermission(t *testing.T)
 				require.Len(t, result.Data, 1)
 			} else {
 				require.Contains(t, result.Data, "daily_usage_usd")
+				require.JSONEq(t, "10.5", string(result.Data["daily_limit_usd"]))
 			}
 		}
 	}

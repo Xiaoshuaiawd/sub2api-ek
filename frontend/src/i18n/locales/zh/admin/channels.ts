@@ -836,6 +836,8 @@ export default {
       monthly: '每月',
       noLimits: '未配置限额',
       unlimited: '无限制',
+      quotaUsed: '已用 {used} / {limit}',
+      quotaRemaining: '剩余 {amount}',
       resetNow: '即将重置',
       windowNotActive: '窗口未激活',
       resetInMinutes: '{minutes} 分钟后重置',

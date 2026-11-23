@@ -247,127 +247,43 @@
 
           <template #cell-usage="{ row }">
             <div class="min-w-[280px] space-y-2">
-              <!-- Daily Usage -->
-              <div v-if="row.group?.daily_limit_usd" class="usage-row">
-                <div class="flex items-center gap-2">
-                  <span class="usage-label">{{ t('admin.subscriptions.daily') }}</span>
-                  <div class="h-1.5 flex-1 rounded-full bg-gray-200 dark:bg-dark-600">
+              <div v-for="window in getUsageWindows(row)" :key="window.period" class="usage-row">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="usage-label">{{ t(`admin.subscriptions.${window.period}`) }}</span>
+                  <span class="usage-amount">
+                    {{ t('admin.subscriptions.quotaUsed', {
+                      used: formatCurrency(window.used),
+                      limit: window.limit === null ? t('admin.subscriptions.unlimited') : formatCurrency(window.limit)
+                    }) }}
+                  </span>
+                </div>
+                <div v-if="window.limit !== null" class="flex items-center gap-2 pl-12">
+                  <div aria-hidden="true" class="h-1.5 flex-1 rounded-full bg-gray-200 dark:bg-dark-600">
                     <div
                       class="h-1.5 rounded-full transition-all"
-                      :class="getProgressClass(row.daily_usage_usd, row.group?.daily_limit_usd)"
-                      :style="{
-                        width: getProgressWidth(row.daily_usage_usd, row.group?.daily_limit_usd)
-                      }"
+                      :class="getProgressClass(window.used, window.limit)"
+                      :style="{ width: getProgressWidth(window.used, window.limit) }"
                     ></div>
                   </div>
                   <span class="usage-amount">
-                    ${{ row.daily_usage_usd?.toFixed(2) || '0.00' }}
-                    <span class="text-gray-400">/</span>
-                    ${{ row.group?.daily_limit_usd?.toFixed(2) }}
+                    {{ t('admin.subscriptions.quotaRemaining', {
+                      amount: formatCurrency(Math.max(0, window.limit - window.used))
+                    }) }}
                   </span>
                 </div>
-                <div class="reset-info" v-if="row.daily_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatDailyUsageWindow(row) }}</span>
+                <div v-if="window.limit !== null && window.start" class="reset-info">
+                  <Icon name="clock" size="xs" />
+                  <span>
+                    {{ window.period === 'daily' ? formatDailyUsageWindow(row) : formatResetTime(window.start, window.period) }}
+                  </span>
                 </div>
               </div>
 
-              <!-- Weekly Usage -->
-              <div v-if="row.group?.weekly_limit_usd" class="usage-row">
-                <div class="flex items-center gap-2">
-                  <span class="usage-label">{{ t('admin.subscriptions.weekly') }}</span>
-                  <div class="h-1.5 flex-1 rounded-full bg-gray-200 dark:bg-dark-600">
-                    <div
-                      class="h-1.5 rounded-full transition-all"
-                      :class="getProgressClass(row.weekly_usage_usd, row.group?.weekly_limit_usd)"
-                      :style="{
-                        width: getProgressWidth(row.weekly_usage_usd, row.group?.weekly_limit_usd)
-                      }"
-                    ></div>
-                  </div>
-                  <span class="usage-amount">
-                    ${{ row.weekly_usage_usd?.toFixed(2) || '0.00' }}
-                    <span class="text-gray-400">/</span>
-                    ${{ row.group?.weekly_limit_usd?.toFixed(2) }}
-                  </span>
-                </div>
-                <div class="reset-info" v-if="row.weekly_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatResetTime(row.weekly_window_start, 'weekly') }}</span>
-                </div>
-              </div>
-
-              <!-- Monthly Usage -->
-              <div v-if="row.group?.monthly_limit_usd" class="usage-row">
-                <div class="flex items-center gap-2">
-                  <span class="usage-label">{{ t('admin.subscriptions.monthly') }}</span>
-                  <div class="h-1.5 flex-1 rounded-full bg-gray-200 dark:bg-dark-600">
-                    <div
-                      class="h-1.5 rounded-full transition-all"
-                      :class="getProgressClass(row.monthly_usage_usd, row.group?.monthly_limit_usd)"
-                      :style="{
-                        width: getProgressWidth(row.monthly_usage_usd, row.group?.monthly_limit_usd)
-                      }"
-                    ></div>
-                  </div>
-                  <span class="usage-amount">
-                    ${{ row.monthly_usage_usd?.toFixed(2) || '0.00' }}
-                    <span class="text-gray-400">/</span>
-                    ${{ row.group?.monthly_limit_usd?.toFixed(2) }}
-                  </span>
-                </div>
-                <div class="reset-info" v-if="row.monthly_window_start">
-                  <svg
-                    class="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <span>{{ formatResetTime(row.monthly_window_start, 'monthly') }}</span>
-                </div>
-              </div>
-
-              <!-- No Limits - Unlimited badge -->
               <div
-                v-if="
-                  !row.group?.daily_limit_usd &&
-                  !row.group?.weekly_limit_usd &&
-                  !row.group?.monthly_limit_usd
-                "
+                v-if="getUsageWindows(row).length === 0"
                 class="flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-50 to-teal-50 px-3 py-2 dark:from-emerald-900/20 dark:to-teal-900/20"
               >
-                <span class="text-lg text-emerald-600 dark:text-emerald-400">∞</span>
+                <span aria-hidden="true" class="text-lg text-emerald-600 dark:text-emerald-400">∞</span>
                 <span class="text-xs font-medium text-emerald-700 dark:text-emerald-300">
                   {{ t('admin.subscriptions.unlimited') }}
                 </span>
@@ -850,7 +766,7 @@ import type { SubscriptionBulkAction, SubscriptionBulkActionResult, BulkAssignSu
 import { useTableSelection } from '@/composables/useTableSelection'
 import BulkSubscriptionActionDialog from '@/components/admin/subscription/BulkSubscriptionActionDialog.vue'
 import type { Column } from '@/components/common/types'
-import { formatDateTimeToMinute } from '@/utils/format'
+import { formatCurrency, formatDateTimeToMinute } from '@/utils/format'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -1521,19 +1437,32 @@ const isExpiringSoon = (expiresAt: string): boolean => {
   return days !== null && days <= 7
 }
 
-const getProgressWidth = (used: number | null | undefined, limit: number | null): string => {
-  if (!limit || limit === 0) return '0%'
-  const usedValue = used ?? 0
-  const percentage = Math.min((usedValue / limit) * 100, 100)
-  return `${percentage}%`
-}
+const quotaPeriods = ['daily', 'weekly', 'monthly'] as const
 
-const getProgressClass = (used: number | null | undefined, limit: number | null): string => {
-  if (!limit || limit === 0) return 'bg-gray-400'
-  const usedValue = used ?? 0
-  const percentage = (usedValue / limit) * 100
-  if (percentage >= 90) return 'bg-red-500'
-  if (percentage >= 70) return 'bg-orange-500'
+const getUsageWindows = (subscription: UserSubscription) =>
+  quotaPeriods.map(period => {
+    const field = `${period}_limit_usd` as const
+    const effectiveLimit = subscription[field]
+    // A paid plan's missing limit means unlimited for that window. Only
+    // legacy group subscriptions can fall back to the group defaults.
+    const limit = (subscription.plan_id != null || effectiveLimit !== undefined
+      ? effectiveLimit
+      : subscription.group?.[field]) ?? null
+
+    return {
+      period,
+      limit,
+      used: subscription[`${period}_usage_usd`] ?? 0,
+      start: subscription[`${period}_window_start`]
+    }
+  }).filter(window => window.limit !== null || window.used !== 0)
+
+const getProgressWidth = (used: number, limit: number): string =>
+  limit > 0 ? `${Math.max(0, Math.min(used / limit * 100, 100))}%` : '100%'
+
+const getProgressClass = (used: number, limit: number): string => {
+  if (limit <= 0 || used / limit >= 0.9) return 'bg-red-500'
+  if (used / limit >= 0.7) return 'bg-orange-500'
   return 'bg-green-500'
 }
 

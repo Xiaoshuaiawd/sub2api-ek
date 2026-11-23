@@ -34,8 +34,12 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string, params?: { id?: number }) =>
-        key === 'admin.redeem.userPrefix' ? `User #${params?.id}` : key
+      t: (key: string, params?: { id?: number; used?: string; limit?: string; amount?: string }) => {
+        if (key === 'admin.redeem.userPrefix') return `User #${params?.id}`
+        if (key === 'admin.subscriptions.quotaUsed') return `Used ${params?.used} / ${params?.limit}`
+        if (key === 'admin.subscriptions.quotaRemaining') return `Remaining ${params?.amount}`
+        return key
+      }
     })
   }
 })
@@ -46,6 +50,7 @@ const DataTableStub = {
     <div>
       <div v-for="row in data" :key="row.id">
         <slot name="cell-user" :row="row" />
+        <slot name="cell-usage" :row="row" />
       </div>
     </div>
   `
@@ -223,6 +228,43 @@ describe('admin subscription users', () => {
     const link = wrapper.getComponent(RouterLinkStub)
     expect(link.text()).toBe('reader@example.com')
     expect(link.props('to')).toEqual({ path: '/admin/usage', query: { user_id: 42 } })
+  })
+
+  it.each([
+    {
+      name: 'uses the current paid quota even when the group has no limit',
+      row: { plan_id: 7, daily_limit_usd: 5, daily_usage_usd: 3.25, pending_daily_limit_usd: 2 },
+      expected: ['Used $3.25 / $5.00', 'Remaining $1.75'],
+      excluded: ['admin.subscriptions.unlimited', '$2.00']
+    },
+    {
+      name: 'uses the group limit for legacy subscriptions and stops remaining quota at zero',
+      row: { weekly_usage_usd: 6, group: { weekly_limit_usd: 5 } },
+      expected: ['Used $6.00 / $5.00', 'Remaining $0.00'],
+      excluded: ['admin.subscriptions.unlimited']
+    },
+    {
+      name: 'shows real usage for an unlimited plan without borrowing the group limit',
+      row: { plan_id: 8, daily_usage_usd: 3, group: { daily_limit_usd: 10 } },
+      expected: ['Used $3.00 / admin.subscriptions.unlimited'],
+      excluded: ['Remaining', '$10.00']
+    },
+    {
+      name: 'treats a zero plan cap as a limit',
+      row: { plan_id: 8, daily_limit_usd: 0, daily_usage_usd: 0 },
+      expected: ['Used $0.00 / $0.00', 'Remaining $0.00'],
+      excluded: ['admin.subscriptions.unlimited']
+    }
+  ])('$name', async ({ row, expected, excluded }) => {
+    listSubscriptions.mockResolvedValue({ items: [{ id: 9, user_id: 42, ...row }], total: 1, pages: 1 })
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      for (const text of expected) expect(wrapper.text()).toContain(text)
+      for (const text of excluded) expect(wrapper.text()).not.toContain(text)
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('uses the user ID label for the usage link when username mode has no username', async () => {
