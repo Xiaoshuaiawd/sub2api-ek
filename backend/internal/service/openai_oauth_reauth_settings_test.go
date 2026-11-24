@@ -29,7 +29,7 @@ func (s *reauthRuntimeTestSettings) Set(_ context.Context, key, value string) er
 }
 
 func (r *reauthTestRepo) ClaimNextTaskForRuntime(ctx context.Context, worker string, stale time.Duration, mode string, engines []string, global string) (*OpenAIOAuthReauthTaskRecord, error) {
-	if r.config == nil || (mode != "" && r.config.CredentialMode != mode) {
+	if r.config == nil || (mode != "" && r.config.CredentialMode != mode && !(mode == OpenAIOAuthReauthModePasswordTOTP && r.config.CredentialMode == OpenAIOAuthReauthModeMailboxGraph)) {
 		return nil, nil
 	}
 	effective := effectiveReauthEngine(r.config.CredentialMode, r.config.Engine, global)

@@ -67,7 +67,7 @@ func TestAPIKeyLongContextForwardingUsesAccountMappedModel(t *testing.T) {
 		}},
 		{"responses to native anthropic", "/v1/responses", responsesBody, true, func(s *OpenAIGatewayService) forward {
 			return func(ctx context.Context, c *gin.Context, a *Account, body []byte) (*OpenAIForwardResult, error) {
-				return s.forwardResponsesViaNativeAnthropic(ctx, c, a, body, "")
+				return s.forwardResponsesViaNativeAnthropic(ctx, c, a, body, "", "")
 			}
 		}},
 		{"chat to native anthropic", "/v1/chat/completions", chatBody, true, func(s *OpenAIGatewayService) forward {

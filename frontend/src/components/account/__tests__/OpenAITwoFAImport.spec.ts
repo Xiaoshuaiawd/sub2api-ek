@@ -7,11 +7,11 @@ import { getCredentialEncryption, initializeCredentialEncryption } from '@/api/a
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import OpenAITwoFAImport from '../OpenAITwoFAImport.vue'
-import { deleteTwoFALogin, getTwoFALogin, startTwoFALogin } from '@/api/admin/accountTokenGuard'
+import { deleteTwoFALogin, getTwoFALogin, startTwoFALogin } from '@/api/admin/openaiRelogin'
 
-vi.mock('vue-i18n', async importOriginal => ({ ...await importOriginal<typeof import('vue-i18n')>(), useI18n: () => ({ t: (key: string) => key }) }))
-vi.mock('@/api/admin/accountTokenGuard', async importOriginal => ({
-  ...await importOriginal<typeof import('@/api/admin/accountTokenGuard')>(),
+vi.mock('vue-i18n', async importOriginal => ({ ...await importOriginal<typeof import('vue-i18n')>(), useI18n: () => ({ t: (key: string) => key, te: (key: string) => key === 'openaiRelogin.twoFA.errors.account_deactivated' }) }))
+vi.mock('@/api/admin/openaiRelogin', async importOriginal => ({
+  ...await importOriginal<typeof import('@/api/admin/openaiRelogin')>(),
   startTwoFALogin: vi.fn(), getTwoFALogin: vi.fn(), deleteTwoFALogin: vi.fn(),
 }))
 enableAutoUnmount(afterEach)
@@ -37,8 +37,8 @@ describe('OpenAI initial 2FA import', () => {
     await start(wrapper, 'a@example.com----p1----s1\nb@example.com----p2----s2')
     expect(importCredential).toHaveBeenCalledTimes(2)
     expect(startTwoFALogin).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).toContain('tokenGuard.twoFA.states.created')
-    expect(wrapper.text()).toContain('tokenGuard.twoFA.states.importFailed')
+    expect(wrapper.text()).toContain('openaiRelogin.twoFA.states.created')
+    expect(wrapper.text()).toContain('openaiRelogin.twoFA.states.importFailed')
     expect(wrapper.text()).not.toContain('do not display credential')
     expect(wrapper.find('textarea').exists()).toBe(false)
     importCredential.mockResolvedValueOnce('created')
@@ -46,7 +46,7 @@ describe('OpenAI initial 2FA import', () => {
     await flushPromises()
     expect(importCredential).toHaveBeenCalledTimes(3)
     expect(startTwoFALogin).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).not.toContain('tokenGuard.twoFA.retry')
+    expect(wrapper.text()).not.toContain('openaiRelogin.twoFA.retry')
     expect(importCredential.mock.calls[1]?.[2]).toEqual({ email: 'b@example.com', password: 'p2', mfa_secret: 's2' })
     expect(importCredential.mock.calls[2]?.[2]).toEqual({ email: 'b@example.com', password: 'p2', mfa_secret: 's2' })
     expect(wrapper.emitted('busy')).toEqual([[true], [false], [true], [false]])
@@ -62,6 +62,41 @@ describe('OpenAI initial 2FA import', () => {
     await start(wrapper, 'a@example.com----p----s')
     expect(importCredential).not.toHaveBeenCalled()
     expect(deleteTwoFALogin).toHaveBeenCalledWith('job-1')
+  })
+
+  it('shows the safe failure reason and account enrollment returned by the shared relogin service', async () => {
+    vi.mocked(getTwoFALogin).mockResolvedValue({
+      id: 'job-1', status: 'failed', error_code: 'account_deactivated', account_id: 42,
+    })
+    const importCredential = vi.fn()
+    const wrapper = mount(OpenAITwoFAImport, { props: { importCredential } })
+    await start(wrapper, 'a@example.com----password----secret')
+    expect(wrapper.text()).toContain('openaiRelogin.twoFA.errors.account_deactivated')
+    expect(wrapper.text()).toContain('openaiRelogin.twoFA.addedToAccounts')
+    expect(wrapper.text()).not.toContain('tokenGuard.twoFA')
+    expect(importCredential).not.toHaveBeenCalled()
+    expect(deleteTwoFALogin).toHaveBeenCalledWith('job-1')
+
+    vi.mocked(getTwoFALogin).mockResolvedValue({ id: 'job-2', status: 'succeeded', credential: { access_token: 'safe-token' } })
+    importCredential.mockResolvedValue('created')
+    await wrapper.get('[data-testid="two-fa-start"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('openaiRelogin.twoFA.states.created')
+    expect(wrapper.text()).not.toContain('openaiRelogin.twoFA.errors.account_deactivated')
+    expect(wrapper.text()).not.toContain('openaiRelogin.twoFA.addedToAccounts')
+  })
+
+  it('uses the translated unknown reason without exposing unrecognized service errors', async () => {
+    vi.mocked(getTwoFALogin).mockResolvedValue({
+      id: 'job-1', status: 'failed', error_code: 'unsafe-upstream-detail', account_id: 0,
+    })
+    const wrapper = mount(OpenAITwoFAImport, { props: { importCredential: vi.fn() } })
+    await start(wrapper, 'a@example.com----password----secret')
+    expect(wrapper.text()).toContain('openaiRelogin.twoFA.errors.unknown')
+    expect(wrapper.text()).not.toContain('unsafe-upstream-detail')
+    expect(wrapper.text()).not.toContain('openaiRelogin.twoFA.addedToAccounts')
+    expect(wrapper.text()).not.toContain('password')
+    expect(wrapper.text()).not.toContain('secret')
   })
 
   it('resumes a job after a polling failure instead of starting another login', async () => {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,7 +85,7 @@ func (h *AccountHandler) ImportAddAccount(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if h.tokenGuard == nil {
+	if h.relogin == nil {
 		response.Error(c, http.StatusServiceUnavailable, "凭证守护服务不可用，无法完成首次登录")
 		return
 	}
@@ -93,10 +94,23 @@ func (h *AccountHandler) ImportAddAccount(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	if h.inventoryTokenGuardV2 == nil {
+		response.Error(c, http.StatusServiceUnavailable, "凭证运营服务不可用，无法保存自动重登凭据")
+		return
+	}
+	status, err := h.openaiOAuthReauth.CredentialEncryptionStatus()
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if !status.Configured {
+		response.BadRequest(c, "请先在凭证运营中启用凭据加密，再导入账号")
+		return
+	}
 	ctx := c.Request.Context()
 	email := strings.ToLower(cred.Email)
 
-	job, err := h.tokenGuard.StartTwoFALogin(ctx, service.AccountTokenGuardReloginAccount{
+	job, err := h.relogin.StartTwoFALogin(ctx, service.OpenAIReloginCredentials{
 		Email:            email,
 		Password:         cred.GPTPassword,
 		MFASecret:        cred.MFASecret,
@@ -115,7 +129,7 @@ func (h *AccountHandler) ImportAddAccount(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	defer h.tokenGuard.DeleteTwoFALogin(job.ID)
+	defer h.relogin.DeleteTwoFALogin(job.ID)
 
 	result, err := h.waitTwoFALogin(ctx, job.ID)
 	if err != nil {
@@ -163,6 +177,27 @@ func (h *AccountHandler) ImportAddAccount(c *gin.Context) {
 			break
 		}
 	}
+	loginConfig := service.AccountTokenGuardV2AccountInput{
+		LoginEmail: email, CredentialMode: service.OpenAIOAuthReauthModePasswordTOTP,
+		ProxySource: service.OpenAIOAuthReauthProxySourceAccount,
+		Password:    cred.GPTPassword, TOTPSecret: cred.MFASecret,
+		Enabled: true, AutoReloginEnabled: true,
+		PreserveEnabled: true, PreserveAutoRelogin: true,
+	}
+	if cred.ClientID != "" && cred.MailboxRT != "" {
+		// Keep the mailbox fallback even when a six-field row also supplied
+		// password/TOTP. Only the authenticated worker receives these secrets.
+		loginConfig.CredentialMode = service.OpenAIOAuthReauthModeMailboxGraph
+		loginConfig.Engine = service.OpenAIOAuthReauthEngineSessionStudio
+		loginConfig.MailClientID = cred.ClientID
+		loginConfig.MailRefreshToken = cred.MailboxRT
+	}
+	if _, err := h.inventoryTokenGuardV2.SaveAccount(ctx, accountID, loginConfig); err != nil {
+		response.ErrorWithDetails(c, http.StatusServiceUnavailable,
+			"账号已导入，但自动重登凭据保存失败，请在凭证运营中补充登录凭据", "credential_save_failed",
+			map[string]string{"account_id": strconv.FormatInt(accountID, 10), "action": action, "auto_relogin_saved": "false"})
+		return
+	}
 	accessToken := addAccountText(result.Credential["access_token"])
 	refreshToken := addAccountText(result.Credential["refresh_token"])
 	line := strings.Join([]string{
@@ -170,13 +205,14 @@ func (h *AccountHandler) ImportAddAccount(c *gin.Context) {
 		cred.GPTPassword, cred.MFASecret, accessToken, refreshToken,
 	}, "----")
 	response.Success(c, gin.H{
-		"email":         email,
-		"account_id":    accountID,
-		"action":        action,
-		"account_info":  line,
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"plan_type":     addAccountText(result.Credential["plan_type"]),
+		"auto_relogin_saved": true,
+		"email":              email,
+		"account_id":         accountID,
+		"action":             action,
+		"account_info":       line,
+		"access_token":       accessToken,
+		"refresh_token":      refreshToken,
+		"plan_type":          addAccountText(result.Credential["plan_type"]),
 	})
 }
 
@@ -221,7 +257,7 @@ func defaultAddAccountImportRequest(content, name, email string, updateExistingO
 func (h *AccountHandler) waitTwoFALogin(ctx context.Context, id string) (*service.OpenAITwoFALoginJob, error) {
 	deadline := time.Now().Add(addAccountLoginTimeout)
 	for {
-		job, ok := h.tokenGuard.TwoFALogin(id)
+		job, ok := h.relogin.TwoFALogin(id)
 		if !ok {
 			return nil, errors.New("登录任务不存在或已过期")
 		}

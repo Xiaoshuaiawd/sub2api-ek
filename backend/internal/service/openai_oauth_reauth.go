@@ -50,6 +50,7 @@ const (
 const (
 	OpenAIOAuthReauthModeEmailOTPURL              = "email_otp_url"
 	OpenAIOAuthReauthModePasswordTOTP             = "password_totp"
+	OpenAIOAuthReauthModeMailboxGraph             = "mailbox_graph"
 	OpenAIOAuthReauthEngineLocal                  = "local_worker"
 	OpenAIOAuthReauthEngineSessionStudio          = "session_studio"
 	OpenAIOAuthReauthDefaultSessionStudioEndpoint = "https://session.ameng2027.xyz/api/v1/relogin"
@@ -80,22 +81,25 @@ type OpenAIOAuthReauthConfig struct {
 	URLMasked          string    `json:"otp_url_masked,omitempty"`
 	PasswordConfigured bool      `json:"password_configured"`
 	TOTPConfigured     bool      `json:"totp_configured"`
+	MailboxConfigured  bool      `json:"mailbox_configured"`
 	Configured         bool      `json:"configured"`
 	UpdatedAt          time.Time `json:"updated_at,omitempty"`
 }
 
 type OpenAIOAuthReauthConfigInput struct {
-	LoginEmail     string
-	CredentialMode string
-	Engine         string
-	ProxySource    string
-	ProxyID        *int64
-	Password       string
-	TOTPSecret     string
-	OTPURL         string
-	ClearPassword  bool
-	ClearTOTP      bool
-	PreserveProxy  bool
+	LoginEmail       string
+	CredentialMode   string
+	Engine           string
+	ProxySource      string
+	ProxyID          *int64
+	Password         string
+	TOTPSecret       string
+	OTPURL           string
+	MailClientID     string
+	MailRefreshToken string
+	ClearPassword    bool
+	ClearTOTP        bool
+	PreserveProxy    bool
 }
 
 type OpenAIOAuthReauthRuntimeSettings struct {
@@ -145,16 +149,17 @@ type OpenAIOAuthReauthRepository interface {
 }
 
 type OpenAIOAuthReauthStoredConfig struct {
-	AccountID            int64
-	LoginEmail           string
-	CredentialMode       string
-	Engine               string
-	ProxySource          string
-	ProxyID              *int64
-	PasswordCiphertext   string
-	TOTPSecretCiphertext string
-	OTPURLCiphertext     string
-	UpdatedAt            time.Time
+	AccountID                    int64
+	LoginEmail                   string
+	CredentialMode               string
+	Engine                       string
+	ProxySource                  string
+	ProxyID                      *int64
+	PasswordCiphertext           string
+	TOTPSecretCiphertext         string
+	OTPURLCiphertext             string
+	MailboxCredentialsCiphertext string
+	UpdatedAt                    time.Time
 }
 
 // OpenAIOAuthReauthTaskRecord contains fields needed by the worker protocol.
@@ -385,6 +390,22 @@ func (s *OpenAIOAuthReauthService) SaveConfig(ctx context.Context, accountID int
 }
 
 func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, accountID int64, input OpenAIOAuthReauthConfigInput) (*OpenAIOAuthReauthConfig, error) {
+	stored, err := s.prepareCredentialConfig(ctx, accountID, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.UpsertConfig(ctx, stored); err != nil {
+		if infraerrors.Code(err) == 409 {
+			return nil, err
+		}
+		return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_REAUTH_CONFIG_SAVE_FAILED", "failed to save re-login configuration")
+	}
+	return s.configView(ctx, stored)
+}
+
+// Preparation is shared with the insert-only legacy migration. Normal edits
+// keep their existing optimistic update, while migration never overwrites one.
+func (s *OpenAIOAuthReauthService) prepareCredentialConfig(ctx context.Context, accountID int64, input OpenAIOAuthReauthConfigInput) (*OpenAIOAuthReauthStoredConfig, error) {
 	if err := s.ensureReady(); err != nil {
 		return nil, err
 	}
@@ -412,7 +433,7 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 	if mode == "" {
 		mode = OpenAIOAuthReauthModeEmailOTPURL
 	}
-	if mode != OpenAIOAuthReauthModeEmailOTPURL && mode != OpenAIOAuthReauthModePasswordTOTP {
+	if mode != OpenAIOAuthReauthModeEmailOTPURL && mode != OpenAIOAuthReauthModePasswordTOTP && mode != OpenAIOAuthReauthModeMailboxGraph {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_REAUTH_MODE_INVALID", "invalid OpenAI re-login credential mode")
 	}
 	if mode == OpenAIOAuthReauthModeEmailOTPURL && input.Engine == "" {
@@ -425,6 +446,11 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 	engine = effectiveReauthEngine(mode, engine, runtimeSettings.Engine)
 	proxySource := input.ProxySource
 	proxyID := input.ProxyID
+	// Graph mailboxes use the existing remote service's own egress, as before.
+	// Do not inherit a local account/managed proxy into this transport.
+	if mode == OpenAIOAuthReauthModeMailboxGraph {
+		proxySource, proxyID = OpenAIOAuthReauthProxySourceAccount, nil
+	}
 	if input.PreserveProxy && strings.TrimSpace(proxySource) == "" && proxyID == nil && existing != nil {
 		proxySource = existing.ProxySource
 		proxyID = existing.ProxyID
@@ -445,7 +471,7 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 	if err != nil {
 		return nil, err
 	}
-	if engine == OpenAIOAuthReauthEngineSessionStudio && mode != OpenAIOAuthReauthModePasswordTOTP {
+	if engine == OpenAIOAuthReauthEngineSessionStudio && mode != OpenAIOAuthReauthModePasswordTOTP && mode != OpenAIOAuthReauthModeMailboxGraph {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_REAUTH_ENGINE_MODE_INVALID", "Session Studio requires password/TOTP mode")
 	}
 	if engine == OpenAIOAuthReauthEngineSessionStudio {
@@ -461,6 +487,7 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 		stored.PasswordCiphertext = existing.PasswordCiphertext
 		stored.TOTPSecretCiphertext = existing.TOTPSecretCiphertext
 		stored.OTPURLCiphertext = existing.OTPURLCiphertext
+		stored.MailboxCredentialsCiphertext = existing.MailboxCredentialsCiphertext
 	}
 	if input.ClearPassword {
 		stored.PasswordCiphertext = ""
@@ -470,6 +497,10 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 	}
 
 	switch mode {
+	case OpenAIOAuthReauthModeMailboxGraph:
+		if err := s.saveMailboxGraphConfig(stored, input); err != nil {
+			return nil, err
+		}
 	case OpenAIOAuthReauthModeEmailOTPURL:
 		stored.PasswordCiphertext = ""
 		stored.TOTPSecretCiphertext = ""
@@ -504,13 +535,17 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 			}
 		}
 	}
-	if err := s.repo.UpsertConfig(ctx, stored); err != nil {
-		if infraerrors.Code(err) == 409 {
+	if existing != nil && !strings.EqualFold(existing.LoginEmail, email) && stored.TOTPSecretCiphertext != "" {
+		binding, err := s.decryptTOTP(stored.TOTPSecretCiphertext)
+		if err != nil {
 			return nil, err
 		}
-		return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_REAUTH_CONFIG_SAVE_FAILED", "failed to save re-login configuration")
+		stored.TOTPSecretCiphertext, err = s.encryptor.Encrypt(binding.Secret)
+		if err != nil {
+			return nil, infraerrors.InternalServer("TOTP_ENCRYPT_FAILED", "Could not preserve TOTP secret")
+		}
 	}
-	return s.configView(ctx, stored)
+	return stored, nil
 }
 
 func (s *OpenAIOAuthReauthService) configView(ctx context.Context, stored *OpenAIOAuthReauthStoredConfig) (*OpenAIOAuthReauthConfig, error) {
@@ -534,6 +569,10 @@ func (s *OpenAIOAuthReauthService) configView(ctx context.Context, stored *OpenA
 		Engine: effectiveReauthEngine(mode, stored.Engine, runtimeSettings.Engine), ProxySource: proxySource, ProxyID: stored.ProxyID, UpdatedAt: stored.UpdatedAt,
 	}
 	switch mode {
+	case OpenAIOAuthReauthModeMailboxGraph:
+		if err := s.mailboxGraphConfigView(stored, view); err != nil {
+			return nil, err
+		}
 	case OpenAIOAuthReauthModeEmailOTPURL:
 		plain, err := s.decryptReauthSecret(stored.OTPURLCiphertext, "saved OTP mailbox configuration cannot be decrypted")
 		if err != nil {
@@ -548,11 +587,11 @@ func (s *OpenAIOAuthReauthService) configView(ctx context.Context, stored *OpenA
 		}
 		view.PasswordConfigured = password != ""
 		if stored.TOTPSecretCiphertext != "" {
-			totp, decryptErr := s.decryptReauthSecret(stored.TOTPSecretCiphertext, "saved TOTP secret cannot be decrypted")
+			totp, decryptErr := s.decryptTOTP(stored.TOTPSecretCiphertext)
 			if decryptErr != nil {
 				return nil, decryptErr
 			}
-			view.TOTPConfigured = totp != ""
+			view.TOTPConfigured = totp.Secret != ""
 		}
 		view.Configured = view.PasswordConfigured
 	default:
@@ -700,6 +739,10 @@ type OpenAIOAuthReauthClaim struct {
 	ReloginHeaders    map[string]string `json:"relogin_headers,omitempty"`
 	Password          string            `json:"password,omitempty"`
 	TOTPSecret        string            `json:"totp_secret,omitempty"`
+	TOTPFactorID      string            `json:"totp_factor_id,omitempty"`
+	MailClientID      string            `json:"mail_client_id,omitempty"`
+	MailRefreshToken  string            `json:"mail_refresh_token,omitempty"`
+	RefreshToken      string            `json:"refresh_token,omitempty"`
 	OTPURL            string            `json:"otp_url,omitempty"`
 	AuthURL           string            `json:"auth_url,omitempty"`
 	ProxyURL          string            `json:"proxy_url,omitempty"`
@@ -803,13 +846,18 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 			supported = true
 		}
 	}
-	if !supported || (engine == OpenAIOAuthReauthEngineSessionStudio && mode != OpenAIOAuthReauthModePasswordTOTP) {
+	if !supported || (engine == OpenAIOAuthReauthEngineSessionStudio && mode != OpenAIOAuthReauthModePasswordTOTP && mode != OpenAIOAuthReauthModeMailboxGraph) {
 		_ = s.repo.MarkFailed(ctx, record.ID, workerID, "selected re-login engine is unsupported by this worker")
 		return nil, nil
 	}
 	proxySource, proxyErr := normalizeReauthProxySource(stored.ProxySource, stored.ProxyID)
 	if proxyErr != nil {
 		_ = s.repo.MarkFailed(ctx, record.ID, workerID, "configured re-login proxy source is invalid")
+		return nil, nil
+	}
+	requestProxyEnabled := account.OpenAIRequestProxyEnabled()
+	if requestProxyEnabled && mode != OpenAIOAuthReauthModeMailboxGraph && (engine != OpenAIOAuthReauthEngineLocal || proxySource != OpenAIOAuthReauthProxySourceAccount) {
+		_ = s.repo.MarkFailed(ctx, record.ID, workerID, "request proxy routing requires local re-login with the account proxy source")
 		return nil, nil
 	}
 	proxyID := stored.ProxyID
@@ -821,7 +869,11 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 		case OpenAIOAuthReauthProxySourceAccount:
 			proxyID = account.ProxyID
 			proxyError = "configured account proxy is unavailable"
-			proxyURL, proxyErr = s.reauthProxyURL(ctx, proxyID)
+			if requestProxyEnabled {
+				proxyURL, proxyErr = resolveOpenAIMaintenanceProxy(ctx, account, s.oauth.proxyRepo)
+			} else {
+				proxyURL, proxyErr = s.reauthProxyURL(ctx, proxyID)
+			}
 		case OpenAIOAuthReauthProxySourceManagedProxy:
 			proxyURL, proxyErr = s.reauthProxyURL(ctx, proxyID)
 		case OpenAIOAuthReauthProxySourceMihomo:
@@ -857,6 +909,12 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 		}
 	}
 	switch mode {
+	case OpenAIOAuthReauthModeMailboxGraph:
+		if err := s.mailboxGraphClaim(stored, claim); err != nil {
+			_ = s.repo.MarkFailed(ctx, record.ID, workerID, "mailbox login configuration cannot be decrypted")
+			return nil, nil
+		}
+		claim.RefreshToken = strings.TrimSpace(account.GetCredential("refresh_token"))
 	case OpenAIOAuthReauthModeEmailOTPURL:
 		claim.OTPURL, err = s.decryptReauthSecret(stored.OTPURLCiphertext, "OTP mailbox configuration cannot be decrypted")
 		if err != nil || claim.OTPURL == "" {
@@ -869,7 +927,7 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 		}
 		var auth *OpenAIAuthURLResult
 		var authErr error
-		if proxySource == OpenAIOAuthReauthProxySourceMihomo {
+		if requestProxyEnabled || proxySource == OpenAIOAuthReauthProxySourceMihomo {
 			auth, authErr = s.oauth.GenerateAuthURLWithProxyURL(ctx, proxyURL, "", PlatformOpenAI)
 		} else {
 			auth, authErr = s.oauth.GenerateAuthURL(ctx, proxyID, "", PlatformOpenAI)
@@ -890,7 +948,9 @@ func (s *OpenAIOAuthReauthService) ClaimTaskWithEngines(ctx context.Context, wor
 			return nil, nil
 		}
 		if stored.TOTPSecretCiphertext != "" {
-			claim.TOTPSecret, err = s.decryptReauthSecret(stored.TOTPSecretCiphertext, "TOTP secret cannot be decrypted")
+			var binding openAITOTPBinding
+			binding, err = s.decryptTOTP(stored.TOTPSecretCiphertext)
+			claim.TOTPSecret, claim.TOTPFactorID = binding.Secret, binding.FactorID
 			if err != nil {
 				_ = s.repo.MarkFailed(ctx, record.ID, workerID, "TOTP secret cannot be decrypted")
 				return nil, nil
@@ -974,6 +1034,21 @@ func (s *OpenAIOAuthReauthService) SubmitCallback(ctx context.Context, taskID in
 	if err != nil || subtle.ConstantTimeCompare([]byte(currentCredentialsHash), []byte(record.ExpectedCredentialsHash)) != 1 {
 		return s.failCallback(ctx, taskID, "account credentials changed while re-login was running", errors.New("credential snapshot mismatch"))
 	}
+	if account.OpenAIRequestProxyEnabled() {
+		var session *openai.OAuthSession
+		var ok bool
+		if record.OAuthProfile == "siwc" {
+			session, ok = s.readSIWCSession(ctx, record.AuthSessionID, false)
+		} else if s.oauth.sessionStore != nil {
+			session, ok = s.oauth.sessionStore.Get(record.AuthSessionID)
+		}
+		if !ok || session == nil {
+			return s.failCallback(ctx, taskID, "authorization session is no longer available", errors.New("authorization session missing"))
+		}
+		if _, err := resolveOpenAIMaintenanceProxy(ctx, account, s.oauth.proxyRepo, session.ProxyURL); err != nil {
+			return s.failCallback(ctx, taskID, "authorization proxy is no longer in the available account proxy group", err)
+		}
+	}
 	if record.OAuthProfile == "siwc" {
 		if err := s.CompleteSIWCAuthorization(ctx, record.AccountID, record.AuthSessionID, callback, record); err != nil {
 			return s.failCallback(ctx, taskID, "SIWC authorization failed; retry or complete browser consent", err)
@@ -1013,7 +1088,7 @@ func (s *OpenAIOAuthReauthService) SubmitCredentials(ctx context.Context, taskID
 	}
 	defer s.releaseMihomoLease(taskID)
 	stored, configErr := s.repo.GetConfig(ctx, record.AccountID)
-	if configErr != nil || stored == nil || strings.TrimSpace(stored.CredentialMode) != OpenAIOAuthReauthModePasswordTOTP {
+	if configErr != nil || stored == nil || (strings.TrimSpace(stored.CredentialMode) != OpenAIOAuthReauthModePasswordTOTP && strings.TrimSpace(stored.CredentialMode) != OpenAIOAuthReauthModeMailboxGraph) {
 		return s.failCallback(ctx, taskID, "re-login task does not accept direct credentials", errors.New("direct credentials require password/TOTP mode"))
 	}
 	account, err := s.accountFor(ctx, record.AccountID)
@@ -1311,7 +1386,7 @@ func sanitizeReauthError(raw string) string {
 		return code
 	}
 	switch msg {
-	case "password/TOTP protocol failed (exit 1)", "proxy_unavailable", "password_rejected", "totp_rejected", "upstream_rejected", "worker_timeout":
+	case "password/TOTP protocol failed (exit 1)", "proxy_unavailable", "password_rejected", "totp_rejected", "upstream_rejected", "worker_timeout", "factor_binding_runtime_required":
 		return msg
 	}
 	return "re-login failed; provider details omitted"

@@ -127,8 +127,11 @@ func TestChannelIntelligenceInflightReservationUsesEligibleUpstreamPrices(t *tes
 			channelSvc := newTestChannelService(makeStandardRepo(channel, map[int64]string{groupID: PlatformOpenAI}))
 			gateway := newInflightEstimateGateway(t, channelSvc)
 			snapshot := &inflightSnapshotCacheStub{byBucket: map[string][]Account{inflightBucketKey(groupID, PlatformOpenAI): {
-				{ID: 1, Platform: PlatformOpenAI, Extra: map[string]any{IntelligenceRoutingExtraKey: true}, Credentials: map[string]any{"model_mapping": map[string]any{"public-model": "iq-actual"}}},
-				{ID: 2, Platform: PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"public-model": "ordinary-actual"}}},
+				{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Extra: map[string]any{IntelligenceRoutingExtraKey: true}, Credentials: map[string]any{"model_mapping": map[string]any{"public-model": "iq-actual"}}},
+				{ID: 2, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Credentials: map[string]any{"model_mapping": map[string]any{"public-model": "ordinary-actual"}}},
+				// A configured but paused IQ account is not an eligible price
+				// candidate, even though it is present in the snapshot.
+				{ID: 3, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: false, Extra: map[string]any{IntelligenceRoutingExtraKey: true}, Credentials: map[string]any{"model_mapping": map[string]any{"public-model": "ordinary-actual"}}},
 			}}}
 			repo := attachInflightSnapshot(gateway, snapshot)
 			apiKey := &APIKey{User: &User{ID: 1}, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformOpenAI, RateMultiplier: 1}}
@@ -148,7 +151,7 @@ func TestChannelIntelligenceInflightReservationUsesEligibleUpstreamPrices(t *tes
 			iqCost, ok := gateway.EstimateInflightReservation(WithIntelligenceRouting(context.Background()), apiKey, req)
 			require.True(t, ok)
 			if source == BillingModelSourceUpstream || source == BillingModelSourceResponse {
-				require.InDelta(t, actualCost, iqCost, 1e-12, "reserve for eligible account's actual upstream model")
+				require.InDelta(t, actualCost, iqCost, 1e-12, "reserve for eligible account's actual upstream model, excluding ordinary and paused accounts")
 				require.Greater(t, snapshot.reads.Load(), int64(0))
 			} else {
 				require.InDelta(t, ordinary, iqCost, 1e-12, "fixed channel/requested price remains unchanged")

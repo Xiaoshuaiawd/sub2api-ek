@@ -350,7 +350,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	}
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
-	scanner := s.newUpstreamSSEScanner(resp.Body)
 
 	var usage OpenAIUsage
 	var firstTokenMs *int
@@ -358,6 +357,16 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	clientOutputStarted := false
 	semanticOutputSeen := false
 	holdMetadata := account.Platform == PlatformOpenAI && s.firstWordProtectionEnabled()
+	flushPending := false
+	flushToClient := func() {
+		if flushPending && !clientDisconnected && clientOutputStarted {
+			c.Writer.Flush()
+		}
+		flushPending = false
+	}
+	scanner := newDeepSeekChatSSEPrefixScanner(
+		s.newUpstreamSSEScanner(&flushBeforeUpstreamRead{r: resp.Body, flush: flushToClient}), account, upstreamModel,
+	)
 	pendingLines := make([]string, 0, 8)
 	var pendingBytes int64
 	pendingOverflow := false
@@ -520,16 +529,10 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		if pendingOverflow {
 			break
 		}
-		if line == "" {
-			if !clientDisconnected && clientOutputStarted {
-				c.Writer.Flush()
-			}
-			continue
-		}
-		if !clientDisconnected && clientOutputStarted {
-			c.Writer.Flush()
-		}
+		// Flush once before the next upstream read, after Juice event transformation.
+		flushPending = true
 	}
+	flushToClient()
 
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{

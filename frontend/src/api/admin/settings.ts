@@ -1,3 +1,4 @@
+import type { PlazaCurrencySettings } from '@/api/modelPlaza';
 /**
  * Admin Settings API endpoints
  * Handles system settings management for administrators
@@ -751,9 +752,6 @@ export interface SystemSettings {
   openai_advanced_scheduler_effective_weight_session_sticky?: string;
 
   // 余额、订阅到期与账号限额通知
-  balance_forecast_enabled: boolean;
-  balance_forecast_threshold_hours: number;
-  balance_forecast_max_notifications: number;
   balance_low_notify_enabled: boolean;
   balance_low_notify_threshold: number;
   balance_low_notify_recharge_url: string;
@@ -781,6 +779,8 @@ export interface SystemSettings {
   model_plaza_enabled: boolean;
   model_plaza_require_auth: boolean;
   model_plaza_description: string;
+  model_plaza_usd_to_cny_rate?: number;
+  model_plaza_currency?: PlazaCurrencySettings;
   plugin_management_enabled: boolean;
 
   // Support tickets (网站工单) switch + form config
@@ -1119,9 +1119,6 @@ export interface UpdateSettingsRequest {
   openai_advanced_scheduler_weight_previous_response?: string;
   openai_advanced_scheduler_weight_session_sticky?: string;
   // 余额、订阅到期与账号限额通知
-  balance_forecast_enabled?: boolean;
-  balance_forecast_threshold_hours?: number;
-  balance_forecast_max_notifications?: number;
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;
   balance_low_notify_recharge_url?: string;
@@ -1147,6 +1144,8 @@ export interface UpdateSettingsRequest {
   model_plaza_enabled?: boolean;
   model_plaza_require_auth?: boolean;
   model_plaza_description?: string;
+  model_plaza_usd_to_cny_rate?: number;
+  model_plaza_currency?: PlazaCurrencySettings;
   plugin_management_enabled?: boolean;
 
   // Support tickets (网站工单) switch + form config
@@ -1690,7 +1689,7 @@ export async function updateBetaPolicySettings(
 // --- Web Search Emulation Config ---
 
 export interface WebSearchProviderConfig {
-  type: "brave" | "tavily" | "deepseek";
+  type: "brave" | "tavily" | "deepseek" | "exa";
   api_key: string;
   api_key_configured: boolean;
   quota_limit: number | null;

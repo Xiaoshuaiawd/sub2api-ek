@@ -614,15 +614,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 		changed = append(changed, "openai_advanced_scheduler_weight_session_sticky")
 	}
 	// 余额、订阅到期与账号限额通知
-	if before.BalanceForecastEnabled != after.BalanceForecastEnabled {
-		changed = append(changed, "balance_forecast_enabled")
-	}
-	if before.BalanceForecastThresholdHours != after.BalanceForecastThresholdHours {
-		changed = append(changed, "balance_forecast_threshold_hours")
-	}
-	if before.BalanceForecastMaxNotifications != after.BalanceForecastMaxNotifications {
-		changed = append(changed, "balance_forecast_max_notifications")
-	}
 	if before.BalanceLowNotifyEnabled != after.BalanceLowNotifyEnabled {
 		changed = append(changed, "balance_low_notify_enabled")
 	}
@@ -664,6 +655,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.ModelPlazaRequireAuth != after.ModelPlazaRequireAuth {
 		changed = append(changed, "model_plaza_require_auth")
+	}
+	if !reflect.DeepEqual(before.ModelPlazaCurrency, after.ModelPlazaCurrency) {
+		changed = append(changed, "model_plaza_currency")
+	}
+	if before.ModelPlazaUSDToCNYRate != after.ModelPlazaUSDToCNYRate {
+		changed = append(changed, "model_plaza_usd_to_cny_rate")
 	}
 	if before.ModelPlazaDescription != after.ModelPlazaDescription {
 		changed = append(changed, "model_plaza_description")

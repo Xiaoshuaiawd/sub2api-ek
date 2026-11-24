@@ -40,6 +40,7 @@
           <p v-if="runtimeSaving" role="status" class="mt-2 text-xs">{{ t('tokenGuardV2.saving') }}</p>
         </div>
       </CredentialEncryptionSetup>
+      <OpenAIReloginSettings class="mb-5" />
 
       <section v-if="status.worker" class="mb-5 rounded-xl border border-gray-200 p-4 dark:border-gray-700" data-testid="reauth-runtime-status" role="status">
         <strong>{{ t('tokenGuardV2.runtimeTitle') }}</strong>
@@ -110,7 +111,7 @@
                     <button class="link-btn" :disabled="mutationBusy" @click="probe(item)">{{ t('tokenGuardV2.inspectNow') }}</button>
                     <button class="link-btn" :disabled="mutationBusy" @click="relogin(item)">{{ t('tokenGuardV2.reloginNow') }}</button>
                     <button v-if="item.auto_relogin_exhausted" class="link-btn" :data-testid="'resume-budget-' + item.account_id" :disabled="mutationBusy || loading" @click="resumeBudget(item)">{{ t('tokenGuardV2.resumeReloginBudget') }}</button>
-                    <OpenAITOTPDialog :account-id="item.account_id" :account-name="item.account_name" :configured="!!(item.login_config?.password_configured && item.login_config?.totp_configured)" />
+                    <OpenAITOTPDialog v-if="item.login_config?.credential_mode === 'password_totp'" :account-id="item.account_id" :account-name="item.account_name" :configured="!!(item.login_config?.password_configured && item.login_config?.totp_configured)" />
                     <button class="link-btn danger-text" :disabled="mutationBusy" @click="remove(item)">{{ t('tokenGuardV2.remove') }}</button>
                   </div>
                 </td>
@@ -189,17 +190,22 @@
               <option value="mihomo">{{ t('tokenGuardV2.mihomoManagedPool') }}</option>
               <option v-for="proxy in proxies" :key="proxy.id" :value="`proxy:${proxy.id}`">{{ proxyOptionLabel(proxy) }}</option>
             </select>
-            <small class="field-hint">{{ t('tokenGuardV2.loginProxyHint') }}</small>
+            <small class="field-hint">{{ t(editorEngine === 'session_studio' ? 'tokenGuardV2.remoteEngineEgress' : 'tokenGuardV2.loginProxyHint') }}</small>
           </label>
           <fieldset class="mode-grid">
             <legend>{{ t('tokenGuardV2.loginMode') }}</legend>
             <label class="mode-option"><input v-model="draft.credential_mode" type="radio" value="password_totp" /><span><strong>{{ t('tokenGuardV2.passwordMode') }}</strong><small>{{ t('tokenGuardV2.passwordModeHint') }}</small></span></label>
             <label class="mode-option"><input v-model="draft.credential_mode" type="radio" value="email_otp_url" /><span><strong>{{ t('tokenGuardV2.mailboxMode') }}</strong><small>{{ t('tokenGuardV2.mailboxModeHint') }}</small></span></label>
+            <label class="mode-option"><input v-model="draft.credential_mode" type="radio" value="mailbox_graph" /><span><strong>{{ t('tokenGuardV2.mailboxGraphMode') }}</strong><small>{{ t('tokenGuardV2.mailboxGraphModeHint') }}</small></span></label>
           </fieldset>
           <template v-if="draft.credential_mode === 'password_totp'">
-            <label class="field-label">{{ t('tokenGuardV2.password') }}<input v-model="draft.password" class="input w-full" type="password" :placeholder="editing?.login_config?.password_configured ? t('tokenGuardV2.keepSecret') : ''" :required="!editing?.login_config?.password_configured" autocomplete="new-password" /></label>
-            <label class="field-label">{{ t('tokenGuardV2.totpSecret') }}<input v-model.trim="draft.totp_secret" class="input w-full" type="password" :placeholder="editing?.login_config?.totp_configured ? t('tokenGuardV2.keepSecret') : t('tokenGuardV2.totpOptionalHint')" autocomplete="off" /></label>
-            <label v-if="editing?.login_config?.totp_configured" class="check-row"><input v-model="draft.clear_totp" type="checkbox" />{{ t('tokenGuardV2.clearTotp') }}</label>
+            <label class="field-label">{{ t('tokenGuardV2.password') }}<input v-model="draft.password" class="input w-full" type="password" :placeholder="editing?.login_config?.credential_mode === 'password_totp' && editing.login_config.password_configured ? t('tokenGuardV2.keepSecret') : ''" :required="editing?.login_config?.credential_mode !== 'password_totp' || !editing.login_config.password_configured" autocomplete="new-password" /></label>
+            <label class="field-label">{{ t('tokenGuardV2.totpSecret') }}<input v-model.trim="draft.totp_secret" class="input w-full" type="password" :placeholder="editing?.login_config?.credential_mode === 'password_totp' && editing.login_config.totp_configured ? t('tokenGuardV2.keepSecret') : t('tokenGuardV2.totpOptionalHint')" autocomplete="off" /></label>
+            <label v-if="editing?.login_config?.credential_mode === 'password_totp' && editing.login_config.totp_configured" class="check-row"><input v-model="draft.clear_totp" type="checkbox" />{{ t('tokenGuardV2.clearTotp') }}</label>
+          </template>
+          <template v-else-if="draft.credential_mode === 'mailbox_graph'">
+            <label class="field-label" for="token-guard-v2-mail-client-id">{{ t('tokenGuardV2.mailClientId') }}<input id="token-guard-v2-mail-client-id" v-model.trim="draft.mail_client_id" class="input w-full" type="text" :placeholder="editing?.login_config?.credential_mode === 'mailbox_graph' && editing.login_config.mailbox_configured ? t('tokenGuardV2.keepSecret') : ''" :required="!editing?.login_config?.mailbox_configured || editing.login_config.credential_mode !== 'mailbox_graph' || !!draft.mail_refresh_token" autocomplete="off" /></label>
+            <label class="field-label" for="token-guard-v2-mail-refresh-token">{{ t('tokenGuardV2.mailRefreshToken') }}<input id="token-guard-v2-mail-refresh-token" v-model.trim="draft.mail_refresh_token" class="input w-full" type="password" :placeholder="editing?.login_config?.credential_mode === 'mailbox_graph' && editing.login_config.mailbox_configured ? t('tokenGuardV2.keepSecret') : ''" :required="!editing?.login_config?.mailbox_configured || editing.login_config.credential_mode !== 'mailbox_graph' || !!draft.mail_client_id" autocomplete="new-password" /></label>
           </template>
           <label v-else class="field-label">{{ t('tokenGuardV2.otpUrl') }}<input v-model.trim="draft.otp_url" class="input w-full" type="url" :placeholder="editing?.login_config?.otp_url_masked ? `${editing.login_config.otp_url_masked} · ${t('tokenGuardV2.keepSecret')}` : 'https://mail.example.com/latest'" :required="editing?.login_config?.credential_mode !== 'email_otp_url' || !editing?.login_config?.otp_url_masked" /></label>
 
@@ -223,6 +229,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import CredentialEncryptionSetup from '@/components/account/CredentialEncryptionSetup.vue'
 import OpenAITOTPDialog from '@/components/account/OpenAITOTPDialog.vue'
 import SmartOpsNav from '@/components/admin/operations/SmartOpsNav.vue'
+import OpenAIReloginSettings from '@/components/admin/operations/OpenAIReloginSettings.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { BaseDialog, Pagination } from '@/components/common'
 import { list as listAccounts } from '@/api/admin/accounts'
@@ -294,6 +301,8 @@ const blankDraft = (): SaveTokenGuardV2Account => ({
   password: '',
   totp_secret: '',
   otp_url: '',
+  mail_client_id: '',
+  mail_refresh_token: '',
   clear_totp: false
 })
 const draft = reactive<SaveTokenGuardV2Account>(blankDraft())
@@ -395,10 +404,10 @@ const message = (value: unknown) => {
     : t('tokenGuardV2.error')
 }
 const date = (value?: string) => value ? new Date(value).toLocaleString() : '-'
-const modeLabel = (mode?: TokenGuardV2CredentialMode) => !mode ? '-' : mode === 'password_totp' ? t('tokenGuardV2.passwordMode') : t('tokenGuardV2.mailboxMode')
+const modeLabel = (mode?: TokenGuardV2CredentialMode) => !mode ? '-' : mode === 'mailbox_graph' ? t('tokenGuardV2.mailboxGraphMode') : mode === 'password_totp' ? t('tokenGuardV2.passwordMode') : t('tokenGuardV2.mailboxMode')
 const engineLabel = (engine?: TokenGuardV2Engine) => engine === 'session_studio' ? t('tokenGuardV2.sessionStudioEngine') : t('tokenGuardV2.localWorkerEngine')
-const effectiveEngine = (config?: TokenGuardV2Account['login_config']) => config?.credential_mode === 'email_otp_url' ? 'local_worker' : runtimeDraft.engine || config?.engine || 'local_worker'
-const editorEngine = computed(() => draft.credential_mode === 'email_otp_url' ? 'local_worker' : runtimeDraft.engine || editing.value?.login_config?.engine || 'local_worker')
+const effectiveEngine = (config?: TokenGuardV2Account['login_config']) => config?.credential_mode === 'mailbox_graph' ? 'session_studio' : config?.credential_mode === 'email_otp_url' ? 'local_worker' : runtimeDraft.engine || config?.engine || 'local_worker'
+const editorEngine = computed(() => draft.credential_mode === 'mailbox_graph' ? 'session_studio' : draft.credential_mode === 'email_otp_url' ? 'local_worker' : runtimeDraft.engine || editing.value?.login_config?.engine || 'local_worker')
 const proxyChoice = computed({
   get: () => draft.proxy_source === 'managed_proxy' && draft.proxy_id ? `proxy:${draft.proxy_id}` : draft.proxy_source,
   set: (value: string) => {
@@ -460,7 +469,9 @@ const taskLabel = (task: TokenGuardV2Task) => task.diagnostic
 const configurationDetail = (item: TokenGuardV2Account) => {
   const config = item.login_config
   if (!config) return '-'
-  const credentials = config.credential_mode === 'email_otp_url'
+  const credentials = config.credential_mode === 'mailbox_graph'
+    ? t(config.mailbox_configured ? 'tokenGuardV2.mailboxGraphSaved' : 'tokenGuardV2.mailboxGraphIncomplete')
+    : config.credential_mode === 'email_otp_url'
     ? config.otp_url_masked || '-'
     : [config.password_configured ? t('tokenGuardV2.passwordSaved') : '', config.totp_configured ? t('tokenGuardV2.totpSaved') : ''].filter(Boolean).join(' · ') || '-'
   if (effectiveEngine(config) === 'session_studio') return `${credentials} · ${engineLabel(effectiveEngine(config))} · ${t('tokenGuardV2.remoteEngineEgress')}`
@@ -556,6 +567,26 @@ async function save() {
   saving.value = true; error.value = ''; notice.value = ''
   try {
     const payload = { ...draft }
+    if (payload.credential_mode === 'mailbox_graph') {
+      payload.engine = 'session_studio'
+      payload.proxy_source = 'account'
+      payload.proxy_id = null
+      // Omitting an unchanged pair preserves the encrypted mailbox bundle.
+      if (!payload.mail_client_id && !payload.mail_refresh_token) {
+        delete payload.mail_client_id
+        delete payload.mail_refresh_token
+      }
+    } else {
+      delete payload.mail_client_id
+      delete payload.mail_refresh_token
+    }
+    if (payload.credential_mode !== 'password_totp') {
+      delete payload.password
+      delete payload.totp_secret
+      delete payload.clear_password
+      delete payload.clear_totp
+    }
+    if (payload.credential_mode !== 'email_otp_url') delete payload.otp_url
     if (editing.value) await updateTokenGuardV2Account(draft.account_id!, payload)
     else await createTokenGuardV2Account(payload)
     notice.value = t('tokenGuardV2.saved')

@@ -315,9 +315,6 @@ type UpdateSettingsRequest struct {
 	OpenAIAdvancedSchedulerWeightSessionSticky         *string  `json:"openai_advanced_scheduler_weight_session_sticky"`
 
 	// 余额不足提醒
-	BalanceForecastEnabled          *bool                   `json:"balance_forecast_enabled"`
-	BalanceForecastThresholdHours   *float64                `json:"balance_forecast_threshold_hours" binding:"omitempty,gt=0"`
-	BalanceForecastMaxNotifications *int                    `json:"balance_forecast_max_notifications" binding:"omitempty,gt=0"`
 	BalanceLowNotifyEnabled         *bool                   `json:"balance_low_notify_enabled"`
 	BalanceLowNotifyThreshold       *float64                `json:"balance_low_notify_threshold"`
 	BalanceLowNotifyRechargeURL     *string                 `json:"balance_low_notify_recharge_url"`
@@ -386,9 +383,11 @@ type UpdateSettingsRequest struct {
 	SubscriptionEnabled *bool `json:"subscription_enabled"`
 
 	// Model Plaza feature switches + description
-	ModelPlazaEnabled     *bool   `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth *bool   `json:"model_plaza_require_auth"`
-	ModelPlazaDescription *string `json:"model_plaza_description"`
+	ModelPlazaEnabled      *bool                               `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth  *bool                               `json:"model_plaza_require_auth"`
+	ModelPlazaDescription  *string                             `json:"model_plaza_description"`
+	ModelPlazaUSDToCNYRate *float64                            `json:"model_plaza_usd_to_cny_rate" binding:"omitempty,gt=0"`
+	ModelPlazaCurrency     *service.ModelPlazaCurrencySettings `json:"model_plaza_currency"`
 
 	// Plugin management menu visibility switch; plugin runtime is unaffected.
 	PluginManagementEnabled *bool `json:"plugin_management_enabled"`
@@ -2260,9 +2259,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerWeightUpstreamCost:     stringSetting(req.OpenAIAdvancedSchedulerWeightUpstreamCost, previousSettings.OpenAIAdvancedSchedulerWeightUpstreamCost),
 		OpenAIAdvancedSchedulerWeightPreviousResponse: stringSetting(req.OpenAIAdvancedSchedulerWeightPreviousResponse, previousSettings.OpenAIAdvancedSchedulerWeightPreviousResponse),
 		OpenAIAdvancedSchedulerWeightSessionSticky:    stringSetting(req.OpenAIAdvancedSchedulerWeightSessionSticky, previousSettings.OpenAIAdvancedSchedulerWeightSessionSticky),
-		BalanceForecastEnabled:                        boolValueOrDefault(req.BalanceForecastEnabled, previousSettings.BalanceForecastEnabled),
-		BalanceForecastThresholdHours:                 float64ValueOrDefault(req.BalanceForecastThresholdHours, previousSettings.BalanceForecastThresholdHours),
-		BalanceForecastMaxNotifications:               intValueOrDefault(req.BalanceForecastMaxNotifications, previousSettings.BalanceForecastMaxNotifications),
 		BalanceLowNotifyEnabled: func() bool {
 			if req.BalanceLowNotifyEnabled != nil {
 				return *req.BalanceLowNotifyEnabled
@@ -2412,6 +2408,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.ModelPlazaRequireAuth
 			}
 			return previousSettings.ModelPlazaRequireAuth
+		}(),
+		ModelPlazaCurrency: func() service.ModelPlazaCurrencySettings {
+			if req.ModelPlazaCurrency != nil {
+				return *req.ModelPlazaCurrency
+			}
+			return previousSettings.ModelPlazaCurrency
+		}(),
+		ModelPlazaUSDToCNYRate: func() float64 {
+			if req.ModelPlazaUSDToCNYRate != nil {
+				return *req.ModelPlazaUSDToCNYRate
+			}
+			return previousSettings.ModelPlazaUSDToCNYRate
 		}(),
 		ModelPlazaDescription: func() string {
 			if req.ModelPlazaDescription != nil {
@@ -2851,9 +2859,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost:     updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost,
 		OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse: updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse,
 		OpenAIAdvancedSchedulerEffectiveWeightSessionSticky:    updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky,
-		BalanceForecastEnabled:                                 updatedSettings.BalanceForecastEnabled,
-		BalanceForecastThresholdHours:                          updatedSettings.BalanceForecastThresholdHours,
-		BalanceForecastMaxNotifications:                        updatedSettings.BalanceForecastMaxNotifications,
 		BalanceLowNotifyEnabled:                                updatedSettings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:                              updatedSettings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:                            updatedSettings.BalanceLowNotifyRechargeURL,
@@ -2910,6 +2915,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ModelPlazaEnabled:       updatedSettings.ModelPlazaEnabled,
 		ModelPlazaRequireAuth:   updatedSettings.ModelPlazaRequireAuth,
 		ModelPlazaDescription:   updatedSettings.ModelPlazaDescription,
+		ModelPlazaUSDToCNYRate:  updatedSettings.ModelPlazaUSDToCNYRate,
+		ModelPlazaCurrency:      updatedSettings.ModelPlazaCurrency,
 		PluginManagementEnabled: updatedSettings.PluginManagementEnabled,
 
 		SupportTicketEnabled: updatedSettings.SupportTicketEnabled,

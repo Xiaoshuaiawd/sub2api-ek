@@ -92,7 +92,7 @@ export default {
           showAll: 'Show all',
           hideAll: 'Hide all',
           count: '{visible} / {total} entries selected',
-          hint: 'The sidebar group disappears when all entries are hidden. Existing feature requirements, such as request capture being enabled, still apply.'
+          hint: 'Hide all applies to the entries listed here. Existing feature requirements, such as request capture being enabled, still apply.'
         },
         excelBpsImages: {
           mode: 'Image transport',
@@ -193,6 +193,13 @@ export default {
           enabledHint: 'When enabled, an entry appears in the header and the page is reachable at /model-plaza.',
           requireAuth: 'Require sign-in to access',
           requireAuthHint: 'When on, anonymous visitors are redirected to the login page; when off, the page is public and anonymous visitors only see non-exclusive groups.',
+          currencyHelp: 'These settings affect plaza display only. The default is 1 wallet credit = 1 USD, preserving existing USD price cards. Configure your own reference value; recharge and billing are unchanged.',
+          customerCurrency: 'Discounted customer price currency', officialCurrency: 'Default official reference currency',
+          walletValue: 'Reference value of 1 wallet credit', walletCurrency: 'Wallet reference currency',
+          overrides: 'Official reference currency overrides', overridesHelp: 'Exact model rules take priority over platform rules, then the default currency. IDs are case-insensitive exact matches. No country or provider list is preset.',
+          scope: 'Match scope', platform: 'Platform', model: 'Model', target: 'Platform or model ID', ruleCurrency: 'Reference currency', addRule: 'Add override', invalidRules: 'Enter nonempty, unique platform or model IDs.',
+          displayExchangeRate: 'Plaza USD/CNY display rate',
+          displayExchangeRateHint: 'CNY per USD, default 7.00. A fixed reference for plaza display only; recharge, subscriptions, channel prices and billing are unchanged.',
           priceDescription: 'Pricing notes (Markdown)',
           priceDescriptionHint: 'Rendered at the top of the plaza page. Use it for billing rules, exchange rates, promotions, etc.',
         },
@@ -574,8 +581,8 @@ export default {
           'Duplicate subscription group: {groupId}. Each group can only appear once.',
         subscriptionGroup: 'Subscription Group',
         subscriptionValidityDays: 'Validity (days)',
-        defaultPlatformQuotas: 'Default Platform Quotas (on signup)',
-        defaultPlatformQuotasHint: 'Applied to new users on signup; existing users are not affected. Leave blank = no limit for that platform and window.',
+        defaultPlatformQuotas: 'Default Platform Quotas (on user creation)',
+        defaultPlatformQuotasHint: 'Applied to regular users created by an administrator or through signup; existing users are not affected. Leave blank = no limit for that platform and window.',
         platformQuotaNotice: 'Monthly quota uses a 30-day rolling window, not a calendar month.',
       },
       platformQuota: {
@@ -698,7 +705,7 @@ export default {
         cacheTTL5m: '5 minutes',
         cacheTTL1h: '1 hour',
         anthropicCacheTTL1hInjection: 'Anthropic Cache TTL Injection',
-        anthropicCacheTTL1hInjectionHint: 'When enabled, existing ephemeral cache_control blocks in Anthropic OAuth/Setup Token request bodies are forced to 1h; response usage is billed back as 5m by default, with account-level TTL billing override taking priority.',
+        anthropicCacheTTL1hInjectionHint: 'When enabled, existing ephemeral cache_control blocks in Anthropic OAuth/Setup Token request bodies are forced to 1h, except Claude Code compaction requests, which use 5m; response usage is billed back as 5m by default, with account-level TTL billing override taking priority.',
         rewriteMessageCacheControl: 'Rewrite Message Cache Breakpoints',
         rewriteMessageCacheControlHint: 'Default off: preserve client cache_control on message content blocks. When enabled, client breakpoints are stripped and proxy breakpoints are injected for clients that do not manage caching themselves.',
         clientDatelineNormalization: 'Client Dateline Normalization',
@@ -1175,15 +1182,6 @@ export default {
         refundEnabled: 'Allow Refund',
         allowUserRefund: 'Allow User Refund',
         enableConflict: '{method} already has an enabled provider instance: {provider}. Disable the existing instance before switching.',
-      },
-      balanceForecast: {
-        title: "Balance exhaustion forecast",
-        description: "Estimate time remaining from settled balance spending over the last 24 hours. Off by default; independent of amount alerts.",
-        enabled: "Enable forecast alerts",
-        threshold: "Lead time (hours, up to 168)",
-        cap: "Notifications per warning episode (1–10)",
-        hint: "Defaults: 12 hours, 3 rounds, at most one round per hour. Reuses the recharge link, verified notification emails and unsubscribe preferences. Insufficient samples or settlement coverage suppress delivery. Uncertain delivery consumes an allowance. A new episode requires one continuous hour above 120% of the threshold.",
-        invalid: "Lead time must be positive and at most 168 hours; the notification cap must be an integer from 1 to 10.",
       },
       balanceNotify: {
         title: 'Balance Low Notification',

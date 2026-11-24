@@ -137,11 +137,11 @@ func (r *reauthTestRepo) ClaimNextTask(_ context.Context, workerID string, _ tim
 	return r.task, nil
 }
 func (r *reauthTestRepo) ClaimNextTaskForEngines(ctx context.Context, workerID string, stale time.Duration, mode string, engines []string) (*OpenAIOAuthReauthTaskRecord, error) {
-	if r.config == nil || (mode != "" && r.config.CredentialMode != mode) {
+	if r.config == nil || (mode != "" && r.config.CredentialMode != mode && !(mode == OpenAIOAuthReauthModePasswordTOTP && r.config.CredentialMode == OpenAIOAuthReauthModeMailboxGraph)) {
 		return nil, nil
 	}
 	for _, engine := range engines {
-		if normalizedReauthEngine(r.config.Engine) == engine {
+		if effectiveReauthEngine(r.config.CredentialMode, r.config.Engine, "") == engine {
 			return r.ClaimNextTask(ctx, workerID, stale)
 		}
 	}

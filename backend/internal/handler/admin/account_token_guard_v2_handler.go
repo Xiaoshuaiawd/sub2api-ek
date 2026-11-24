@@ -27,6 +27,8 @@ type accountTokenGuardV2SaveRequest struct {
 	Password           string `json:"password"`
 	TOTPSecret         string `json:"totp_secret"`
 	OTPURL             string `json:"otp_url"`
+	MailClientID       string `json:"mail_client_id"`
+	MailRefreshToken   string `json:"mail_refresh_token"`
 	ClearPassword      bool   `json:"clear_password"`
 	ClearTOTP          bool   `json:"clear_totp"`
 	Enabled            *bool  `json:"enabled"`
@@ -48,6 +50,7 @@ func (r accountTokenGuardV2SaveRequest) input() service.AccountTokenGuardV2Accou
 		Engine:      r.Engine,
 		ProxySource: r.ProxySource, ProxyID: r.ProxyID,
 		Password: r.Password, TOTPSecret: r.TOTPSecret, OTPURL: r.OTPURL,
+		MailClientID: r.MailClientID, MailRefreshToken: r.MailRefreshToken,
 		ClearPassword: r.ClearPassword, ClearTOTP: r.ClearTOTP,
 		Enabled: enabled, AutoReloginEnabled: autoRelogin,
 	}

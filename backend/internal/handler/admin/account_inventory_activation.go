@@ -11,11 +11,11 @@ import (
 
 // ActivateInventoryAccount reuses the same 2FA login, Codex token import,
 // identity deduplication, and encrypted credential guard as the manual import.
-func (h *AccountHandler) ActivateInventoryAccount(ctx context.Context, entry service.AccountTokenGuardReloginAccount, canImport func(context.Context) (bool, error)) (int64, bool, string, error) {
-	if h == nil || h.tokenGuard == nil || h.inventoryTokenGuardV2 == nil {
+func (h *AccountHandler) ActivateInventoryAccount(ctx context.Context, entry service.OpenAIReloginCredentials, canImport func(context.Context) (bool, error)) (int64, bool, string, error) {
+	if h == nil || h.relogin == nil || h.inventoryTokenGuardV2 == nil {
 		return 0, false, "service_unavailable", errors.New("inventory activation unavailable")
 	}
-	job, err := h.tokenGuard.StartTwoFALoginForInventory(ctx, entry)
+	job, err := h.relogin.StartTwoFALoginForInventory(ctx, entry)
 	if err != nil {
 		var skipped *service.TwoFALoginSkippedError
 		if errors.As(err, &skipped) {
@@ -23,7 +23,7 @@ func (h *AccountHandler) ActivateInventoryAccount(ctx context.Context, entry ser
 		}
 		return 0, false, "service_unavailable", err
 	}
-	defer h.tokenGuard.DeleteTwoFALogin(job.ID)
+	defer h.relogin.DeleteTwoFALogin(job.ID)
 	result, err := h.waitTwoFALogin(ctx, job.ID)
 	if err != nil {
 		return 0, false, "timeout", err

@@ -88,7 +88,7 @@ export interface User {
   balance: number // User balance for API usage
   frozen_balance?: number // Balance currently held by async batch jobs
   concurrency: number // Allowed concurrent requests
-  rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
+  rpm_limit?: number // User-level RPM cap (0 = unlimited, still counted); enforced alongside group limits
   status: 'active' | 'disabled' // Account status
   observer_group_ids?: number[] | null
   allowed_groups: number[] | null // Allowed group IDs (null = all non-exclusive groups)
@@ -113,7 +113,9 @@ export interface AdminUser extends User {
   // 管理侧权限开关，普通用户接口不返回。
   restrict_public_groups?: boolean
   // 当前并发数（仅管理员列表接口返回）
+  current_rpm?: number | null
   current_concurrency?: number
+  concurrency_available?: boolean // false means the legacy numeric field is not a measurement
 }
 
 export interface LoginRequest {
@@ -661,7 +663,9 @@ export interface AdminGroup extends Group {
   // 管理端的 name / description 始终是原字段，各语言译文另放在 i18n 里
   i18n?: GroupI18n
   force_openai_fast: boolean
+  force_openai_ultrafast: boolean
   free_openai_fast: boolean
+  free_openai_ultrafast: boolean
   // 仅允许流式请求（管理端请求策略，用户侧分组不返回）
   stream_only: boolean
   codex_cli_only?: boolean
@@ -862,7 +866,9 @@ export interface CreateGroupRequest {
   monthly_limit_usd?: number | null
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
+  force_openai_ultrafast?: boolean
   free_openai_fast?: boolean
+  free_openai_ultrafast?: boolean
   stream_only?: boolean
   codex_cli_only?: boolean
   block_subagents?: boolean
@@ -933,7 +939,9 @@ export interface UpdateGroupRequest {
   monthly_limit_usd?: number | null
   long_context_pricing_enabled?: boolean
   force_openai_fast?: boolean
+  force_openai_ultrafast?: boolean
   free_openai_fast?: boolean
+  free_openai_ultrafast?: boolean
   stream_only?: boolean
   codex_cli_only?: boolean
   block_subagents?: boolean
@@ -998,7 +1006,7 @@ export type KnownAccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigrav
  * `string & {}` 保留内置平台的字面量补全。
  */
 export type AccountPlatform = KnownAccountPlatform | (string & {})
-export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
+export type AccountType = 'gateway' | 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
 
@@ -1201,6 +1209,9 @@ export interface UpstreamBalanceData {
   // headroom, depending on how the upstream bills the key.
   remaining?: number
   wallet_balance?: number
+  raw_wallet_balance?: number
+  raw_unit?: 'USD'
+  display_exchange_rate?: number
   // Subscription without any spending limit.
   unlimited?: boolean
   quota_limit?: number
@@ -1243,7 +1254,7 @@ export interface NewAPIUpstreamConfig {
   configured: boolean
   user_id?: number
   encryption_key_configured: boolean
-  accounts: Array<{ account_id: number; name: string; configured_user_id?: number }>
+  accounts: Array<{ account_id: number; name: string; configured_user_id?: number; cost_multiplier_scale?: number; cn_provider?: boolean; cost_auto_sync_enabled?: boolean; apply_usd_rate?: boolean }>
 }
 
 export interface NewAPIUpstreamConfigRequest {
@@ -1251,12 +1262,13 @@ export interface NewAPIUpstreamConfigRequest {
   access_token?: string
   account_ids: number[]
   token_selections?: Record<string, number>
+  apply_usd_rate?: Record<string, boolean>
 }
 
 export interface NewAPIUpstreamPreview {
   site_url: string
   user_id: number
-  wallet: { amount: number; unit: 'USD' }
+  wallet: { amount: number; unit: string }
   accounts: Array<{
     account_id: number
     name: string
@@ -1264,6 +1276,11 @@ export interface NewAPIUpstreamPreview {
     token_id?: number
     group?: string
     rate?: number
+    cost_multiplier_scale?: number
+    cn_provider?: boolean
+    cost_auto_sync_enabled?: boolean
+    apply_usd_rate?: boolean
+    cost_multiplier?: number
     error?: string
     token_options: Array<{ token_id: number; name: string; group: string; masked_key: string }>
   }>
@@ -1454,6 +1471,7 @@ export interface Account {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
     upstream_billing_provider?: 'new_api'
+    new_api_apply_usd_rate?: boolean
     upstream_billing_probe_enabled?: boolean
     upstream_billing_rate_sync_enabled?: boolean
     upstream_billing_probe?: UpstreamBillingProbeSnapshot
@@ -1614,6 +1632,7 @@ export interface WindowStats {
 
 export interface UsageProgress {
   utilization: number // Percentage (0-100+, 100 = 100%)
+  utilization_unknown?: boolean
   resets_at: string | null
   remaining_seconds: number
   window_stats?: WindowStats | null // 窗口期统计（从窗口开始到当前的使用量）
@@ -1764,7 +1783,7 @@ export interface CodexUsageSnapshot {
 
 export type OpenAICompactMode = 'auto' | 'force_on' | 'force_off'
 export type OpenAIResponsesMode = 'auto' | 'force_responses' | 'force_chat_completions'
-export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings' | 'seedance'
+export type OpenAIEndpointCapability = 'chat_completions' | 'embeddings' | 'seedance' | 'videos'
 
 export interface OpenAICompactState {
   openai_compact_mode?: OpenAICompactMode
@@ -1780,6 +1799,8 @@ export interface OpenAIResponsesState {
 }
 
 export interface CreateAccountRequest {
+  provider_id?: number
+  provider_key_id?: string
   upstream_channel_id?: number
   confirm_upstream_channel_binding?: boolean
   name: string
@@ -1812,6 +1833,7 @@ export interface AccountGroupBinding {
 }
 
 export interface UpdateAccountRequest {
+	platform?: AccountPlatform
   name?: string
   notes?: string | null
   type?: AccountType
@@ -2015,7 +2037,35 @@ export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber'
 export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 
+// Immutable display evidence from the Standard calculation that set actual_cost.
+export type CustomerCacheCostKind = 'read' | 'read_image' | 'write' | 'write_5m' | 'write_1h' | 'write_30m' | 'write_12h'
+export interface CustomerCacheCostDetail {
+  kind: CustomerCacheCostKind
+  tokens: number
+  unit_price: number
+}
+
+export interface CustomerCostDetails {
+  cache_cost_details?: CustomerCacheCostDetail[]
+  image_minimum_charge?: number
+  image_minimum_charge_adjustment?: number
+  probe_penalty?: { minimum_charge: number; adjustment: number; actual_cost: number; original_output_tokens: number; billing_output_tokens: number; output_token_price: number }
+  version: number
+  free_fast: boolean
+  free_ultrafast?: boolean
+  input_cost: number
+  output_cost: number
+  image_input_cost: number
+  image_output_cost: number
+  cache_creation_cost: number
+  cache_read_cost: number
+  total_cost: number
+  actual_cost: number
+  multiplier: number
+}
+
 export interface UsageLog {
+  customer_cost_details?: CustomerCostDetails | null
   id: number
   user_id: number
   api_key_id: number
@@ -2301,8 +2351,9 @@ export interface EndpointStat {
   endpoint: string
   requests: number
   total_tokens: number
-  cost: number
-  actual_cost: number
+  cost: number // 标准计费
+  actual_cost: number // 实际扣除
+  account_cost?: number // 账号成本（仅管理员接口返回）
 }
 
 export interface GroupStat {
@@ -2751,7 +2802,7 @@ export interface QualityJudgeConfig {
   prompt: string
 }
 export interface QualityJudgment {
-  kind?: 'llm' | 'jev'
+  kind?: 'llm' | 'jev' | 'ciallo'
   rules_version?: string
   latency_ms?: number
   verdict: 'correct' | 'incorrect' | 'unknown'
@@ -2769,6 +2820,8 @@ export interface QualityBPSPolicy {
   models: string[]
   omit_unsupported_tools: boolean
   ignore_encrypted_content: boolean
+  web_search?: boolean
+  web_search_auto?: boolean
   auto_disable_on_403: boolean
   auto_recover_on_403?: boolean
   recovery_interval_minutes?: number
@@ -2833,7 +2886,8 @@ export interface PelicanTestConfig {
   quality_model_actions?: Record<string, string>
   trigger_source?: string
   quality?: QualityPolicy
-  question_kind?: 'candy' | 'pelican' | 'state_probe' | 'random_reasoning'
+  question_kind?: 'candy' | 'pelican' | 'state_probe' | 'random_reasoning' | 'ciallo'
+  ciallo?: { template_version: string; judge_version: string; protocol?: string }
   // Result-only identity of a runtime-generated question.
   random_question?: { id: string; family: 'paths' | 'weighted_xor'; version: string }
   quality_batch?: {

@@ -915,7 +915,7 @@ func TestAPIContracts(t *testing.T) {
 					"excel_bps_image_budget_mib": 1024,
 					"excel_bps_image_max_requests": 128,
 					"excel_bps_image_max_images": 20,
- "smart_ops_hidden_menu_items": ["/admin/lottery","/admin/channel-operations","/admin/controlled-experiments","/admin/account-ops","/admin/token-guard","/admin/group-cache-tests","/admin/request-captures","/admin/harvest-flow"],
+ "smart_ops_hidden_menu_items": ["/admin/lottery","/admin/qqbot/overview","/admin/controlled-experiments","/admin/group-cache-tests","/admin/request-captures"],
  "request_capture_enabled": false,
  "request_capture_quota_mib": 1024,
  "request_capture_retention_days": 7,
@@ -1044,9 +1044,6 @@ func TestAPIContracts(t *testing.T) {
 					"payment_cancel_rate_limit_window_mode": "",
 					"payment_alipay_force_qrcode": false,
 					"payment_alipay_mobile_precreate_deep_link": false,
-					"balance_forecast_enabled": false,
-					"balance_forecast_threshold_hours": 12,
-					"balance_forecast_max_notifications": 3,
 					"balance_low_notify_enabled": false,
 					"account_quota_notify_enabled": false,
 					"account_scheduling_thresholds": {"anthropic":100,"grok":100,"openai":100},
@@ -1067,6 +1064,8 @@ func TestAPIContracts(t *testing.T) {
 					"model_plaza_enabled": false,
 					"model_plaza_require_auth": false,
 					"model_plaza_description": "",
+					"model_plaza_usd_to_cny_rate": 7,
+					"model_plaza_currency": {"wallet_currency":"USD","wallet_unit_value":1,"customer_currency":"USD","official_currency":"USD","official_platform_currencies":{},"official_model_currencies":{}},
 					"plugin_management_enabled": false,
 					"support_ticket_enabled": false,
 					"support_ticket_config": {
@@ -1305,7 +1304,7 @@ func TestAPIContracts(t *testing.T) {
 					"excel_bps_image_budget_mib": 1024,
 					"excel_bps_image_max_requests": 128,
 					"excel_bps_image_max_images": 20,
- "smart_ops_hidden_menu_items": ["/admin/lottery","/admin/channel-operations","/admin/controlled-experiments","/admin/account-ops","/admin/token-guard","/admin/group-cache-tests","/admin/request-captures","/admin/harvest-flow"],
+ "smart_ops_hidden_menu_items": ["/admin/lottery","/admin/qqbot/overview","/admin/controlled-experiments","/admin/group-cache-tests","/admin/request-captures"],
  "request_capture_enabled": false,
  "request_capture_quota_mib": 1024,
  "request_capture_retention_days": 7,
@@ -1423,9 +1422,6 @@ func TestAPIContracts(t *testing.T) {
 					"payment_cancel_rate_limit_window_mode": "",
 					"payment_alipay_force_qrcode": false,
 					"payment_alipay_mobile_precreate_deep_link": false,
-					"balance_forecast_enabled": false,
-					"balance_forecast_threshold_hours": 12,
-					"balance_forecast_max_notifications": 3,
 					"balance_low_notify_enabled": false,
 					"account_quota_notify_enabled": false,
 					"account_scheduling_thresholds": {"anthropic":100,"grok":100,"openai":100},
@@ -1446,6 +1442,8 @@ func TestAPIContracts(t *testing.T) {
 					"model_plaza_enabled": false,
 					"model_plaza_require_auth": false,
 					"model_plaza_description": "",
+					"model_plaza_usd_to_cny_rate": 7,
+					"model_plaza_currency": {"wallet_currency":"USD","wallet_unit_value":1,"customer_currency":"USD","official_currency":"USD","official_platform_currencies":{},"official_model_currencies":{}},
 					"plugin_management_enabled": false,
 					"support_ticket_enabled": false,
 					"support_ticket_config": {
@@ -1627,7 +1625,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
 
-	adminService := service.NewAdminService(nil, userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(nil, userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
@@ -2178,6 +2176,10 @@ func (s *stubAccountRepo) ClearAntigravityQuotaScopes(ctx context.Context, id in
 }
 
 func (s *stubAccountRepo) ClearModelRateLimits(ctx context.Context, id int64) error {
+	return errors.New("not implemented")
+}
+
+func (s *stubAccountRepo) ClearModelRateLimit(ctx context.Context, id int64, scope string) error {
 	return errors.New("not implemented")
 }
 

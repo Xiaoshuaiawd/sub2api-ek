@@ -85,6 +85,9 @@ func (s *OpenAIOAuthReauthService) SaveRuntimeSettings(ctx context.Context, cfg 
 }
 
 func effectiveReauthEngine(mode, accountEngine, globalEngine string) string {
+	if mode == OpenAIOAuthReauthModeMailboxGraph {
+		return OpenAIOAuthReauthEngineSessionStudio
+	}
 	if globalEngine == "" {
 		return normalizedReauthEngine(accountEngine)
 	}

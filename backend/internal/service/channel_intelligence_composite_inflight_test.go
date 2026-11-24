@@ -68,8 +68,11 @@ func TestIntelligenceCompositeInflightUsesResolvedPlatformAndEligibleAccountPric
 	cfg.Billing.InflightReservation = config.InflightReservationConfig{Enabled: true, DefaultMaxTokens: 1000, MaxInputTokens: 200000, MaxOutputTokens: 128000}
 	billing := NewBillingService(cfg, nil)
 	snapshot := &inflightSnapshotCacheStub{byBucket: map[string][]Account{inflightBucketKey(groupID, PlatformGrok): {
-		{ID: 1, Platform: PlatformGrok, Extra: map[string]any{IntelligenceRoutingExtraKey: true}, Credentials: map[string]any{"model_mapping": map[string]any{route: actual}}},
-		{ID: 2, Platform: PlatformGrok, Credentials: map[string]any{"model_mapping": map[string]any{route: "ordinary-actual"}}},
+		{ID: 1, Platform: PlatformGrok, Status: StatusActive, Schedulable: true, Extra: map[string]any{IntelligenceRoutingExtraKey: true}, Credentials: map[string]any{"model_mapping": map[string]any{route: actual}}},
+		{ID: 2, Platform: PlatformGrok, Status: StatusActive, Schedulable: true, Credentials: map[string]any{"model_mapping": map[string]any{route: "ordinary-actual"}}},
+		// Snapshots include configured accounts; reads must still exclude a
+		// paused IQ account even when its upstream model is more expensive.
+		{ID: 3, Platform: PlatformGrok, Status: StatusActive, Schedulable: false, Extra: map[string]any{IntelligenceRoutingExtraKey: true}, Credentials: map[string]any{"model_mapping": map[string]any{route: "ordinary-actual"}}},
 	}}}
 	repo := &inflightCountingAccountRepo{}
 	svc := &OpenAIGatewayService{cfg: cfg, billingService: billing, resolver: NewModelPricingResolver(channelSvc, billing), channelService: channelSvc,
@@ -83,7 +86,7 @@ func TestIntelligenceCompositeInflightUsesResolvedPlatformAndEligibleAccountPric
 	require.True(t, ok)
 	want := deps.estimateOne(ctx, apiKey, actual, req, 1, 1)
 	require.Greater(t, want, 0.0)
-	require.InDelta(t, want, cost, 1e-12, "reserve for qualified Grok account mapping, excluding ordinary accounts")
+	require.InDelta(t, want, cost, 1e-12, "reserve for qualified Grok account mapping, excluding ordinary and paused accounts")
 	require.Greater(t, snapshot.reads.Load(), int64(0))
 	require.Zero(t, repo.dbCalls.Load(), "use the existing scheduler snapshot")
 }

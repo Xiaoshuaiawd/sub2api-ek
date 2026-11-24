@@ -143,7 +143,14 @@ func (s *OpenAIGatewayService) forwardSIWC(ctx context.Context, c *gin.Context, 
 	if _, err = normalizeSIWCBody(upstream); err != nil {
 		return nil, err
 	}
+	// Acquire before token lookup so a request-triggered SIWC refresh and the
+	// inference share one exit until the response is consumed or canceled.
+	proxyCtx, releaseProxy, err := s.beginOpenAIRequestProxy(ctx, c, account)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseProxy()
 	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 	clientModel, _ := ctx.Value(openAIClientModelContextKey{}).(string)
-	return s.forwardOpenAIPassthrough(withOpenAITransportMode(ctx, "siwc"), c, account, body, upstream, reqModel, false, extractOpenAIReasoningEffortFromBody(body, reqModel), gjson.GetBytes(body, "stream").Bool(), start, clientModel)
+	return s.forwardOpenAIPassthrough(withOpenAITransportMode(proxyCtx, "siwc"), c, account, body, upstream, reqModel, false, extractOpenAIReasoningEffortFromBody(body, reqModel), gjson.GetBytes(body, "stream").Bool(), start, clientModel)
 }

@@ -14,7 +14,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	"github.com/Wei-Shaw/sub2api/internal/qqbot"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/server"
@@ -26,10 +28,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// 注意（一键 2FA 导入）：admin.AccountHandler 的凭证守护依赖是通过
-// SetTokenGuardService 在构造后手动注入的，wire 不会生成该调用。
-// 重新生成 wire_gen.go 后，需要手工补回 wire_gen.go 里的
-// accountHandler.SetTokenGuardService(accountTokenGuardService) 这一行。
+// 注意（一键 2FA 导入与账号库存）：admin.AccountHandler 的登录和库存依赖
+// 在构造后手动注入，wire 不会生成这些调用。重新生成 wire_gen.go 后，
+// 需要保留 SetReloginService、SetInventoryTokenGuardV2、SetInventoryService，
+// 以及账号库存服务的构造和启动、停止逻辑。
 type Application struct {
 	Lifecycle     *server.Lifecycle
 	Server        *http.Server
@@ -91,7 +93,8 @@ func providePluginHostInfo(buildInfo handler.BuildInfo) service.PluginHostInfo {
 }
 
 func provideCleanup(
-	balanceNotify *service.BalanceNotifyService,
+	providerChannels *admin.ChannelHandler,
+	qqBot *qqbot.Service,
 	autoCreditEmail *service.AutoCreditEmailWorker,
 	cfg *config.Config,
 	requestCaptures *requestcapture.Manager,
@@ -125,6 +128,7 @@ func provideCleanup(
 	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
+	usageBillingLanes *service.UsageBillingLaneCombiner,
 	subscriptionService *service.SubscriptionService,
 	oauth *service.OAuthService,
 	openaiOAuth *service.OpenAIOAuthService,
@@ -136,7 +140,7 @@ func provideCleanup(
 	controlledExperiment *service.ControlledExperimentService,
 	accountOps *service.AccountOpsService,
 	accountPerformance *service.AccountPerformanceService,
-	accountTokenGuard *service.AccountTokenGuardService,
+	openAIRelogin *service.OpenAIReloginService,
 	accountTokenGuardV2 *service.AccountTokenGuardV2Service,
 	backupSvc *service.BackupService,
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
@@ -160,9 +164,6 @@ func provideCleanup(
 		}
 	}
 	return func() {
-		if balanceNotify != nil {
-			balanceNotify.Stop()
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -191,9 +192,9 @@ func provideCleanup(
 				}
 				return nil
 			}},
-			{"AccountTokenGuardService", func() error {
-				if accountTokenGuard != nil {
-					accountTokenGuard.Stop()
+			{"OpenAIReloginService", func() error {
+				if openAIRelogin != nil {
+					openAIRelogin.Stop()
 				}
 				return nil
 			}},
@@ -267,6 +268,18 @@ func provideCleanup(
 			{"OpsSystemLogSink", func() error {
 				if opsSystemLogSink != nil {
 					opsSystemLogSink.Stop()
+				}
+				return nil
+			}},
+			{"MatureProviderRefresh", func() error {
+				if providerChannels != nil {
+					providerChannels.StopMatureProviderRefresh()
+				}
+				return nil
+			}},
+			{"QQBotService", func() error {
+				if qqBot != nil {
+					qqBot.Stop()
 				}
 				return nil
 			}},
@@ -382,6 +395,10 @@ func provideCleanup(
 				if usageRecordWorkerPool != nil {
 					usageRecordWorkerPool.Stop()
 				}
+				return nil
+			}},
+			{"UsageBillingLaneCombiner", func() error {
+				usageBillingLanes.Stop()
 				return nil
 			}},
 			{"OAuthService", func() error {

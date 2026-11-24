@@ -369,9 +369,6 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost:     settings.OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost,
 		OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse: settings.OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse,
 		OpenAIAdvancedSchedulerEffectiveWeightSessionSticky:    settings.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky,
-		BalanceForecastEnabled:                                 settings.BalanceForecastEnabled,
-		BalanceForecastThresholdHours:                          settings.BalanceForecastThresholdHours,
-		BalanceForecastMaxNotifications:                        settings.BalanceForecastMaxNotifications,
 		BalanceLowNotifyEnabled:                                settings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:                              settings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:                            settings.BalanceLowNotifyRechargeURL,
@@ -432,6 +429,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ModelPlazaRequireAuth:   settings.ModelPlazaRequireAuth,
 		PluginManagementEnabled: settings.PluginManagementEnabled,
 		ModelPlazaDescription:   settings.ModelPlazaDescription,
+		ModelPlazaUSDToCNYRate:  settings.ModelPlazaUSDToCNYRate,
+		ModelPlazaCurrency:      settings.ModelPlazaCurrency,
 
 		SupportTicketEnabled: settings.SupportTicketEnabled,
 		SupportTicket:        settings.SupportTicket,

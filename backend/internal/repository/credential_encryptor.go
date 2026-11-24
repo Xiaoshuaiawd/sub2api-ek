@@ -45,6 +45,8 @@ func NewOpenAICredentialEncryptor(cfg *config.Config, fallback service.SecretEnc
 			WHERE COALESCE(length(password_ciphertext), 0) > 0
 			OR COALESCE(length(totp_secret_ciphertext), 0) > 0
 			OR COALESCE(length(otp_url_ciphertext), 0) > 0)
+			OR EXISTS (SELECT 1 FROM openai_oauth_reauth_configs
+			WHERE COALESCE(length(mailbox_credentials_ciphertext), 0) > 0)
 			OR EXISTS (SELECT 1 FROM openai_account_inventory
 			WHERE COALESCE(length(password_ciphertext), 0) > 0
 			OR COALESCE(length(mfa_ciphertext), 0) > 0)`).Scan(&exists)

@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -57,6 +58,24 @@ class CodexPoolWorkerTests(unittest.TestCase):
             with self.assertRaisesRegex(worker.WorkerError, 'toSub2 protocol-login.mjs is unavailable'):
                 worker.process_password_claim(api, claim)
             delegate.assert_not_called()
+
+    def test_bound_totp_factor_requires_local_binding_runtime(self):
+        api = Mock()
+        claim = {'task_id': 7, 'account_id': 42, 'login_email': 'demo@example.test',
+                 'password': 'synthetic-password', 'totp_secret': 'synthetic-totp',
+                 'totp_factor_id': 'bound-factor', 'oauth_profile': 'codex',
+                 'engine': 'local_worker'}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'src').mkdir()
+            (root / 'src/protocol-login.mjs').write_text('// unpatched runtime')
+            api.config.tosub2_root = root
+            with patch.dict('os.environ', {'OPENAI_REAUTH_CODEX_POOL_URL': 'http://relogin:8787/api/v1/relogin',
+                                          'NODE_EXECUTABLE': sys.executable}), \
+                 patch.object(worker, 'process_codex_pool_claim') as delegate:
+                with self.assertRaisesRegex(worker.WorkerError, 'factor_binding_runtime_required'):
+                    worker.process_password_claim(api, claim)
+                delegate.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -234,6 +234,58 @@ class ReauthEngineTests(unittest.TestCase):
         return dict(access_token='synthetic-access',refresh_token='synthetic-refresh',id_token='synthetic-id')
     def api(self):
         return SimpleNamespace(progress=Mock(), credentials=Mock(return_value={'status':'succeeded'}))
+    def test_mailbox_graph_claim_preserves_mail_credentials_and_refresh_hint(self):
+        for password in ('', 'optional-password'):
+            with self.subTest(password=bool(password)):
+                claim = dict(self.claim(), credential_mode='mailbox_graph', password=password,
+                             mail_client_id='synthetic-mail-client', mail_refresh_token='synthetic-mail-refresh',
+                             refresh_token='synthetic-existing-refresh', expected_workspace='workspace-original',
+                             expected_credentials_hash='internal-snapshot-not-for-provider')
+                api = self.api()
+                response = ChunkResponse([json.dumps({'credential': self.credentials()}).encode()])
+                with patch.object(worker.NO_REDIRECT_OPENER, 'open', return_value=response) as opener, \
+                     patch.object(worker.subprocess, 'run') as local:
+                    worker.process_claim(api, None, claim)
+                payload = json.loads(opener.call_args.args[0].data)
+                self.assertEqual(payload, dict(action='start', auth_mode='password_2fa',
+                    email=claim['login_email'], password=password, mfa_secret=claim['totp_secret'],
+                    mail_client_id=claim['mail_client_id'], mail_refresh_token=claim['mail_refresh_token'],
+                    refresh_token=claim['refresh_token'], expected_workspace='workspace-original'))
+                api.credentials.assert_called_once_with(7, self.credentials(), {})
+                local.assert_not_called()
+
+    def test_mailbox_graph_requires_complete_mail_credentials_before_network(self):
+        for missing in ('mail_client_id', 'mail_refresh_token'):
+            claim = dict(self.claim(), credential_mode='mailbox_graph', password='',
+                         mail_client_id='synthetic-mail-client', mail_refresh_token='synthetic-mail-refresh')
+            claim[missing] = ''
+            with self.subTest(missing=missing), patch.object(worker.NO_REDIRECT_OPENER, 'open') as opener:
+                with self.assertRaisesRegex(worker.WorkerError, 'mailbox credentials'):
+                    worker.process_claim(self.api(), None, claim)
+                opener.assert_not_called()
+
+    def test_mailbox_graph_never_falls_back_to_local_or_shared_pool(self):
+        claim = dict(self.claim(), credential_mode='mailbox_graph', engine='local_worker', password='',
+                     mail_client_id='synthetic-mail-client', mail_refresh_token='synthetic-mail-refresh')
+        with patch.object(worker.NO_REDIRECT_OPENER, 'open') as opener, \
+             patch.object(worker.subprocess, 'run') as local, \
+             patch.object(worker, 'process_codex_pool_claim') as pool:
+            with self.assertRaisesRegex(worker.WorkerError, 'requires Session Studio'):
+                worker.process_claim(self.api(), None, claim)
+            opener.assert_not_called(); local.assert_not_called(); pool.assert_not_called()
+
+    def test_mailbox_graph_provider_error_does_not_expose_mail_secrets(self):
+        claim = dict(self.claim(), credential_mode='mailbox_graph', password='',
+                     mail_client_id='synthetic-mail-client', mail_refresh_token='synthetic-mail-refresh')
+        response = ChunkResponse([json.dumps({'error': {'code': claim['mail_refresh_token'],
+                                                       'message': claim['mail_client_id']}}).encode()])
+        api = self.api()
+        with patch.object(worker.NO_REDIRECT_OPENER, 'open', return_value=response):
+            with self.assertRaisesRegex(worker.WorkerError, 'Session Studio login failed') as failure:
+                worker.process_claim(api, None, claim)
+        self.assertNotIn('synthetic-mail', str(failure.exception))
+        api.credentials.assert_not_called()
+
     def test_stream_stops_on_terminal_result_without_eof(self):
         # A socket would stay open for later heartbeats. Reading after this
         # terminal result is an error, rather than an artificial EOF.

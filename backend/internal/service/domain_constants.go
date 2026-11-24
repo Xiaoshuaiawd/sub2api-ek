@@ -170,6 +170,7 @@ const (
 	AccountTypeSetupToken     = domain.AccountTypeSetupToken     // Setup Token类型账号（inference only scope）
 	AccountTypeAPIKey         = domain.AccountTypeAPIKey         // API Key类型账号
 	AccountTypeUpstream       = domain.AccountTypeUpstream       // 上游透传类型账号（通过 Base URL + API Key 连接上游）
+	AccountTypeGateway        = domain.AccountTypeGateway        // 跨平台 Sub2API / New API 网关账号
 	AccountTypeBedrock        = domain.AccountTypeBedrock        // AWS Bedrock 类型账号（通过 SigV4 签名或 API Key 连接 Bedrock，由 credentials.auth_mode 区分）
 	AccountTypeServiceAccount = domain.AccountTypeServiceAccount // Google Service Account 类型账号（用于 Vertex AI）
 )
@@ -591,7 +592,9 @@ const (
 
 	// SettingKeyModelPlazaDescription stores the Markdown blurb rendered at the top of
 	// the Model Plaza page (global pricing notes, exchange rate, promotions, ...).
-	SettingKeyModelPlazaDescription = "model_plaza_description"
+	SettingKeyModelPlazaDescription  = "model_plaza_description"
+	SettingKeyModelPlazaUSDToCNYRate = "model_plaza_usd_to_cny_rate"
+	SettingKeyModelPlazaCurrency     = "model_plaza_currency"
 
 	// SettingKeyPluginManagementEnabled controls sidebar visibility only; it does
 	// not stop or otherwise change already loaded plugin runtimes.
@@ -793,11 +796,6 @@ const (
 	SettingKeyBalanceLowNotifyEnabled     = "balance_low_notify_enabled"      // 全局开关
 	SettingKeyBalanceLowNotifyThreshold   = "balance_low_notify_threshold"    // 默认阈值（USD）
 	SettingKeyBalanceLowNotifyRechargeURL = "balance_low_notify_recharge_url" // 充值页面 URL
-
-	// 余额耗尽预测：独立于金额提醒，默认关闭。
-	SettingKeyBalanceForecastEnabled          = "balance_forecast_enabled"
-	SettingKeyBalanceForecastThresholdHours   = "balance_forecast_threshold_hours"
-	SettingKeyBalanceForecastMaxNotifications = "balance_forecast_max_notifications"
 
 	// 订阅到期提醒
 	SettingKeySubscriptionExpiryNotifyEnabled = "subscription_expiry_notify_enabled" // 订阅到期提醒全局开关，默认开启

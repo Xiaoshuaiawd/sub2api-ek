@@ -242,10 +242,12 @@ type SystemSettings struct {
 	SubscriptionEnabled bool `json:"subscription_enabled"`
 
 	// Model Plaza feature (public group/model pricing showcase)
-	ModelPlazaEnabled       bool   `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth   bool   `json:"model_plaza_require_auth"`
-	ModelPlazaDescription   string `json:"model_plaza_description"`
-	PluginManagementEnabled bool   `json:"plugin_management_enabled"`
+	ModelPlazaEnabled       bool                       `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth   bool                       `json:"model_plaza_require_auth"`
+	ModelPlazaDescription   string                     `json:"model_plaza_description"`
+	ModelPlazaUSDToCNYRate  float64                    `json:"model_plaza_usd_to_cny_rate"`
+	ModelPlazaCurrency      ModelPlazaCurrencySettings `json:"model_plaza_currency"`
+	PluginManagementEnabled bool                       `json:"plugin_management_enabled"`
 
 	// Support tickets ("网站工单") switch + form config
 	SupportTicketEnabled bool                `json:"support_ticket_enabled"`
@@ -333,12 +335,9 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string
 
 	// 余额不足提醒
-	BalanceForecastEnabled          bool
-	BalanceForecastThresholdHours   float64
-	BalanceForecastMaxNotifications int
-	BalanceLowNotifyEnabled         bool
-	BalanceLowNotifyThreshold       float64
-	BalanceLowNotifyRechargeURL     string
+	BalanceLowNotifyEnabled     bool
+	BalanceLowNotifyThreshold   float64
+	BalanceLowNotifyRechargeURL string
 
 	// 订阅到期提醒
 	SubscriptionExpiryNotifyEnabled bool

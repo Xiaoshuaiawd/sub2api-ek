@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/adminaccess"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -48,12 +49,17 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 	}
 }
 
+type accountTokenGuardV2Writer interface {
+	SaveAccount(context.Context, int64, service.AccountTokenGuardV2AccountInput) (*service.AccountTokenGuardV2Account, error)
+}
+
 // AccountHandler handles admin account management
 type AccountHandler struct {
-	// tokenGuard 供「一键 2FA 导入」在服务端完成首次登录；由装配层注入。
-	tokenGuard              *service.AccountTokenGuardService
-	inventoryTokenGuardV2   *service.AccountTokenGuardV2Service
+	// relogin supplies explicit 2FA imports; periodic recovery belongs to V2.
+	relogin                 *service.OpenAIReloginService
+	inventoryTokenGuardV2   accountTokenGuardV2Writer
 	inventory               *service.AccountInventoryService
+	providerCatalog         *ChannelHandler
 	performance             *service.AccountPerformanceService
 	upstreamChannels        *service.ChannelService
 	adminService            service.AdminService
@@ -75,7 +81,6 @@ type AccountHandler struct {
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
 	codexTicketSettings     *service.SettingService
-	codexHarvest            *service.CodexHarvestService
 	openAIGatewayService    *service.OpenAIGatewayService
 	cfg                     *config.Config
 	opencodeGoUsage         *service.OpenCodeGoUsageService
@@ -142,9 +147,9 @@ func NewAccountHandler(
 	}
 }
 
-// SetTokenGuardService 注入凭证守护服务，用于服务端「一键 2FA 登录并导入」。
-func (h *AccountHandler) SetTokenGuardService(svc *service.AccountTokenGuardService) {
-	h.tokenGuard = svc
+// SetReloginService supplies explicit logins for account and inventory imports.
+func (h *AccountHandler) SetReloginService(svc *service.OpenAIReloginService) {
+	h.relogin = svc
 }
 
 func (h *AccountHandler) SetInventoryTokenGuardV2(svc *service.AccountTokenGuardV2Service) {
@@ -157,12 +162,14 @@ func (h *AccountHandler) SetInventoryService(svc *service.AccountInventoryServic
 
 // CreateAccountRequest represents create account request
 type CreateAccountRequest struct {
+	ProviderID              int64          `json:"provider_id"`
+	ProviderKeyID           string         `json:"provider_key_id"`
 	UpstreamChannelID       int64          `json:"upstream_channel_id"`
 	ConfirmUpstreamChannel  bool           `json:"confirm_upstream_channel_binding"`
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
 	Platform                string         `json:"platform" binding:"required"`
-	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	Type                    string         `json:"type" binding:"required,oneof=oauth setup-token apikey upstream bedrock service_account gateway"`
 	Credentials             map[string]any `json:"credentials" binding:"required"`
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
@@ -181,9 +188,10 @@ type CreateAccountRequest struct {
 // UpdateAccountRequest represents update account request
 // 使用指针类型来区分"未提供"和"设置为0"
 type UpdateAccountRequest struct {
+	Platform            string         `json:"platform"`
 	Name                string         `json:"name"`
 	Notes               *string        `json:"notes"`
-	Type                string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account"`
+	Type                string         `json:"type" binding:"omitempty,oneof=oauth setup-token apikey upstream bedrock service_account gateway"`
 	Credentials         map[string]any `json:"credentials"`
 	Extra               map[string]any `json:"extra"`
 	ProxyID             *int64         `json:"proxy_id"`
@@ -1129,6 +1137,18 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	providerImport := req.ProviderID != 0 || req.ProviderKeyID != ""
+	if providerImport {
+		if _, observer := service.ObserverGroupIDs(c.Request.Context()); observer || adminaccess.FromContext(c.Request.Context()) != nil {
+			response.Forbidden(c, "Provider imports require an unrestricted administrator")
+			return
+		}
+		manual, _ := req.Credentials["api_key"].(string)
+		if req.ProviderID < 1 || !validProviderKeyID(req.ProviderKeyID) || req.Type != service.AccountTypeAPIKey || strings.TrimSpace(manual) != "" {
+			response.BadRequest(c, "Choose a provider key without a manual credential")
+			return
+		}
+	}
 	if _, observer := service.ObserverGroupIDs(c.Request.Context()); observer && req.UpstreamChannelID > 0 {
 		response.ErrorFrom(c, service.ErrObserverScope)
 		return
@@ -1164,6 +1184,29 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	var createdAccount *service.Account
 
 	result, err := executeAdminIdempotent(c, "admin.accounts.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		if providerImport {
+			if h.providerCatalog == nil {
+				return nil, infraerrors.ServiceUnavailable("PROVIDER_UNAVAILABLE", "Provider catalog unavailable")
+			}
+			credentials, binding, e := h.providerCatalog.resolveMatureProviderKey(ctx, req.ProviderID, req.ProviderKeyID, req.Platform)
+			if e != nil {
+				return nil, providerKeyError(e)
+			}
+			if req.Credentials == nil {
+				req.Credentials = map[string]any{}
+			}
+			for k, v := range credentials {
+				req.Credentials[k] = v
+			}
+			if req.Extra == nil {
+				req.Extra = map[string]any{}
+			}
+			req.Extra[providerKeyBindingExtraKey] = binding
+			// Import is metadata-only; activation must not initiate an implicit
+			// generation or account capability probe.
+			probe := false
+			req.ProbeEnabled = &probe
+		}
 		if req.UpstreamChannelID > 0 {
 			ctx = service.WithInitialUpstreamChannel(ctx, req.UpstreamChannelID)
 		}
@@ -1220,8 +1263,10 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	}
 	// OpenAI APIKey 账号创建后异步探测上游 /v1/responses 能力。
 	// 探测失败不影响账号创建响应。
-	h.scheduleOpenAIResponsesProbe(createdAccount)
-	h.scheduleGrokImportProbe(createdAccount)
+	if !providerImport {
+		h.scheduleOpenAIResponsesProbe(createdAccount)
+		h.scheduleGrokImportProbe(createdAccount)
+	}
 	response.Success(c, result.Data)
 }
 
@@ -1305,6 +1350,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
 
 	account, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
+		Platform:              req.Platform,
 		Name:                  req.Name,
 		Notes:                 req.Notes,
 		Type:                  req.Type,
@@ -1395,9 +1441,11 @@ func (h *AccountHandler) Delete(c *gin.Context) {
 
 // TestAccountRequest represents the request body for testing an account
 type TestAccountRequest struct {
-	ModelID string `json:"model_id"`
-	Prompt  string `json:"prompt"`
-	Mode    string `json:"mode"`
+	ModelID  string `json:"model_id"`
+	Prompt   string `json:"prompt"`
+	Mode     string `json:"mode"`
+	GroupID  int64  `json:"group_id"`
+	Platform string `json:"platform"`
 	// Optional media for Grok (and future) real generation tests.
 	// ImageDataURL / AudioDataURL are data:<mime>;base64,... payloads.
 	ImageDataURL string `json:"image_data_url"`
@@ -1443,6 +1491,8 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	opts := service.AccountTestOptions{
 		ImageDataURL: req.ImageDataURL,
 		AudioDataURL: req.AudioDataURL,
+		GroupID:      req.GroupID,
+		Platform:     req.Platform,
 	}
 
 	// Use AccountTestService to test the account with SSE streaming
@@ -1451,7 +1501,7 @@ func (h *AccountHandler) Test(c *gin.Context) {
 		return
 	}
 
-	if h.rateLimitService != nil {
+	if h.rateLimitService != nil && !service.IsGatewayAccountTest(c.Request.Context()) {
 		if _, err := h.rateLimitService.RecoverAccountAfterSuccessfulTest(c.Request.Context(), accountID); err != nil {
 			_ = c.Error(err)
 		}
@@ -1480,6 +1530,26 @@ func (h *AccountHandler) PelicanTest(c *gin.Context) {
 	var req PelicanTestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.PromptMode == "ciallo" {
+		model := strings.TrimSpace(req.ModelID)
+		if model == "" || len(model) > 100 || accountID <= 0 {
+			response.BadRequest(c, "Invalid account or model")
+			return
+		}
+		switch req.ReasoningEffort {
+		case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		default:
+			response.BadRequest(c, "Invalid reasoning effort")
+			return
+		}
+		result, err := h.accountTestService.RunCiallo(c.Request.Context(), accountID, model, req.ReasoningEffort)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, result)
 		return
 	}
 	if req.PromptMode == service.PelicanPromptModeRandom {
@@ -3309,8 +3379,8 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		response.BadRequest(c, "Invalid upstream model sync options")
 		return
 	}
-	if options.Automatic && !options.Apply {
-		response.BadRequest(c, "Automatic model sync requires apply=true")
+	if err := options.Validate(); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 	if _, observer := service.ObserverGroupIDs(c.Request.Context()); observer && options.Apply {
@@ -3318,7 +3388,7 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		return
 	}
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
+	if err != nil || accountID <= 0 {
 		response.BadRequest(c, "Invalid account ID")
 		return
 	}
@@ -3354,7 +3424,7 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		response.Error(c, http.StatusBadGateway, "Failed to sync upstream models from upstream")
 		return
 	}
-	if catalog != nil && account != nil && account.IsGrok() && account.ID > 0 && h.accountTestService != nil {
+	if !options.WhitelistOnly && catalog != nil && account != nil && account.IsGrok() && account.ID > 0 && h.accountTestService != nil {
 		if latest, readErr := h.adminService.GetAccount(c.Request.Context(), account.ID); readErr == nil && latest != nil {
 			catalog.GrokModelDiagnostics = h.accountTestService.GetGrokModelDiagnostics(c.Request.Context(), latest)
 		}
@@ -3370,12 +3440,34 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		Platform     string            `json:"platform" binding:"required"`
 		Type         string            `json:"type" binding:"required"`
 		BaseURL      string            `json:"base_url"`
-		APIKey       string            `json:"api_key" binding:"required"`
+		APIKey       string            `json:"api_key"`
+		AccountID    *int64            `json:"account_id" binding:"omitempty,gt=0"`
 		ProxyID      *int64            `json:"proxy_id" binding:"omitempty,gte=0"`
 		ModelMapping map[string]string `json:"model_mapping"`
+		UpstreamKind string            `json:"upstream_kind"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	// Gateway edits may preview a draft URL/proxy without returning the saved
+	// calling key to the browser. Resolve only an accessible gateway account.
+	if req.AccountID != nil {
+		if _, observer := service.ObserverGroupIDs(c.Request.Context()); observer {
+			response.ErrorFrom(c, service.ErrObserverScope)
+			return
+		}
+		account, err := h.adminService.GetAccount(c.Request.Context(), *req.AccountID)
+		if err != nil || account == nil || !account.IsGateway() || req.Platform != service.PlatformGateway || req.Type != service.AccountTypeGateway {
+			response.BadRequest(c, "Invalid gateway preview account")
+			return
+		}
+		if strings.TrimSpace(req.APIKey) == "" {
+			req.APIKey = account.GetCredential("api_key")
+		}
+	}
+	if strings.TrimSpace(req.APIKey) == "" {
+		response.BadRequest(c, "API key is required")
 		return
 	}
 	modelMapping := make(map[string]any, len(req.ModelMapping))
@@ -3387,6 +3479,7 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		Platform: req.Platform,
 		Type:     req.Type,
 		Credentials: map[string]any{
+			"upstream_kind": req.UpstreamKind,
 			"api_key":       req.APIKey,
 			"base_url":      req.BaseURL,
 			"model_mapping": modelMapping,

@@ -114,3 +114,40 @@ it.each(['user', 'upstream'])('explains %s balance failures and preserves diagno
   expect(wrapper.find('pre').text()).toContain('insufficient balance')
   wrapper.unmount()
 })
+
+it('labels HTTP 200 as wire status when the stream failed', async () => {
+  vi.clearAllMocks()
+  mocks.listRequestErrorUpstreamErrors.mockResolvedValue({ items: [] })
+  mocks.getRequestErrorDetail.mockResolvedValue({
+    id: 1, status_code: 200, phase: 'network', type: 'transport_error',
+    message: 'Upstream connection reset', upstream_status_code: null,
+  })
+  const wrapper = shallowMount(OpsErrorDetailModal, {
+    props: { show: true, errorId: 1, errorType: 'request' },
+    global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } },
+  })
+  await flushPromises()
+  expect(wrapper.text()).toContain('usage.errors.detail.clientHttpStatus')
+  expect(wrapper.text()).toContain('usage.errors.detail.streamFailedAfterHeaders')
+  expect(wrapper.text()).toContain('200')
+  wrapper.unmount()
+})
+
+it('shows value-free encrypted-history control diagnostics from the error body', async () => {
+  vi.clearAllMocks()
+  mocks.listRequestErrorUpstreamErrors.mockResolvedValue({ items: [] })
+  mocks.getRequestErrorDetail.mockResolvedValue({
+    id: 1, status_code: 409, phase: 'request', type: 'invalid_request_error',
+    message: 'Encrypted history recovery refused',
+    error_body: JSON.stringify({ error: { code: 'encrypted_agent_recovery_wire_changed', controls: { snapshot: 'oauth_replay', tools: 'changed', tool_choice: 'match', previous_response_id_present: false } } }),
+  })
+  const wrapper = shallowMount(OpsErrorDetailModal, {
+    props: { show: true, errorId: 1, errorType: 'request' },
+    global: { stubs: { BaseDialog: { template: '<div><slot /></div>' }, Icon: true } },
+  })
+  await flushPromises()
+  expect(wrapper.text()).toContain('"snapshot": "oauth_replay"')
+  expect(wrapper.text()).toContain('"tools": "changed"')
+  expect(wrapper.text()).toContain('"previous_response_id_present": false')
+  wrapper.unmount()
+})

@@ -49,6 +49,7 @@ vi.mock('vue-i18n', async (importOriginal) => {
   return {
     ...actual,
     useI18n: () => ({
+      locale: { value: 'zh' },
       t: (key: string, params?: Record<string, unknown>) => params ? `${key} ${Object.values(params).join(' ')}` : key,
     }),
   }
@@ -121,7 +122,7 @@ afterEach(() => {
 })
 
 describe('TokenGuardV2View', () => {
-  it('supports both per-account login modes without echoing saved secrets', async () => {
+  it('supports per-account login modes without echoing saved secrets', async () => {
     wrapper = mount(TokenGuardV2View, {
       global: {
         stubs: {
@@ -142,7 +143,7 @@ describe('TokenGuardV2View', () => {
     await wrapper.findAll('button').find(button => button.text() === 'tokenGuardV2.edit')!.trigger('click')
 
     const modes = wrapper.findAll('input[type="radio"]').map(input => input.attributes('value'))
-    expect(modes).toEqual(['password_totp', 'email_otp_url'])
+    expect(modes).toEqual(['password_totp', 'email_otp_url', 'mailbox_graph'])
     expect(wrapper.findAll('input[type="password"]').map(input => input.element.value)).toEqual(['', ''])
 
     expect(wrapper.text()).toContain('SOCKS5H')
@@ -641,6 +642,120 @@ it('uses local proxies for email OTP under the remote global engine', async () =
   expect(view.get('#token-guard-v2-proxy').attributes('disabled')).toBeDefined()
   await view.get('input[value="email_otp_url"]').setValue()
   expect(view.get('#token-guard-v2-proxy').attributes('disabled')).toBeUndefined()
+})
+
+describe('Microsoft Graph mailbox credentials', () => {
+  async function graphAccount(configured = true) {
+    const data = await api.listGuard()
+    data.accounts[0].login_config = {
+      ...data.accounts[0].login_config,
+      credential_mode: 'mailbox_graph', engine: 'session_studio',
+      mailbox_configured: configured, configured,
+    }
+    api.listGuard.mockResolvedValue(data)
+    return mountControls()
+  }
+
+  it('keeps configured Graph accounts on Session Studio under the local global engine and hides TOTP rotation', async () => {
+    const view = await graphAccount()
+    const row = view.get('tbody tr')
+    expect(row.text()).toContain('tokenGuardV2.mailboxGraphMode')
+    expect(row.text()).toContain('tokenGuardV2.mailboxGraphSaved')
+    expect(row.text()).toContain('tokenGuardV2.sessionStudioEngine')
+    expect(row.text()).toContain('tokenGuardV2.remoteEngineEgress')
+    expect(row.text()).not.toContain('tokenGuardV2.localWorkerEngine')
+    expect(row.find('[data-testid="totp-manage"]').exists()).toBe(false)
+  })
+
+  it('edits configured Graph credentials without fake OTP URLs or resubmitting saved secrets', async () => {
+    const view = await graphAccount()
+    await view.findAll('button').find(button => button.text() === 'tokenGuardV2.edit')!.trigger('click')
+    const form = view.get('#token-guard-v2-editor')
+    expect(form.find('input[type="url"]').exists()).toBe(false)
+    expect(form.get('#token-guard-v2-proxy').attributes('disabled')).toBeDefined()
+    expect(form.text()).toContain('tokenGuardV2.remoteEngineEgress')
+    for (const id of ['mail-client-id', 'mail-refresh-token']) {
+      const input = form.get<HTMLInputElement>(`#token-guard-v2-${id}`)
+      expect(input.element.value).toBe('')
+      expect(input.element.required).toBe(false)
+      expect(input.attributes('placeholder')).toBe('tokenGuardV2.keepSecret')
+    }
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(true)
+    await form.get('#token-guard-v2-mail-client-id').setValue('partial-replacement')
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(false)
+    await form.get('#token-guard-v2-mail-client-id').setValue('')
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(true)
+    await form.trigger('submit'); await flushPromises()
+    const payload = api.updateGuard.mock.calls[0][1]
+    expect(payload).toMatchObject({ credential_mode: 'mailbox_graph', engine: 'session_studio', proxy_source: 'account', proxy_id: null })
+    for (const field of ['mail_client_id', 'mail_refresh_token', 'password', 'totp_secret', 'otp_url', 'clear_totp']) {
+      expect(payload).not.toHaveProperty(field)
+    }
+  })
+
+  it('requires a new password when switching a Graph account with fallback secrets to password mode', async () => {
+    const view = await graphAccount()
+    await view.findAll('button').find(button => button.text() === 'tokenGuardV2.edit')!.trigger('click')
+    const form = view.get('#token-guard-v2-editor')
+    await form.get('input[value="password_totp"]').setValue()
+    const [password, totp] = form.findAll<HTMLInputElement>('input[type="password"]')
+    expect(password!.element.required).toBe(true)
+    expect(password!.attributes('placeholder')).toBe('')
+    expect(totp!.attributes('placeholder')).toBe('tokenGuardV2.totpOptionalHint')
+    expect(form.text()).not.toContain('tokenGuardV2.clearTotp')
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(false)
+    await password!.setValue('replacement-password')
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(true)
+    await form.trigger('submit'); await flushPromises()
+    expect(api.updateGuard).toHaveBeenCalledWith(42, expect.objectContaining({
+      credential_mode: 'password_totp', password: 'replacement-password', totp_secret: '',
+    }))
+    expect(api.updateGuard.mock.calls[0][1]).not.toHaveProperty('mail_refresh_token')
+  })
+
+  it('requires a complete Graph pair and saves it using remote service egress', async () => {
+    const view = await graphAccount(false)
+    await view.findAll('button').find(button => button.text() === 'tokenGuardV2.edit')!.trigger('click')
+    const form = view.get('#token-guard-v2-editor')
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(false)
+    await form.get('#token-guard-v2-mail-client-id').setValue('new-client')
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(false)
+    await form.get('#token-guard-v2-mail-refresh-token').setValue('new-refresh-token')
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(true)
+    await form.trigger('submit'); await flushPromises()
+    expect(api.updateGuard).toHaveBeenCalledWith(42, expect.objectContaining({
+      credential_mode: 'mailbox_graph', engine: 'session_studio', proxy_source: 'account', proxy_id: null,
+      mail_client_id: 'new-client', mail_refresh_token: 'new-refresh-token',
+    }))
+    expect(api.updateGuard.mock.calls[0][1]).not.toHaveProperty('otp_url')
+    expect(view.html()).not.toContain('new-refresh-token')
+    expect(view.html()).not.toContain('new-client')
+  })
+
+  it.each(['password_totp', 'email_otp_url'])('does not submit Graph secrets after switching back to %s', async mode => {
+    const view = await mountControls()
+    await view.findAll('button').find(button => button.text() === 'tokenGuardV2.edit')!.trigger('click')
+    const form = view.get('#token-guard-v2-editor')
+    await form.get('input[value="mailbox_graph"]').setValue()
+    await form.get('#token-guard-v2-mail-client-id').setValue('unused-client')
+    await form.get('#token-guard-v2-mail-refresh-token').setValue('unused-refresh-token')
+    await form.get(`input[value="${mode}"]`).setValue()
+    if (mode === 'email_otp_url') await form.get('input[type="url"]').setValue('https://mail.example.test/otp')
+    expect(form.get('#token-guard-v2-proxy').attributes('disabled')).toBeUndefined()
+    expect((form.element as HTMLFormElement).checkValidity()).toBe(true)
+    await form.trigger('submit'); await flushPromises()
+    const payload = api.updateGuard.mock.calls[0][1]
+    expect(payload.credential_mode).toBe(mode)
+    for (const field of ['mail_client_id', 'mail_refresh_token', 'engine']) expect(payload).not.toHaveProperty(field)
+    if (mode === 'password_totp') {
+      expect(payload).toMatchObject({ password: '', totp_secret: '' })
+      expect(payload).not.toHaveProperty('otp_url')
+    } else {
+      expect(payload.otp_url).toBe('https://mail.example.test/otp')
+      expect(payload).not.toHaveProperty('password')
+      expect(payload).not.toHaveProperty('totp_secret')
+    }
+  })
 })
 
 function deferred<T>() {

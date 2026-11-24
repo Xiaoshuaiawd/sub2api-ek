@@ -9,7 +9,7 @@ import (
 type AdminHandlers struct {
 	RequestCapture         *admin.RequestCaptureHandler
 	AccountOps             *admin.AccountOpsHandler
-	AccountTokenGuard      *admin.AccountTokenGuardHandler
+	OpenAIRelogin          *admin.OpenAIReloginHandler
 	AccountTokenGuardV2    *admin.AccountTokenGuardV2Handler
 	Dashboard              *admin.DashboardHandler
 	User                   *admin.UserHandler
@@ -54,11 +54,13 @@ type AdminHandlers struct {
 
 // Handlers contains all HTTP handlers
 type Handlers struct {
+	QQBot            *QQBotHandler
 	Lottery          *LotteryHandler
 	Auth             *AuthHandler
 	User             *UserHandler
 	APIKey           *APIKeyHandler
 	Usage            *UsageHandler
+	UsageRecords     *UsageRecordsHandler
 	Redeem           *RedeemHandler
 	Subscription     *SubscriptionHandler
 	Announcement     *AnnouncementHandler

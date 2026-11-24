@@ -323,9 +323,6 @@ type SystemSettings struct {
 	PaymentAlipayMobilePrecreateDeepLink bool `json:"payment_alipay_mobile_precreate_deep_link"`
 
 	// 余额、订阅到期与账号限额通知
-	BalanceForecastEnabled          bool               `json:"balance_forecast_enabled"`
-	BalanceForecastThresholdHours   float64            `json:"balance_forecast_threshold_hours"`
-	BalanceForecastMaxNotifications int                `json:"balance_forecast_max_notifications"`
 	BalanceLowNotifyEnabled         bool               `json:"balance_low_notify_enabled"`
 	BalanceLowNotifyThreshold       float64            `json:"balance_low_notify_threshold"`
 	BalanceLowNotifyRechargeURL     string             `json:"balance_low_notify_recharge_url"`
@@ -362,10 +359,12 @@ type SystemSettings struct {
 	SubscriptionEnabled bool `json:"subscription_enabled"`
 
 	// Model Plaza feature (public group/model pricing showcase)
-	ModelPlazaEnabled       bool   `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth   bool   `json:"model_plaza_require_auth"`
-	ModelPlazaDescription   string `json:"model_plaza_description"`
-	PluginManagementEnabled bool   `json:"plugin_management_enabled"`
+	ModelPlazaEnabled       bool                               `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth   bool                               `json:"model_plaza_require_auth"`
+	ModelPlazaDescription   string                             `json:"model_plaza_description"`
+	ModelPlazaUSDToCNYRate  float64                            `json:"model_plaza_usd_to_cny_rate"`
+	ModelPlazaCurrency      service.ModelPlazaCurrencySettings `json:"model_plaza_currency"`
+	PluginManagementEnabled bool                               `json:"plugin_management_enabled"`
 
 	// Support tickets ("网站工单") switch + form config
 	SupportTicketEnabled bool                        `json:"support_ticket_enabled"`

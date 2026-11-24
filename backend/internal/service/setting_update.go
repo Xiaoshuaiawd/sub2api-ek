@@ -108,9 +108,6 @@ func (s *SettingService) refreshCachedSettingsAfterWrite(ctx context.Context, se
 }
 
 func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, settings *SystemSettings) (map[string]string, error) {
-	if err := settings.normalizeBalanceForecastSettings(); err != nil {
-		return nil, err
-	}
 	captureConfig := settings.requestCaptureConfig()
 	if err := captureConfig.Validate(); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_REQUEST_CAPTURE_SETTINGS", err.Error())
@@ -530,6 +527,20 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyModelPlazaEnabled] = strconv.FormatBool(settings.ModelPlazaEnabled)
 	updates[SettingKeyModelPlazaRequireAuth] = strconv.FormatBool(settings.ModelPlazaRequireAuth)
 	updates[SettingKeyModelPlazaDescription] = settings.ModelPlazaDescription
+	if settings.ModelPlazaUSDToCNYRate == 0 {
+		settings.ModelPlazaUSDToCNYRate = defaultModelPlazaUSDToCNYRate
+	}
+	if settings.ModelPlazaUSDToCNYRate < 0 || math.IsNaN(settings.ModelPlazaUSDToCNYRate) || math.IsInf(settings.ModelPlazaUSDToCNYRate, 0) {
+		return nil, infraerrors.BadRequest("INVALID_MODEL_PLAZA_DISPLAY_RATE", "model plaza USD to CNY display rate must be finite and positive")
+	}
+	plazaCurrency, err := NormalizeModelPlazaCurrency(settings.ModelPlazaCurrency)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_MODEL_PLAZA_CURRENCY", err.Error())
+	}
+	settings.ModelPlazaCurrency = plazaCurrency
+	plazaCurrencyJSON, _ := json.Marshal(plazaCurrency)
+	updates[SettingKeyModelPlazaCurrency] = string(plazaCurrencyJSON)
+	updates[SettingKeyModelPlazaUSDToCNYRate] = strconv.FormatFloat(settings.ModelPlazaUSDToCNYRate, 'f', -1, 64)
 	updates[SettingKeyPluginManagementEnabled] = strconv.FormatBool(settings.PluginManagementEnabled)
 
 	// Support tickets switch + form config
@@ -676,9 +687,6 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky] = settings.OpenAIAdvancedSchedulerWeightSessionSticky
 
 	// 余额、订阅到期与账号限额通知
-	updates[SettingKeyBalanceForecastEnabled] = strconv.FormatBool(settings.BalanceForecastEnabled)
-	updates[SettingKeyBalanceForecastThresholdHours] = strconv.FormatFloat(settings.BalanceForecastThresholdHours, 'f', -1, 64)
-	updates[SettingKeyBalanceForecastMaxNotifications] = strconv.Itoa(settings.BalanceForecastMaxNotifications)
 	updates[SettingKeyBalanceLowNotifyEnabled] = strconv.FormatBool(settings.BalanceLowNotifyEnabled)
 	updates[SettingKeyBalanceLowNotifyThreshold] = strconv.FormatFloat(settings.BalanceLowNotifyThreshold, 'f', 8, 64)
 	updates[SettingKeyBalanceLowNotifyRechargeURL] = settings.BalanceLowNotifyRechargeURL

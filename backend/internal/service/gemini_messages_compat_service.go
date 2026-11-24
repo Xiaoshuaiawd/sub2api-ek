@@ -551,6 +551,13 @@ func (s *GeminiMessagesCompatService) HasAntigravityAccounts(ctx context.Context
 }
 
 func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+	if account.gatewayProtocolsPending() {
+		view, err := s.gatewayProtocolAccount(ctx, account, "gemini", gatewayProtocolBodyModel(body))
+		if err != nil {
+			return nil, err
+		}
+		account = view
+	}
 	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
 		return nil, err
 	}
@@ -625,7 +632,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 			}
 
 			restGeminiReq := normalizeGeminiRequestForAIStudio(geminiReq)
-			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
+			upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, restGeminiReq), http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
 			if err != nil {
 				return nil, "", err
 			}
@@ -677,7 +684,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				wrapped["request"] = inner
 				wrappedBytes, _ := json.Marshal(wrapped)
 
-				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(wrappedBytes))
+				upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, wrappedBytes), http.MethodPost, fullURL, bytes.NewReader(wrappedBytes))
 				if err != nil {
 					return nil, "", err
 				}
@@ -699,7 +706,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				}
 
 				restGeminiReq := normalizeGeminiRequestForAIStudio(geminiReq)
-				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
+				upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, restGeminiReq), http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
 				if err != nil {
 					return nil, "", err
 				}
@@ -716,13 +723,13 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 			if req.Stream {
 				action = "streamGenerateContent"
 			}
-			fullURL, err := buildVertexGeminiAccountURL(account, mappedModel, action, req.Stream)
+			fullURL, err := buildVertexGeminiAccountURL(account, mappedModel, action, req.Stream, "")
 			if err != nil {
 				return nil, "", err
 			}
 
 			restGeminiReq := normalizeGeminiRequestForAIStudio(geminiReq)
-			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
+			upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, restGeminiReq), http.MethodPost, fullURL, bytes.NewReader(restGeminiReq))
 			if err != nil {
 				return nil, "", err
 			}
@@ -764,6 +771,15 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 		if err := checkAPIKeyLongContextRequestBeforeForward(ctx, c, upstreamReq, originalModel, mappedModel); err != nil {
 			return nil, err
+		}
+		if account.gatewayProtocolSource != nil {
+			latest, err := s.gatewayProtocolAccount(ctx, account.gatewayProtocolSource, "gemini", account.gatewayProtocolModel)
+			if err != nil {
+				return nil, err
+			}
+			if openAITurnRouteFingerprint(latest) != openAITurnRouteFingerprint(account) {
+				return nil, ErrGatewayAccountIdentity
+			}
 		}
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		s.rateLimitService.observeQualityResponse(upstreamReq.Context(), account, resp, err)
@@ -1109,6 +1125,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
+		UpstreamPriceMultiplier:       VertexUpstreamPriceMultiplier(account, mappedModel, ""),
 	}, nil
 }
 
@@ -1121,6 +1138,13 @@ func isGeminiSignatureRelatedError(respBody []byte) bool {
 }
 
 func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte) (*ForwardResult, error) {
+	if account.gatewayProtocolsPending() {
+		view, err := s.gatewayProtocolAccount(ctx, account, "gemini", originalModel)
+		if err != nil {
+			return nil, err
+		}
+		account = view
+	}
 	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
 		return nil, err
 	}
@@ -1179,6 +1203,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 	var requestIDHeader string
 	var buildReq func(ctx context.Context) (*http.Request, string, error)
+	// cachedContentLocation 是 Vertex 账号请求引用的显式缓存所在区域，未引用时为空。
+	var cachedContentLocation string
 
 	switch account.Type {
 	case AccountTypeAPIKey:
@@ -1199,7 +1225,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				return nil, "", err
 			}
 
-			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+			upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, body), http.MethodPost, fullURL, bytes.NewReader(body))
 			if err != nil {
 				return nil, "", err
 			}
@@ -1246,7 +1272,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				wrapped["request"] = inner
 				wrappedBytes, _ := json.Marshal(wrapped)
 
-				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(wrappedBytes))
+				upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, wrappedBytes), http.MethodPost, fullURL, bytes.NewReader(wrappedBytes))
 				if err != nil {
 					return nil, "", err
 				}
@@ -1267,7 +1293,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					return nil, "", err
 				}
 
-				upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+				upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, body), http.MethodPost, fullURL, bytes.NewReader(body))
 				if err != nil {
 					return nil, "", err
 				}
@@ -1279,13 +1305,14 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		requestIDHeader = "x-request-id"
 
 	case AccountTypeServiceAccount:
+		cachedContentLocation = geminiCachedContentLocationInBody(body)
 		buildReq = func(ctx context.Context) (*http.Request, string, error) {
-			fullURL, err := buildVertexGeminiAccountURL(account, mappedModel, upstreamAction, useUpstreamStream)
+			fullURL, err := buildVertexGeminiAccountURL(account, mappedModel, upstreamAction, useUpstreamStream, cachedContentLocation)
 			if err != nil {
 				return nil, "", err
 			}
 
-			upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(body))
+			upstreamReq, err := http.NewRequestWithContext(withOAuth429WireBody(ctx, body), http.MethodPost, fullURL, bytes.NewReader(body))
 			if err != nil {
 				return nil, "", err
 			}
@@ -1325,6 +1352,15 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 		if err := checkAPIKeyLongContextRequestBeforeForward(ctx, c, upstreamReq, originalModel, mappedModel); err != nil {
 			return nil, err
+		}
+		if account.gatewayProtocolSource != nil {
+			latest, err := s.gatewayProtocolAccount(ctx, account.gatewayProtocolSource, "gemini", account.gatewayProtocolModel)
+			if err != nil {
+				return nil, err
+			}
+			if openAITurnRouteFingerprint(latest) != openAITurnRouteFingerprint(account) {
+				return nil, ErrGatewayAccountIdentity
+			}
 		}
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		s.rateLimitService.observeQualityResponse(upstreamReq.Context(), account, resp, err)
@@ -1654,6 +1690,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		ImageCount:                    imageCount,
 		ImageSize:                     imageSize,
 		ImageInputSize:                imageInputSize,
+		UpstreamPriceMultiplier:       VertexUpstreamPriceMultiplier(account, mappedModel, cachedContentLocation),
 	}, nil
 }
 
@@ -2251,6 +2288,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	openToolIndex := -1
 	openToolID := ""
 	openToolName := ""
+	var toolBoundary geminiToolCallBoundary
 	var seenToolJSON geminiTextDelta
 
 	reader := bufio.NewReader(resp.Body)
@@ -2318,6 +2356,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 					openToolIndex = -1
 					openToolName = ""
 					seenToolJSON.reset()
+					toolBoundary = geminiToolCallBoundary{}
 				}
 				if openBlockType != "thinking" {
 					if openBlockIndex >= 0 {
@@ -2369,6 +2408,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 					openToolIndex = -1
 					openToolName = ""
 					seenToolJSON.reset()
+					toolBoundary = geminiToolCallBoundary{}
 				}
 
 				delta := seenText.next(text)
@@ -2414,7 +2454,6 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 
 			if fc, ok := part["functionCall"].(map[string]any); ok && fc != nil {
 				name, _ := fc["name"].(string)
-				args := fc["args"]
 				if strings.TrimSpace(name) == "" {
 					name = "tool"
 				}
@@ -2430,7 +2469,8 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 				}
 
 				// If we receive streamed tool args in pieces, keep a single tool block open and emit deltas.
-				if openToolIndex >= 0 && openToolName != name {
+				argsJSONText := geminiToolCallArgsJSON(fc["args"])
+				if openToolIndex >= 0 && toolBoundary.startsNewBlock(openToolName, seenToolJSON.seen.String(), argsJSONText, fc) {
 					writeSSE(c.Writer, "content_block_stop", map[string]any{
 						"type":  "content_block_stop",
 						"index": openToolIndex,
@@ -2438,6 +2478,7 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 					openToolIndex = -1
 					openToolName = ""
 					seenToolJSON.reset()
+					toolBoundary = geminiToolCallBoundary{}
 				}
 
 				if openToolIndex < 0 {
@@ -2459,21 +2500,8 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 					})
 				}
 
-				argsJSONText := "{}"
-				switch v := args.(type) {
-				case nil:
-					// keep default "{}"
-				case string:
-					if strings.TrimSpace(v) != "" {
-						argsJSONText = v
-					}
-				default:
-					if b, err := json.Marshal(args); err == nil && len(b) > 0 {
-						argsJSONText = string(b)
-					}
-				}
-
 				delta := seenToolJSON.next(argsJSONText)
+				toolBoundary.observe(fc)
 				if delta != "" {
 					writeSSE(c.Writer, "content_block_delta", map[string]any{
 						"type":  "content_block_delta",
@@ -3684,8 +3712,22 @@ func convertClaudeMessagesToGeminiContents(messages any, toolUseIDToName map[str
 						toolImageParts = append(toolImageParts, images...)
 					}
 					parts = append(parts, map[string]any{"functionResponse": response})
-				case "image":
+				case "image", "document":
 					if src, ok := bm["source"].(map[string]any); ok {
+						if bm["type"] == "document" && src["media_type"] != "application/pdf" && src["media_type"] != "text/plain" {
+							// Keep legacy file carriers for non-Anthropic targets.
+							// Their MIME is not an Anthropic rejection policy here.
+							if b, err := json.Marshal(bm); err == nil {
+								parts = append(parts, map[string]any{"text": string(b)})
+							}
+							continue
+						}
+						if src["type"] == "text" && src["media_type"] == "text/plain" {
+							if data, ok := src["data"].(string); ok {
+								parts = append(parts, map[string]any{"text": data})
+							}
+							continue
+						}
 						if srcType, _ := src["type"].(string); srcType == "base64" {
 							mediaType, _ := src["media_type"].(string)
 							data, _ := src["data"].(string)
@@ -3720,6 +3762,34 @@ func convertClaudeMessagesToGeminiContents(messages any, toolUseIDToName map[str
 			"parts": parts,
 		})
 	}
+	// Gemini/Vertex 拒收「以 functionResponse 开头、后面还跟着其它 part」的最后一个 turn，
+	// 报错文案是误导性的 "Requests ending with a model turn are not supported."。
+	// 客户端在工具结果后紧跟一条 user 文本时（例如 ACP nudge），CC→Claude 的
+	// mergeConsecutiveMessages 会把它并进同一个 user 消息，这里再把尾部的非
+	// functionResponse part 拆成独立的一轮 user，语义顺序不变。
+	if n := len(out); n > 0 {
+		if last, ok := out[n-1].(map[string]any); ok {
+			if parts, ok := last["parts"].([]any); ok {
+				lastFR := -1
+				for i, p := range parts {
+					pm, ok := p.(map[string]any)
+					if !ok {
+						continue
+					}
+					if _, isFR := pm["functionResponse"]; isFR {
+						lastFR = i
+					}
+				}
+				if lastFR >= 0 && lastFR < len(parts)-1 {
+					last["parts"] = parts[:lastFR+1]
+					out = append(out, map[string]any{
+						"role":  "user",
+						"parts": parts[lastFR+1:],
+					})
+				}
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -3739,6 +3809,13 @@ func extractClaudeContentText(v any) string {
 					_, _ = sb.WriteString(text)
 				}
 			}
+			if pm["type"] == "document" {
+				if source, ok := pm["source"].(map[string]any); ok && source["type"] == "text" && source["media_type"] == "text/plain" {
+					if text, ok := source["data"].(string); ok {
+						_, _ = sb.WriteString(text)
+					}
+				}
+			}
 		}
 		return sb.String()
 	default:
@@ -3756,7 +3833,7 @@ func extractClaudeToolResultImageParts(v any) []any {
 	parts := make([]any, 0)
 	for _, part := range arr {
 		pm, ok := part.(map[string]any)
-		if !ok || pm["type"] != "image" {
+		if !ok || (pm["type"] != "image" && pm["type"] != "document") {
 			continue
 		}
 		source, ok := pm["source"].(map[string]any)

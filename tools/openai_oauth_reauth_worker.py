@@ -453,16 +453,17 @@ class WorkerAPI:
             raise WorkerError("invalid worker concurrency from server")
         return value
 
-    def totp_phase(self, task_id, phase, secret=""):
+    def totp_phase(self, task_id, phase, secret="", factor_id="", enrollment_session_id=""):
         return self._post(f"/api/v1/internal/openai-reauth/{task_id}/totp-phase",
-                          {"worker_id": self.config.worker_id, "phase": phase, "secret": secret})
+                          {"worker_id": self.config.worker_id, "phase": phase, "secret": secret,
+                           "factor_id": factor_id, "enrollment_session_id": enrollment_session_id})
 
     def totp_finish(self, task_id, success, error_code=""):
         return self._post(f"/api/v1/internal/openai-reauth/{task_id}/totp-finish",
                           {"worker_id": self.config.worker_id, "success": success, "error_code": error_code})
 
-    def totp_recover(self, task_id, secret):
-        return self._post(f"/api/v1/internal/openai-reauth/{task_id}/totp-recover", {"secret": secret})
+    def totp_recover(self, task_id, secret, factor_id="", enrollment_session_id=""):
+        return self._post(f"/api/v1/internal/openai-reauth/{task_id}/totp-recover", {"secret": secret, "factor_id": factor_id, "enrollment_session_id": enrollment_session_id})
 
     def claim_totp(self):
         if self.config.tosub2_root is None or not os.getenv("OPENAI_TOTP_JOURNAL_DIR"):
@@ -984,7 +985,7 @@ def _wait_for_otp(
 
 def process_claim(api: WorkerAPI, protocol: SimpleNamespace | None, claim: dict[str, Any]) -> None:
     mode = str(claim.get("credential_mode") or "email_otp_url").strip()
-    if mode == "password_totp":
+    if mode in {"password_totp", "mailbox_graph"}:
         process_password_claim(api, claim)
         return
     if mode != "email_otp_url":
@@ -1169,7 +1170,15 @@ def process_session_studio_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
     account_id = int(claim.get("account_id") or 0)
     email = str(claim.get("login_email") or "").strip()
     password = str(claim.get("password") or "")
-    if task_id <= 0 or account_id <= 0 or not email or not password:
+    mailbox_mode = claim.get("credential_mode") == "mailbox_graph"
+    mail_client_id = claim.get("mail_client_id")
+    mail_refresh_token = claim.get("mail_refresh_token")
+    if mailbox_mode and not (
+        isinstance(mail_client_id, str) and mail_client_id.strip()
+        and isinstance(mail_refresh_token, str) and mail_refresh_token.strip()
+    ):
+        raise WorkerError("claimed task is missing mailbox credentials")
+    if task_id <= 0 or account_id <= 0 or not email or (not password and not mailbox_mode):
         raise WorkerError("claimed password task is missing required fields")
     # Never infer an external destination or silently fall back to an engine.
     endpoint = str(claim.get("relogin_endpoint") or "").strip()
@@ -1205,6 +1214,12 @@ def process_session_studio_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
         "action": "start", "auth_mode": "password_2fa", "email": email,
         "password": password, "mfa_secret": str(claim.get("totp_secret") or ""),
     }
+    if mailbox_mode:
+        request_payload["mail_client_id"] = mail_client_id
+        request_payload["mail_refresh_token"] = mail_refresh_token
+        refresh_token = str(claim.get("refresh_token") or "").strip()
+        if refresh_token:
+            request_payload["refresh_token"] = refresh_token
     # Same target as the local worker. A remote service may reject or ignore
     # this hint, so the backend still checks the actual returned token identity.
     expected_workspace = claim.get("expected_workspace")
@@ -1334,6 +1349,10 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
     if oauth_profile not in {"codex", "excel", "siwc"}:
         raise WorkerError("unsupported OAuth login profile")
     engine = str(claim.get("engine") or "local_worker")
+    if claim.get("credential_mode") == "mailbox_graph" and (
+        engine != "session_studio" or oauth_profile != "codex"
+    ):
+        raise WorkerError("mailbox Graph re-login requires Session Studio for Codex")
     if oauth_profile in {"excel", "siwc"} and engine != "local_worker":
         raise WorkerError("Excel OAuth requires the local password/TOTP worker")
     if engine == "session_studio":
@@ -1343,8 +1362,11 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
         raise WorkerError("unsupported password re-login engine")
     codex_pool_url = os.getenv("OPENAI_REAUTH_CODEX_POOL_URL", "").strip()
     # The shared relogin service has a single process-wide proxy. Keep claims
-    # with an account-selected exit on the local protocol path that honors it.
-    if oauth_profile == "codex" and codex_pool_url and not str(claim.get("proxy_url") or "").strip():
+    # with an account-selected exit or a bound TOTP factor on the local protocol
+    # path that honors both; the shared pool cannot enforce factor binding.
+    if (oauth_profile == "codex" and codex_pool_url
+            and not str(claim.get("proxy_url") or "").strip()
+            and not claim.get("totp_factor_id")):
         process_codex_pool_claim(api, claim, codex_pool_url)
         return
     task_id = int(claim.get("task_id") or 0)
@@ -1366,6 +1388,8 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
     if not script.is_file():
         raise WorkerError("toSub2 protocol-login.mjs is unavailable")
 
+    if claim.get("totp_factor_id") and "TOTP_FACTOR_BINDING_REQUIRED" not in script.read_text():
+        raise WorkerError("factor_binding_runtime_required")
     LOGGER.info("task=%s account=%s started (password protocol)", task_id, account_id)
     _best_effort_progress(api, task_id, "starting")
     _best_effort_progress(api, task_id, "protocol_connecting")
@@ -1451,6 +1475,7 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
             for key in ("CHATGPT_BASE", "AUTH_BASE", "CHATGPT_PROXY_URL"):
                 child_env.pop(key, None)
             child_env["CHATGPT_PROXY_MAX_ATTEMPTS"] = "1"
+        child_env["CHATGPT_TOTP_FACTOR_ID"] = str(claim.get("totp_factor_id") or "")
         child_env["CHATGPT_LOGIN_PASSWORD"] = password
         if totp_secret:
             child_env["CHATGPT_TOTP_SECRET"] = totp_secret
@@ -1590,6 +1615,7 @@ def process_session_export_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
         login_claim = {
             "login_email": email,
             "password": password,
+            "totp_factor_id": str(claim.get("totp_factor_id") or ""),
             "proxy_url": str(claim.get("proxy_url") or ""),
         }
         _best_effort_session_progress(api, task_id, "password_submitted")

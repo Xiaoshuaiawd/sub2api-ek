@@ -13,7 +13,7 @@ import (
 )
 
 // Login jobs keep token results in bounded, short-lived memory. Successful logins
-// save the supplied password/2FA to the guard without enabling it or creating accounts.
+// return tokens; encrypted credential enrollment belongs to credential operations.
 type OpenAITwoFALoginJob struct {
 	ID         string         `json:"id"`
 	Status     string         `json:"status"`
@@ -26,7 +26,7 @@ type OpenAITwoFALoginJob struct {
 	expiry    *time.Timer
 }
 
-func ValidateOpenAITwoFALogin(entry AccountTokenGuardReloginAccount) error {
+func ValidateOpenAITwoFALogin(entry OpenAIReloginCredentials) error {
 	email := strings.TrimSpace(entry.Email)
 	address, err := mail.ParseAddress(email)
 	if err != nil || address.Address != email || len(email) > 320 ||
@@ -42,34 +42,27 @@ func ValidateOpenAITwoFALogin(entry AccountTokenGuardReloginAccount) error {
 	return nil
 }
 
-func (s *AccountTokenGuardService) StartTwoFALogin(ctx context.Context, entry AccountTokenGuardReloginAccount) (*OpenAITwoFALoginJob, error) {
-	return s.startTwoFALogin(ctx, entry, true, true)
+func (s *OpenAIReloginService) StartTwoFALogin(ctx context.Context, entry OpenAIReloginCredentials) (*OpenAITwoFALoginJob, error) {
+	return s.startTwoFALogin(ctx, entry, true)
 }
 
-// Operations imports save their login method through the encrypted per-account
-// API after identity deduplication returns the account ID. Do not also enroll
-// them in the legacy guard's plaintext settings.
-func (s *AccountTokenGuardService) StartTwoFALoginForOperations(ctx context.Context, entry AccountTokenGuardReloginAccount) (*OpenAITwoFALoginJob, error) {
-	return s.startTwoFALogin(ctx, entry, false, true)
-}
-
-// Inventory probes must not put an existing healthy account into error state
+// Inventory probes must not put a healthy existing account into error state
 // merely because one stock password for the same email was wrong.
-func (s *AccountTokenGuardService) StartTwoFALoginForInventory(ctx context.Context, entry AccountTokenGuardReloginAccount) (*OpenAITwoFALoginJob, error) {
-	return s.startTwoFALogin(ctx, entry, false, false)
+func (s *OpenAIReloginService) StartTwoFALoginForInventory(ctx context.Context, entry OpenAIReloginCredentials) (*OpenAITwoFALoginJob, error) {
+	return s.startTwoFALogin(ctx, entry, false)
 }
 
-func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry AccountTokenGuardReloginAccount, saveToLegacyGuard, recordFailedAccount bool) (*OpenAITwoFALoginJob, error) {
+func (s *OpenAIReloginService) startTwoFALogin(ctx context.Context, entry OpenAIReloginCredentials, recordFailedAccount bool) (*OpenAITwoFALoginJob, error) {
 	if err := ValidateOpenAITwoFALogin(entry); err != nil {
 		return nil, err
 	}
 	cfg, err := s.GetConfig(ctx)
 	if err != nil {
-		return nil, errors.New("无法读取凭证守护配置")
+		return nil, errors.New("无法读取凭证运营配置")
 	}
 	// Explicit login works while scheduled inspection/automatic relogin is off.
 	if err := validateGuardHTTPURL(cfg.ReloginEndpoint, "relogin_endpoint"); err != nil {
-		return nil, errors.New("请在凭证守护中配置有效的重登接口")
+		return nil, errors.New("请在凭证运营中配置有效的重登接口")
 	}
 	entry.Email = strings.ToLower(strings.TrimSpace(entry.Email))
 	entry.MFASecret = strings.TrimSpace(entry.MFASecret)
@@ -115,7 +108,7 @@ func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry Ac
 		if loginErr != nil {
 			// Neither provider errors nor request data may be reflected to clients.
 			reason := safeTwoFALoginError(loginErr, entry)
-			slog.Warn("account_token_guard_two_fa_login_failed",
+			slog.Warn("openai_two_fa_login_failed",
 				"job_id", job.ID,
 				"stage", "relogin",
 				"reason", reason,
@@ -129,19 +122,6 @@ func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry Ac
 			}
 			return
 		}
-		// Persist verified login credentials before the client imports tokens and
-		// clears its password/MFA input. Never report success on a failed save.
-		if saveToLegacyGuard {
-			if err := s.saveTwoFALoginAccount(loginCtx, entry); err != nil {
-				slog.Warn("account_token_guard_two_fa_login_failed",
-					"job_id", job.ID,
-					"stage", "save_guard_credentials",
-					"reason", safeTwoFALoginError(err, entry),
-				)
-				job.Status = "failed"
-				return
-			}
-		}
 		job.Credential = twoFALoginCredential(credential, entry.Email)
 		job.Status = "succeeded"
 	}()
@@ -152,7 +132,7 @@ func (s *AccountTokenGuardService) startTwoFALogin(ctx context.Context, entry Ac
 // allowing an upstream response or an accidentally wrapped secret to become a
 // log entry. The relogin path already reduces network and provider failures to
 // short error codes; this is a final redaction, length and control-character guard.
-func safeTwoFALoginError(err error, entry AccountTokenGuardReloginAccount) string {
+func safeTwoFALoginError(err error, entry OpenAIReloginCredentials) string {
 	if err == nil {
 		return "unknown"
 	}
@@ -160,7 +140,7 @@ func safeTwoFALoginError(err error, entry AccountTokenGuardReloginAccount) strin
 	if reason == "" {
 		return "unknown"
 	}
-	for _, secret := range []string{entry.Email, entry.Password, entry.MFASecret} {
+	for _, secret := range []string{entry.Email, entry.Password, entry.MFASecret, entry.MailClientID, entry.MailRefreshToken, entry.RefreshToken} {
 		if secret != "" {
 			reason = strings.ReplaceAll(reason, secret, "[redacted]")
 		}
@@ -255,13 +235,13 @@ func (e *TwoFALoginSkippedError) Error() string {
 }
 
 // findBannedAccountByEmail 找到同名的已封号账号（用于跳过重复登录）。
-func (s *AccountTokenGuardService) findBannedAccountByEmail(ctx context.Context, email string) *Account {
+func (s *OpenAIReloginService) findBannedAccountByEmail(ctx context.Context, email string) *Account {
 	if s.accounts == nil || strings.TrimSpace(email) == "" {
 		return nil
 	}
 	list, err := s.accounts.ListAllWithFilters(ctx, PlatformOpenAI, "", "", email, 0, "")
 	if err != nil {
-		slog.Warn("account_token_guard_skip_lookup_failed", "email", email, "error", err)
+		slog.Warn("openai_relogin_skip_lookup_failed", "email", email, "error", err)
 		return nil
 	}
 	for i := range list {
@@ -330,7 +310,7 @@ func TwoFALoginErrorMessage(code string) string {
 // recordFailedTwoFALoginAccount 把登录失败的邮箱登记为错误态账号：
 // 已存在同邮箱账号时只更新错误信息并停止调度，不重复建号。
 // 返回账号 ID（0 表示未登记，例如网络类失败或仓储不可用）。
-func (s *AccountTokenGuardService) recordFailedTwoFALoginAccount(ctx context.Context, entry AccountTokenGuardReloginAccount, code string) int64 {
+func (s *OpenAIReloginService) recordFailedTwoFALoginAccount(ctx context.Context, entry OpenAIReloginCredentials, code string) int64 {
 	if s.accounts == nil || !twoFALoginAccountErrorCodes[code] {
 		return 0
 	}
@@ -343,7 +323,7 @@ func (s *AccountTokenGuardService) recordFailedTwoFALoginAccount(ctx context.Con
 	existing, err := s.accounts.ListAllWithFilters(ctx, PlatformOpenAI, "", "", email, 0, "")
 	if err != nil {
 		// 查不到不等于不存在：宁可这次不登记，也不要重复建号。
-		slog.Warn("account_token_guard_two_fa_login_lookup_failed", "email", email, "reason", code, "error", err)
+		slog.Warn("openai_relogin_two_fa_login_lookup_failed", "email", email, "reason", code, "error", err)
 		return 0
 	}
 	for _, account := range existing {
@@ -351,14 +331,14 @@ func (s *AccountTokenGuardService) recordFailedTwoFALoginAccount(ctx context.Con
 			continue
 		}
 		if err := s.accounts.SetError(ctx, account.ID, message); err != nil {
-			slog.Warn("account_token_guard_two_fa_login_mark_error_failed", "account_id", account.ID, "reason", code, "error", err)
+			slog.Warn("openai_relogin_two_fa_login_mark_error_failed", "account_id", account.ID, "reason", code, "error", err)
 			return 0
 		}
 		if updater, ok := s.accounts.(interface {
 			UpdateExtra(context.Context, int64, map[string]any) error
 		}); ok {
 			if err := updater.UpdateExtra(ctx, account.ID, map[string]any{"login_error_code": code}); err != nil {
-				slog.Warn("account_token_guard_two_fa_login_mark_reason_failed", "account_id", account.ID, "reason", code, "error", err)
+				slog.Warn("openai_relogin_two_fa_login_mark_reason_failed", "account_id", account.ID, "reason", code, "error", err)
 			}
 		}
 		_ = s.accounts.SetSchedulable(ctx, account.ID, false)
@@ -366,7 +346,7 @@ func (s *AccountTokenGuardService) recordFailedTwoFALoginAccount(ctx context.Con
 	}
 
 	account := &Account{
-		Name:         truncateGuardText(email, 100),
+		Name:         truncateTwoFALoginEmail(email),
 		Platform:     PlatformOpenAI,
 		Type:         AccountTypeOAuth,
 		Credentials:  map[string]any{},
@@ -378,31 +358,10 @@ func (s *AccountTokenGuardService) recordFailedTwoFALoginAccount(ctx context.Con
 		Schedulable:  false,
 	}
 	if err := s.accounts.Create(ctx, account); err != nil {
-		slog.Warn("account_token_guard_two_fa_login_account_create_failed", "reason", code, "error", err)
+		slog.Warn("openai_relogin_two_fa_login_account_create_failed", "reason", code, "error", err)
 		return 0
 	}
 	return account.ID
-}
-
-// Merge into the latest persisted config, not the snapshot from login start:
-// logins can take minutes, and other imports/config edits may finish meanwhile.
-func (s *AccountTokenGuardService) saveTwoFALoginAccount(ctx context.Context, entry AccountTokenGuardReloginAccount) error {
-	s.configMu.Lock()
-	defer s.configMu.Unlock()
-	cfg, err := s.getConfigLocked(ctx)
-	if err != nil {
-		return err
-	}
-	// GetConfig also caches this slice; do not mutate the published snapshot.
-	accounts := make([]AccountTokenGuardReloginAccount, 0, len(cfg.ReloginAccounts)+1)
-	for _, existing := range cfg.ReloginAccounts {
-		if existing.Email != entry.Email {
-			accounts = append(accounts, existing)
-		}
-	}
-	cfg.ReloginAccounts = append(accounts, entry)
-	_, err = s.saveConfigLocked(ctx, cfg)
-	return err
 }
 
 // Only token/session fields enter the existing Session importer. Discard any
@@ -422,7 +381,7 @@ func twoFALoginCredential(in map[string]any, email string) map[string]any {
 	return out
 }
 
-func (s *AccountTokenGuardService) TwoFALogin(id string) (*OpenAITwoFALoginJob, bool) {
+func (s *OpenAIReloginService) TwoFALogin(id string) (*OpenAITwoFALoginJob, bool) {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
 	job, ok := s.logins[id]
@@ -439,7 +398,7 @@ func (s *AccountTokenGuardService) TwoFALogin(id string) (*OpenAITwoFALoginJob, 
 	return snapshot, true
 }
 
-func (s *AccountTokenGuardService) DeleteTwoFALogin(id string) {
+func (s *OpenAIReloginService) DeleteTwoFALogin(id string) {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
 	if job, ok := s.logins[id]; ok {
@@ -450,7 +409,7 @@ func (s *AccountTokenGuardService) DeleteTwoFALogin(id string) {
 	}
 }
 
-func (s *AccountTokenGuardService) clearTwoFALogins() {
+func (s *OpenAIReloginService) clearTwoFALogins() {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
 	for id, job := range s.logins {
@@ -459,4 +418,11 @@ func (s *AccountTokenGuardService) clearTwoFALogins() {
 		job.Credential = nil
 		delete(s.logins, id)
 	}
+}
+
+func truncateTwoFALoginEmail(email string) string {
+	if len(email) > 100 {
+		return email[:100]
+	}
+	return email
 }

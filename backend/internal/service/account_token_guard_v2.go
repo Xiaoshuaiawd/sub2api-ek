@@ -153,6 +153,8 @@ type AccountTokenGuardV2AccountInput struct {
 	Password            string `json:"password"`
 	TOTPSecret          string `json:"totp_secret"`
 	OTPURL              string `json:"otp_url"`
+	MailClientID        string `json:"mail_client_id"`
+	MailRefreshToken    string `json:"mail_refresh_token"`
 	ClearPassword       bool   `json:"clear_password"`
 	ClearTOTP           bool   `json:"clear_totp"`
 	Enabled             bool   `json:"enabled"`
@@ -184,12 +186,15 @@ type AccountTokenGuardV2Account struct {
 }
 
 type AccountTokenGuardV2Service struct {
-	now      func() time.Time
-	repo     AccountTokenGuardV2Repository
-	settings AccountTokenGuardV2Settings
-	accounts AccountTokenGuardV2AccountReader
-	prober   AccountTokenGuardV2Prober
-	reauth   *OpenAIOAuthReauthService
+	now                 func() time.Time
+	repo                AccountTokenGuardV2Repository
+	settings            AccountTokenGuardV2Settings
+	accounts            AccountTokenGuardV2AccountReader
+	prober              AccountTokenGuardV2Prober
+	reauth              *OpenAIOAuthReauthService
+	legacyAccounts      LegacyReloginAccountReader
+	legacyMigrationMu   sync.Mutex
+	legacyMigrationDone bool
 
 	leaseOwner string
 	runMu      sync.Mutex
@@ -202,12 +207,14 @@ type AccountTokenGuardV2Service struct {
 func NewAccountTokenGuardV2Service(repo AccountTokenGuardV2Repository, settings AccountTokenGuardV2Settings, accounts AccountTokenGuardV2AccountReader, prober AccountTokenGuardV2Prober, reauth *OpenAIOAuthReauthService) *AccountTokenGuardV2Service {
 	host, _ := os.Hostname()
 	ctx, cancel := context.WithCancel(context.Background())
-	return &AccountTokenGuardV2Service{
+	svc := &AccountTokenGuardV2Service{
 		now:  time.Now,
 		repo: repo, settings: settings, accounts: accounts, prober: prober, reauth: reauth,
 		leaseOwner: fmt.Sprintf("%s-%d-%s", host, os.Getpid(), uuid.NewString()),
 		rootCtx:    ctx, cancel: cancel, doneCh: make(chan struct{}),
 	}
+	svc.legacyAccounts, _ = accounts.(LegacyReloginAccountReader)
+	return svc
 }
 
 func (s *AccountTokenGuardV2Service) GetRules(ctx context.Context) (AccountTokenGuardV2Rules, error) {
@@ -266,6 +273,13 @@ func (s *AccountTokenGuardV2Service) Start() {
 			runCycle := func() {
 				ctx, cancel := context.WithTimeout(s.rootCtx, accountTokenGuardV2CycleDuration)
 				defer cancel()
+				// A slow or unavailable legacy entry must not consume the normal
+				// V2 probe cycle. Partial imports retry on the next existing tick.
+				migrationCtx, migrationCancel := context.WithTimeout(ctx, 5*time.Second)
+				if _, err := s.MigrateLegacyReloginAccounts(migrationCtx); err != nil && ctx.Err() == nil {
+					slog.Warn("account_token_guard_v2_legacy_migration_pending", "reason", "migration_incomplete")
+				}
+				migrationCancel()
 				if rows, err := s.repo.ListAccounts(ctx); err == nil && len(rows) > 0 {
 					s.reauth.EnsureWorker()
 				}
@@ -332,6 +346,7 @@ func (s *AccountTokenGuardV2Service) SaveAccount(ctx context.Context, accountID 
 		LoginEmail: input.LoginEmail, CredentialMode: input.CredentialMode, Engine: input.Engine,
 		ProxySource: input.ProxySource, ProxyID: input.ProxyID,
 		Password: input.Password, TOTPSecret: input.TOTPSecret, OTPURL: input.OTPURL,
+		MailClientID: input.MailClientID, MailRefreshToken: input.MailRefreshToken,
 		ClearPassword: input.ClearPassword, ClearTOTP: input.ClearTOTP,
 	}); err != nil {
 		return nil, err

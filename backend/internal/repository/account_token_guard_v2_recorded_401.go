@@ -25,7 +25,8 @@ func (r *accountTokenGuardV2Repository) ListRecorded401(ctx context.Context, lim
    AND guard.enabled=TRUE AND guard.auto_relogin_enabled=TRUE AND guard.auto_relogin_exhausted=FALSE
    AND (guard.cooldown_until IS NULL OR guard.cooldown_until<=NOW())
    AND (guard.lease_until IS NULL OR guard.lease_until<NOW())
-   AND config.credential_mode='password_totp' AND COALESCE(length(config.password_ciphertext),0)>0
+   AND ((config.credential_mode='password_totp' AND COALESCE(length(config.password_ciphertext),0)>0)
+     OR (config.credential_mode='mailbox_graph' AND COALESCE(length(config.mailbox_credentials_ciphertext),0)>0))
    AND NOT EXISTS (SELECT 1 FROM openai_oauth_reauth_tasks task
      WHERE task.account_id=account.id AND task.status IN ('queued','running','callback_processing'))
  ORDER BY guard.updated_at ASC, account.id ASC LIMIT $1`, limit)

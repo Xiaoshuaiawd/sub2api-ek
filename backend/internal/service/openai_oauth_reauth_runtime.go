@@ -111,7 +111,7 @@ func (s *OpenAIOAuthReauthService) checkWorkerMode(mode string) error {
 	if s.worker == nil {
 		return nil
 	}
-	if mode != OpenAIOAuthReauthModePasswordTOTP {
+	if mode != OpenAIOAuthReauthModePasswordTOTP && mode != OpenAIOAuthReauthModeMailboxGraph {
 		return infraerrors.ServiceUnavailable("OPENAI_REAUTH_MODE_UNAVAILABLE", "Email OTP re-login is unavailable in the built-in runtime")
 	}
 	s.EnsureWorker()

@@ -25,9 +25,9 @@ func (r *openAIOAuthReauthRepository) UpsertConfig(ctx context.Context, config *
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO openai_oauth_reauth_configs (
 			account_id, login_email, credential_mode, engine, proxy_source, proxy_id,
-			password_ciphertext, totp_secret_ciphertext, otp_url_ciphertext
+			password_ciphertext, totp_secret_ciphertext, otp_url_ciphertext, mailbox_credentials_ciphertext
 		)
-		VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'local_worker'), $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''))
+		VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'local_worker'), $5, $6, NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, ''))
 		ON CONFLICT (account_id) DO UPDATE
 		SET login_email = EXCLUDED.login_email,
 			credential_mode = EXCLUDED.credential_mode,
@@ -37,10 +37,11 @@ func (r *openAIOAuthReauthRepository) UpsertConfig(ctx context.Context, config *
 			password_ciphertext = EXCLUDED.password_ciphertext,
 			totp_secret_ciphertext = EXCLUDED.totp_secret_ciphertext,
 			otp_url_ciphertext = EXCLUDED.otp_url_ciphertext,
+			mailbox_credentials_ciphertext = EXCLUDED.mailbox_credentials_ciphertext,
 			updated_at = NOW()
-        WHERE openai_oauth_reauth_configs.updated_at = $10
+        WHERE openai_oauth_reauth_configs.updated_at = $11
 	`, config.AccountID, config.LoginEmail, config.CredentialMode, config.Engine, config.ProxySource, config.ProxyID,
-		config.PasswordCiphertext, config.TOTPSecretCiphertext, config.OTPURLCiphertext, config.UpdatedAt)
+		config.PasswordCiphertext, config.TOTPSecretCiphertext, config.OTPURLCiphertext, config.MailboxCredentialsCiphertext, config.UpdatedAt)
 	if err != nil {
 		var p *pq.Error
 		if errors.As(err, &p) && p.Code == "55000" {
@@ -62,15 +63,15 @@ func (r *openAIOAuthReauthRepository) UpsertConfig(ctx context.Context, config *
 func (r *openAIOAuthReauthRepository) GetConfig(ctx context.Context, accountID int64) (*service.OpenAIOAuthReauthStoredConfig, error) {
 	var cfg service.OpenAIOAuthReauthStoredConfig
 	var proxyID sql.NullInt64
-	var passwordCiphertext, totpSecretCiphertext, otpURLCiphertext sql.NullString
+	var passwordCiphertext, totpSecretCiphertext, otpURLCiphertext, mailboxCredentialsCiphertext sql.NullString
 	err := r.db.QueryRowContext(ctx, `
 		SELECT account_id, login_email, credential_mode, engine, proxy_source, proxy_id,
-			password_ciphertext, totp_secret_ciphertext, otp_url_ciphertext, updated_at
+			password_ciphertext, totp_secret_ciphertext, otp_url_ciphertext, mailbox_credentials_ciphertext, updated_at
 		FROM openai_oauth_reauth_configs
 		WHERE account_id = $1
 	`, accountID).Scan(
 		&cfg.AccountID, &cfg.LoginEmail, &cfg.CredentialMode, &cfg.Engine, &cfg.ProxySource, &proxyID,
-		&passwordCiphertext, &totpSecretCiphertext, &otpURLCiphertext, &cfg.UpdatedAt,
+		&passwordCiphertext, &totpSecretCiphertext, &otpURLCiphertext, &mailboxCredentialsCiphertext, &cfg.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -81,6 +82,7 @@ func (r *openAIOAuthReauthRepository) GetConfig(ctx context.Context, accountID i
 	cfg.PasswordCiphertext = passwordCiphertext.String
 	cfg.TOTPSecretCiphertext = totpSecretCiphertext.String
 	cfg.OTPURLCiphertext = otpURLCiphertext.String
+	cfg.MailboxCredentialsCiphertext = mailboxCredentialsCiphertext.String
 	if proxyID.Valid {
 		cfg.ProxyID = &proxyID.Int64
 	}
@@ -195,9 +197,13 @@ func (r *openAIOAuthReauthRepository) ClaimNextTaskForRuntime(ctx context.Contex
 				))
 				AND ($9 = '' OR EXISTS (
 					SELECT 1 FROM openai_oauth_reauth_configs AS config
-					WHERE config.account_id = openai_oauth_reauth_tasks.account_id AND config.credential_mode = $9
+					WHERE config.account_id = openai_oauth_reauth_tasks.account_id
+					  AND (config.credential_mode = $9
+					    OR ($9 = 'password_totp' AND config.credential_mode = 'mailbox_graph'))
 				))
-				AND CASE WHEN oauth_profile IN ('excel','siwc') THEN 'local_worker' ELSE COALESCE((SELECT CASE WHEN $11 <> '' THEN
+				AND CASE WHEN oauth_profile IN ('excel','siwc') THEN 'local_worker' ELSE COALESCE((SELECT CASE
+					WHEN config.credential_mode = 'mailbox_graph' THEN 'session_studio'
+					WHEN $11 <> '' THEN
 					CASE WHEN config.credential_mode = 'password_totp' THEN $11 ELSE 'local_worker' END
 					ELSE engine END FROM openai_oauth_reauth_configs AS config
 					WHERE config.account_id = openai_oauth_reauth_tasks.account_id), 'local_worker') END = ANY($10::text[])

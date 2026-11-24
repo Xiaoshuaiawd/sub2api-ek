@@ -500,6 +500,13 @@
           </template>
           <template #cell-actions="{ row }">
             <div class="flex items-center gap-1">
+              <div v-if="authStore.isAdmin && row.type === 'gateway'" class="flex items-center gap-1">
+                <button type="button" class="rounded-lg p-1.5 text-xs text-emerald-600 disabled:opacity-50"
+                  data-testid="gateway-sync-saved" :disabled="gatewayModelSyncIds.has(row.id)" @click="syncGatewayModels(row)">
+                  {{ t(gatewayModelSyncIds.has(row.id) ? 'admin.accounts.syncUpstreamModelsLoading' : 'admin.accounts.syncUpstreamModels') }}
+                </button>
+                <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.gatewayModelSync" :user-id="authStore.user?.id" />
+              </div>
               <button @click="handleEdit(row)" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" /></svg>
                 <span class="text-xs">{{ t('common.edit') }}</span>
@@ -520,8 +527,8 @@
       <template #pagination><Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" /></template>
     </TablePageLayout>
     <NewAPIUpstreamConfigDialog v-if="authStore.isAdmin" :show="newAPIConfigAccount !== null" :account="newAPIConfigAccount" @close="newAPIConfigAccount = null" @saved="reload" />
-    <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
-    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
+    <CreateAccountModal :show="showCreate" :proxies="proxies" :proxies-loading="proxiesLoading" :proxies-load-error="proxiesLoadError" :groups="groups" @retry-proxies="loadProxyCatalog" @close="showCreate = false" @created="reload" />
+    <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :proxies-loading="proxiesLoading" :proxies-load-error="proxiesLoadError" :groups="groups" @retry-proxies="loadProxyCatalog" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" @tested="reload" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
@@ -536,10 +543,12 @@
       :selected-platforms="selPlatforms"
       :selected-types="selTypes"
       :target="bulkEditTarget ?? undefined"
+      :filtered-preview="bulkEditFromFilters"
       :proxies="proxies"
       :groups="groups"
       @close="showBulkEdit = false"
       @updated="handleBulkUpdated"
+      @whitelists-saved="reload"
     />
     <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
@@ -611,7 +620,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
 import { fetchAllAccountIds } from '@/utils/accountSelection'
-import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { buildGrokUsageRefreshKey, buildAccountUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -640,6 +649,25 @@ const loadConcurrencyUpgradeState = async () => {
 }
 
 const proxies = ref<AccountProxy[]>([])
+const proxiesLoading = ref(true)
+const proxiesLoadError = ref(false)
+let proxyCatalogPending = false
+const loadProxyCatalog = async () => {
+  if (proxyCatalogPending || accountViewDisposed) return
+  proxyCatalogPending = true
+  proxiesLoading.value = true
+  proxiesLoadError.value = false
+  try {
+    const result = await adminAPI.proxies.getAll()
+    if (!accountViewDisposed) proxies.value = result
+  } catch (error) {
+    if (!accountViewDisposed) proxiesLoadError.value = true
+    console.error('Failed to load proxies:', error)
+  } finally {
+    proxyCatalogPending = false
+    if (!accountViewDisposed) proxiesLoading.value = false
+  }
+}
 const groups = ref<AdminGroup[]>([])
 const groupsByID = computed(() => new Map(groups.value.map(group => [group.id, group])))
 const accountGroupsForRow = (account: Pick<AccountListItem, 'group_ids'>): AdminGroup[] => {
@@ -690,7 +718,9 @@ const selTypes = computed<AccountType[]>(() => {
 })
 const newAPIConfigAccount = ref<Account | null>(null)
 const handleConfigureNewAPIUpstream = (account: Account) => {
-  if (authStore.isAdmin && account.type === 'apikey') newAPIConfigAccount.value = account
+  if (authStore.isAdmin && (account.type === 'apikey' || (account.type === 'gateway' && account.credentials?.upstream_kind === 'new_api'))) {
+    newAPIConfigAccount.value = account
+  }
 }
 const showCreate = ref(false)
 const showEdit = ref(false)
@@ -700,6 +730,7 @@ const export2faIds = ref<number[]>([])
 const showExportDataDialog = ref(false)
 const includeProxyOnExport = ref(true)
 const showBulkEdit = ref(false)
+const bulkEditFromFilters = ref(false)
 const bulkEditTarget = ref<AccountBulkEditTarget | null>(null)
 const showTempUnsched = ref(false)
 const showDeleteDialog = ref(false)
@@ -881,7 +912,7 @@ const usageBatchByAccountId = ref<Record<string, AccountUsageInfo | null>>({})
 const usageBatchErrorByAccountId = ref<Record<string, string | null>>({})
 const usageBatchLoadingByAccountId = ref<Record<string, boolean>>({})
 const usageBatchRequestTokenByAccountId = ref<Record<string, number>>({})
-const usageBatchCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
+const usageBatchCache = new Map<number, { data: AccountUsageInfo; ts: number; refreshKey: string }>()
 const USAGE_BATCH_CACHE_TTL = 5 * 60 * 1000
 const pendingUsageBatchIds = new Set<number>()
 let usageBatchFlushTimer: ReturnType<typeof setTimeout> | null = null
@@ -935,6 +966,7 @@ const flushQueuedUsageBatch = async () => {
   usageBatchFlushTimer = null
   const accountIDs = Array.from(pendingUsageBatchIds)
   const force = queuedUsageBatchForce
+  const refreshKeys = new Map(accounts.value.map(account => [account.id, buildAccountUsageRefreshKey(account)]))
   pendingUsageBatchIds.clear()
   queuedUsageBatchForce = false
 
@@ -965,7 +997,7 @@ const flushQueuedUsageBatch = async () => {
       nextErrors[key] = errorMap[key] ?? null
       nextLoading[key] = false
       if (usage) {
-        usageBatchCache.set(accountID, { data: usage, ts: now })
+        usageBatchCache.set(accountID, { data: usage, ts: now, refreshKey: refreshKeys.get(accountID) ?? '' })
       } else {
         usageBatchCache.delete(accountID)
       }
@@ -1003,7 +1035,7 @@ const queueBatchedUsage = (account: Account, options?: { force?: boolean }) => {
     usageBatchCache.delete(cacheKey)
   } else {
     const cached = usageBatchCache.get(cacheKey)
-    if (cached && Date.now() - cached.ts < USAGE_BATCH_CACHE_TTL) {
+    if (cached && cached.refreshKey === buildAccountUsageRefreshKey(account) && Date.now() - cached.ts < USAGE_BATCH_CACHE_TTL) {
       setUsageBatchState(cacheKey, cached.data, null)
       setUsageBatchLoading(cacheKey, false)
       return
@@ -1674,7 +1706,7 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
     current.overload_until !== next.overload_until ||
     current.temp_unschedulable_until !== next.temp_unschedulable_until ||
-    buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next) ||
+    buildAccountUsageRefreshKey(current) !== buildAccountUsageRefreshKey(next) ||
     buildGrokUsageRefreshKey(current) !== buildGrokUsageRefreshKey(next)
   )
 }
@@ -2174,6 +2206,25 @@ const loadAccountDetails = async (account: Pick<AccountListItem, 'id'>): Promise
   }
 }
 
+const gatewayModelSyncIds = ref(new Set<number>())
+const syncGatewayModels = async (account: AccountListItem) => {
+  if (gatewayModelSyncIds.value.has(account.id)) return
+  gatewayModelSyncIds.value.add(account.id)
+  try {
+    const result = await adminAPI.accounts.syncUpstreamModels(account.id, { apply: true, whitelist_only: true })
+    if (!result.applied || result.skipped) {
+      appStore.showWarning(t('admin.accounts.syncUpstreamModelsUnverified'))
+      return
+    }
+    appStore.showSuccess(t('admin.accounts.batchUpstream.saved'))
+    reload()
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.syncUpstreamModelsFailed')))
+  } finally {
+    gatewayModelSyncIds.value.delete(account.id)
+  }
+}
+
 const handleEdit = async (a: AccountListItem) => {
   const account = await loadAccountDetails(a)
   if (!account) return
@@ -2440,6 +2491,7 @@ const collectSelectionMetadata = (rows: Account[]) => {
 }
 
 const openBulkEditSelected = () => {
+  bulkEditFromFilters.value = false
   bulkEditTarget.value = {
     mode: 'selected',
     accountIds: [...selIds.value],
@@ -2475,6 +2527,7 @@ const openBulkEditFiltered = async () => {
       appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
       return
     }
+    bulkEditFromFilters.value = true
     const { selectedPlatforms, selectedTypes } = collectSelectionMetadata(rows)
     bulkEditTarget.value = {
       mode: 'selected',
@@ -2732,7 +2785,16 @@ const handleDuplicateAccount = async (a: Account) => {
     duplicatingAccountIDs.delete(a.id)
   }
 }
+const lastManualRefreshAt = new Map<number, number>()
+const MANUAL_REFRESH_WARN_INTERVAL_MS = 60_000
+
 const handleRefresh = async (a: Account) => {
+  // 只提醒不阻拦：短时间内反复手动刷新可能与后台自动刷新竞争同一份轮换令牌
+  const lastAt = lastManualRefreshAt.get(a.id) ?? 0
+  if (Date.now() - lastAt < MANUAL_REFRESH_WARN_INTERVAL_MS) {
+    appStore.showWarning(t('admin.accounts.refreshTokenFrequentWarning'))
+  }
+  lastManualRefreshAt.set(a.id, Date.now())
   try {
     const result = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(result.account)
@@ -2921,18 +2983,13 @@ onMounted(async () => {
   load()
   void loadPerformanceErrorThreshold()
   loadUpstreamBillingProbeGlobalState()
-  const [proxiesResult, groupsResult] = await Promise.allSettled([
-    adminAPI.proxies.getAll(),
+  const [, groupsResult] = await Promise.allSettled([
+    loadProxyCatalog(),
     adminAPI.groups.getAll()
   ])
   // Catalog requests can finish after scope disposal; never reattach listeners
   // or resume the refresh interval for a page that has already been left.
   if (accountViewDisposed) return
-  if (proxiesResult.status === 'fulfilled') {
-    proxies.value = proxiesResult.value
-  } else {
-    console.error('Failed to load proxies:', proxiesResult.reason)
-  }
   if (groupsResult.status === 'fulfilled') {
     groups.value = groupsResult.value
   } else {
