@@ -816,6 +816,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 		}
 	}
+	initialModelMapping := captureOpenAIWSModelMapping(c, account, strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String()))
+	ctx = initialModelMapping.withContext(ctx)
 	ctx = withOpenAITransportRoute(ctx, "websocket", "passthrough", wsDecision.Reason, "")
 	requestcapture.FromContext(ctx).BindAccount(account.ID)
 	capturedSessionModel := openAIWSPassthroughPolicyModelForFrame(account, firstClientMessage)
@@ -1102,6 +1104,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		// capturedSessionModel 的读写都发生在该 goroutine 内，因此无需
 		// 加锁/原子化。
 		filter: func(msgType coderws.MessageType, payload []byte) (out []byte, blocked *OpenAIFastBlockedError, filterErr error) {
+			ctx := ctx // This frame owns its mapping context; the relay base is immutable.
 			clientPayload := append([]byte(nil), payload...)
 			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 				return payload, nil, nil
@@ -1114,6 +1117,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
+			if !isResponseCreate {
+				// State frames have not passed the current model hook. Do not
+				// authorize a new session.model using the handshake's A/B basis.
+				ctx = WithAccountModelMapping(ctx, "", "")
+			}
 			responseCreateAt := time.Time{}
 			responseFrameAt := time.Time{}
 			acceptedTurn := false
@@ -1255,6 +1263,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						}
 					}
 				}
+				ctx = captureOpenAIWSModelMapping(c, account, strings.TrimSpace(gjson.GetBytes(payload, "model").String())).withContext(ctx)
 				if hooks != nil && hooks.BeforeTurn != nil {
 					if err := hooks.BeforeTurn(turnNo); err != nil {
 						s.invalidateOpenAIWSTurnStateAfterAdmissionFailureForRequest(

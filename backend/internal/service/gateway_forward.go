@@ -127,7 +127,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				return nil, ErrGatewayAccountGroup
 			}
 		}
-		view, err := s.gatewayProtocolAccount(ctx, account, "anthropic", gatewayProtocolParsedModel(parsed))
+		view, err := s.gatewayProtocolAccount(ctx, account, "anthropic", AccountModelMappingInput(ctx, account, gatewayProtocolParsedModel(parsed), false))
 		if err != nil {
 			return nil, err
 		}
@@ -145,11 +145,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	validationModel := parsed.Model
 	if account != nil {
 		if account.IsBedrock() {
-			if resolved, ok := ResolveBedrockModelID(account, validationModel); ok {
+			if resolved, ok := ResolveBedrockModelID(account, validationModel, ctx); ok {
 				validationModel = resolved
 			}
 		} else if account.Type == AccountTypeAPIKey {
-			validationModel = account.GetMappedModel(validationModel)
+			validationModel = AccountMappedModelForRequest(ctx, account, validationModel)
 		}
 	}
 	prepared, err := prepareClaudeMessagesRequest(account, parsed, validationModel)
@@ -186,7 +186,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		passthroughBody := parsed.Body.Bytes()
 		passthroughModel := parsed.Model
 		if passthroughModel != "" {
-			if mappedModel := account.GetMappedModel(passthroughModel); mappedModel != passthroughModel {
+			if mappedModel := AccountMappedModelForRequest(ctx, account, passthroughModel); mappedModel != passthroughModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
 				logger.LegacyPrintf("service.gateway", "Passthrough model mapping: %s -> %s (account: %s)", parsed.Model, mappedModel, account.Name)
 				passthroughModel = mappedModel
@@ -343,8 +343,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
 	mappedModel := reqModel
 	mappingSource := ""
-	if account.Type == AccountTypeAPIKey {
-		mappedModel = account.GetMappedModel(reqModel)
+	if target, matched := httpAccountModelOverride(ctx, account, reqModel); matched {
+		mappedModel = target
+		mappingSource = "account"
+	}
+	if mappingSource == "" && account.Type == AccountTypeAPIKey {
+		mappedModel = AccountMappedModelForRequest(ctx, account, reqModel)
 		if mappedModel != reqModel {
 			mappingSource = "account"
 		}
@@ -1065,7 +1069,14 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 	if s.channelService == nil {
 		return false
 	}
-	upstreamModel := resolveAccountUpstreamModel(account, requestedModel)
+	input := AccountModelMappingInput(ctx, account, requestedModel, false)
+	upstreamModel := resolveAccountUpstreamModel(account, input)
+	if target, matched := ResolveAccountOriginalModelMapping(ctx, account); matched {
+		upstreamModel = target
+		if account.IsBedrock() {
+			upstreamModel, _ = ResolveBedrockModelID(account, input, WithResolvedAccountModel(ctx, 0, ""))
+		}
+	}
 	if upstreamModel == "" {
 		return false
 	}

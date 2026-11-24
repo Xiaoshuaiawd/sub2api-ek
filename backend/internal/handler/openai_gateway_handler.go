@@ -61,8 +61,11 @@ const openAICyberIdentityMetricsLogInterval = 1024
 var openAICyberIdentityMetricsLogCounter atomic.Uint64
 
 type openAIWSTurnChannelMappingSnapshot struct {
-	turn    int
-	mapping service.ChannelMappingResult
+	turn          int
+	mapping       service.ChannelMappingResult
+	sourceModel   string
+	channelModel  string
+	upstreamModel string
 }
 
 type openAIWSCyberTurnContext struct {
@@ -934,6 +937,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	c.Request = c.Request.WithContext(service.WithAccountModelMapping(c.Request.Context(), reqModel, channelMapping.MappedModel))
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	seedOpenAIForwardImageIntentHint(c, channelMapping.Mapped, imageIntent)
 	forwardModel := openAIChannelForwardModel(channelMapping, reqModel)
@@ -1280,7 +1284,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockBodyHTTP = sessionHashBody
 		}
-		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockBodyHTTP, clientRequestedUsageFields(c, channelMapping, reqModel, ""), service.HashUsageRequestPayload(body))
+		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockBodyHTTP, clientRequestedUsageFieldsForAccount(c, channelMapping, reqModel, "", account, legacyCompact), service.HashUsageRequestPayload(body))
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
@@ -1321,7 +1325,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					APIKeyService:      h.apiKeyService,
 					QuotaPlatform:      quotaPlatform,
 					SessionID:          sessionID,
-					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, res.UpstreamModel),
+					ChannelUsageFields: clientRequestedUsageFieldsForAccount(c, channelMapping, reqModel, res.UpstreamModel, account, legacyCompact),
 					PricingAt:          pricingAt,
 					CyberBlocked:       cyberBlocked,
 					NativeCompactionV2: nativeV2,
@@ -1759,6 +1763,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMappingMsg, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	c.Request = c.Request.WithContext(service.WithAccountModelMapping(c.Request.Context(), reqModel, channelMappingMsg.MappedModel))
 	mappedBodyForMessages := newOpenAIModelMappedBodyCache(body, h.gatewayService.ReplaceModelInBody)
 	// Schedule by the channel-mapped model, as the Responses and Chat Completions
 	// paths do: the forwarded body carries that model, so account model filters
@@ -1934,6 +1939,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		forwardStart := time.Now()
 
 		defaultMappedModel := strings.TrimSpace(effectiveMappedModel)
+		if _, priority := service.ResolveAccountOriginalModelMapping(c.Request.Context(), account); priority {
+			defaultMappedModel = service.ResolveOpenAIAccountUpstreamModelForRequestWithContext(c.Request.Context(), account, channelMappingMsg.MappedModel, false)
+		}
 		// 应用渠道模型映射到请求体
 		forwardBody := mappedBodyForMessages(channelMappingMsg.Mapped, channelMappingMsg.MappedModel)
 		writerSizeBeforeForward := service.OpenAICompactKeepaliveAdjustedWrittenSize(c)
@@ -1958,7 +1966,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockBodyMsg = body
 		}
-		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockBodyMsg, clientRequestedUsageFields(c, channelMappingMsg, reqModel, ""), service.HashUsageRequestPayload(body))
+		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockBodyMsg, clientRequestedUsageFieldsForAccount(c, channelMappingMsg, reqModel, "", account, false), service.HashUsageRequestPayload(body))
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
@@ -2000,7 +2008,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					APIKeyService:      h.apiKeyService,
 					QuotaPlatform:      quotaPlatform,
 					SessionID:          sessionID,
-					ChannelUsageFields: clientRequestedUsageFields(c, channelMappingMsg, reqModel, res.UpstreamModel),
+					ChannelUsageFields: clientRequestedUsageFieldsForAccount(c, channelMappingMsg, reqModel, res.UpstreamModel, account, false),
 					PricingAt:          pricingAt,
 					CyberBlocked:       cyberBlocked,
 				}); err != nil {
@@ -3374,6 +3382,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMappingWS, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, wsRouteModel)
 	wsForwardModel := openAIChannelForwardModel(channelMappingWS, wsRouteModel)
+	ctx = service.WithAccountModelMapping(ctx, wsRouteModel, wsForwardModel)
+	c.Request = c.Request.WithContext(service.WithAccountModelMapping(c.Request.Context(), wsRouteModel, wsForwardModel))
 	if err := h.gatewayService.CheckAPIKeyLongContext(ctx, apiKey, firstMessage, reqModel, wsRouteModel, wsForwardModel); err != nil {
 		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
 		rejectAPIKeyLongContextWS(wsConn, err)
@@ -3836,7 +3846,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// Passthrough rejects overlapping response.create frames, so one immutable
 		// turn-tagged slot preserves the exact mapping used for the in-flight request.
 		var turnChannelMapping atomic.Pointer[openAIWSTurnChannelMappingSnapshot]
-		turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: 1, mapping: channelMappingWS})
+		turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{
+			turn: 1, mapping: channelMappingWS.ForAccount(account, wsRouteModel, false),
+			sourceModel: wsRouteModel, channelModel: wsForwardModel,
+			upstreamModel: service.ResolveOpenAIAccountUpstreamModelForRequestWithContext(ctx, account, wsForwardModel, false),
+		})
 		// turn 级定价：首轮回退到 TurnStarted 的所属 turn 时刻；后续 turn 由
 		// BeforeTurn 重新冻结 pricingAt 并按最新门复核当前账号。
 		var turnPricing openAIWSTurnPricing
@@ -4046,17 +4060,24 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				turnCtx := service.WithIntelligenceRoutingRequired(ctx, turnNeedsIntelligence.Load())
 				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(turnCtx, apiKey.GroupID, routeModel)
+				turnCtx = service.WithAccountModelMapping(turnCtx, routeModel, mapping.MappedModel)
 				mappedModelUnchanged := false
 				if previous := turnChannelMapping.Load(); previous != nil && previous.turn < turn {
-					mappedModelUnchanged = strings.TrimSpace(previous.mapping.MappedModel) == strings.TrimSpace(mapping.MappedModel)
+					mappedModelUnchanged = strings.TrimSpace(previous.channelModel) == strings.TrimSpace(mapping.MappedModel)
 				}
-				if turn > 1 && !mappedModelUnchanged && !account.IsModelSupportedInGroup(apiKey.GroupID, model) && !account.IsModelSupportedInGroup(apiKey.GroupID, mapping.MappedModel) {
+				accountInputModel := service.AccountModelMappingInput(turnCtx, account, mapping.MappedModel, false)
+				if turn > 1 && !mappedModelUnchanged && !account.IsModelSupportedInGroup(apiKey.GroupID, accountInputModel) {
 					return "", newOpenAIWSUnsupportedModelSwitchError(mapping.MappedModel)
 				}
 				requestCtx := service.WithIntelligenceRoutingRequired(c.Request.Context(), turnNeedsIntelligence.Load())
+				requestCtx = service.WithAccountModelMapping(requestCtx, routeModel, mapping.MappedModel)
 				c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(requestCtx, mapping.MappedModel, false))
-				turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: turn, mapping: mapping})
-				return mapping.MappedModel, nil
+				upstreamModel := service.ResolveOpenAIAccountUpstreamModelForRequestWithContext(requestCtx, account, mapping.MappedModel, false)
+				turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{
+					turn: turn, mapping: mapping.ForAccount(account, routeModel, false),
+					sourceModel: routeModel, channelModel: mapping.MappedModel, upstreamModel: upstreamModel,
+				})
+				return upstreamModel, nil
 			},
 			BeforeTurn: func(turn int) error {
 				// turn==1 的会话屏蔽已由握手层检查覆盖；连接内 flag 只拦截后续 turn。
@@ -4064,6 +4085,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					return newOpenAIWSLocalAdmissionCloseError(cyberSessionBlockedClientMsg)
 				}
 				turnBillingCtx := turnBillingAPIKeys.begin(service.WithIntelligenceRoutingRequired(ctx, turnNeedsIntelligence.Load()), h.apiKeyService, turn, apiKey)
+				if snapshot := turnChannelMapping.Load(); snapshot != nil && snapshot.turn == turn {
+					turnBillingCtx = service.WithAccountModelMapping(turnBillingCtx, snapshot.sourceModel, snapshot.channelModel)
+					turnBillingCtx = service.WithResolvedAccountModel(turnBillingCtx, account.ID, snapshot.upstreamModel)
+				}
 				// MapRequestModel 已在当前 turn 的 payload 解析阶段完成。这里
 				// 再用最终出站模型做一次权威资格终检，确保账号被禁用、移组、
 				// 到期或该模型票据失效后，不会先抢槽再把请求交给旧账号。
@@ -4072,7 +4097,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if turn > 1 {
 					outboundModel := ""
 					if snapshot := turnChannelMapping.Load(); snapshot != nil && snapshot.turn == turn {
-						outboundModel = strings.TrimSpace(snapshot.mapping.MappedModel)
+						outboundModel = strings.TrimSpace(snapshot.upstreamModel)
 					}
 					if outboundModel == "" {
 						outboundModel = strings.TrimSpace(wsForwardModel)
@@ -4159,6 +4184,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnMapping = snapshot.mapping
 				} else {
 					turnMapping, _ = h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, service.MapAPIKeyModel(apiKey, turnRequestedModel))
+					turnMapping = turnMapping.ForAccount(account, service.MapAPIKeyModel(apiKey, turnRequestedModel), false)
 				}
 				if turnUpstreamModel == "" {
 					turnUpstreamModel = turnRequestedModel
@@ -4318,6 +4344,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, currentRouteModel)
 				currentForwardModel := openAIChannelForwardModel(mapping, currentRouteModel)
+				retryCtx := service.WithAccountModelMapping(ctx, currentRouteModel, currentForwardModel)
 				if gjson.GetBytes(raw, "model").String() == "" {
 					var modelErr error
 					raw, modelErr = sjson.SetBytes(raw, "model", currentModel)
@@ -4326,7 +4353,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						return
 					}
 				}
-				next, clean, changed, rebuildErr := h.gatewayService.RebuildOpenAIWSUnsentTurn(service.WithOpenAIWSUnsentOwnerProof(ctx, err), c, raw, sessionHash, currentForwardModel)
+				next, clean, changed, rebuildErr := h.gatewayService.RebuildOpenAIWSUnsentTurn(service.WithOpenAIWSUnsentOwnerProof(retryCtx, err), c, raw, sessionHash, currentForwardModel)
 				if rebuildErr != nil {
 					h.handleOpenAIWSAgentRecoveryError(ctx, wsConn, rebuildErr, c)
 					return
@@ -4359,6 +4386,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				permissions.Models = service.APIKeyModelCandidates(apiKey, permissions.Models)
 				ctx = service.WithAPIKeyQueueRequestPermissions(next, permissions)
 				ctx, _ = h.gatewayService.WithOpenAIRequestPricingContext(ctx, apiKey.GroupID)
+				ctx = service.WithAccountModelMapping(ctx, currentRouteModel, currentForwardModel)
 				ctx = service.WithOpenAIForwardModel(ctx, currentForwardModel, false)
 				ctx = service.ResetOpenAIWSReadableProviderSession(ctx, c)
 				c.Request = c.Request.WithContext(ctx)
@@ -4446,6 +4474,49 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				wsAttemptMessage = nextAttemptMessage
 				if retryCurrentTurn {
+					// A later client turn may have changed models. The portable replay
+					// carries that turn's original model, so account selection and the
+					// next account's mapping must use its route instead of the handshake
+					// route. The next Proxy call will resolve this source for its own
+					// selected account; no prior account's wire target is retained.
+					currentModel := strings.TrimSpace(gjson.GetBytes(wsAttemptMessage, "model").String())
+					if currentModel != "" {
+						if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite && currentModel != reqModel {
+							closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model route changed during continuation")
+							return
+						}
+						currentRouteModel := service.MapAPIKeyModel(apiKey, currentModel)
+						if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
+							currentRouteModel = wsRouteModel
+						}
+						currentMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, currentRouteModel)
+						reqModel, wsRouteModel = currentModel, currentRouteModel
+						channelMappingWS = currentMapping
+						wsForwardModel = openAIChannelForwardModel(currentMapping, currentRouteModel)
+						ctx = service.WithAccountModelMapping(ctx, currentRouteModel, wsForwardModel)
+						ctx = service.WithOpenAIForwardModel(ctx, wsForwardModel, false)
+						permissions := openAIWSQueueTurnPermissions(currentModel, wsAttemptMessage)
+						permissions.Models = service.APIKeyModelCandidates(apiKey, permissions.Models)
+						ctx = service.WithAPIKeyQueueRequestPermissions(ctx, permissions)
+						ctx = service.WithOpenAIImageGenerationRequest(ctx, currentModel, wsAttemptMessage)
+						c.Request = c.Request.WithContext(ctx)
+						// Same-account retry skips the initial queue admission, so the
+						// portable turn must be revalidated here before either retry path.
+						if err := h.concurrencyHelper.RevalidateTurnAuth(ctx); err != nil {
+							closeOpenAIWSAdmissionError(wsConn, reqLog, "openai.websocket_current_turn_auth_rejected", err)
+							return
+						}
+						firstTurnQueuePermissions = permissions
+						imageIntent = permissions.Capabilities&service.APIKeyQueueCapabilityImageGeneration != 0
+						if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
+							closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.ImageGenerationPermissionMessage())
+							return
+						}
+						requiredCapability = service.OpenAIEndpointCapabilityChatCompletions
+						if imageIntent {
+							requiredCapability = service.OpenAIEndpointCapabilityResponses
+						}
+					}
 					previousResponseID = ""
 					reqLog.Warn("openai.websocket_current_turn_failover_retry",
 						zap.Int64("account_id", account.ID),

@@ -60,13 +60,14 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 	now := time.Now()
 	for i := range accounts {
 		diag.HasAccountsInPool = true
-		if isRetiredOpenAISubscriptionModel(&accounts[i], resolveOpenAIAccountUpstreamModelForRequest(&accounts[i], requestedModel, false)) {
+		input := AccountModelMappingInput(ctx, &accounts[i], requestedModel, false)
+		if isRetiredOpenAISubscriptionModel(&accounts[i], resolveOpenAIAccountModelForScheduling(ctx, &accounts[i], requestedModel, false)) {
 			diag.HasRetiredSubscriptionModel = true
 		}
 		// Only configured support can justify a downstream model_not_found.
 		// Keep old negative-cache records in the scheduler, not this verdict:
 		// otherwise another relay starts a new 30-minute cache near our expiry.
-		diag.recordAccount(&accounts[i], accounts[i].IsModelSupportedInGroup(groupID, requestedModel), now)
+		diag.recordAccount(&accounts[i], accounts[i].IsModelSupportedInGroup(groupID, input) && accountMappingTargetAllowedForRequest(ctx, &accounts[i], requestedModel, false), now)
 	}
 	return diag
 }

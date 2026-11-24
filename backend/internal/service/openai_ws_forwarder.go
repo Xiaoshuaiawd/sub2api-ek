@@ -293,7 +293,8 @@ type OpenAIWSIngressHooks struct {
 	// previous turn's holder value. Optional; nil keeps the previous behavior.
 	BeforePayloadParse func(turn int, raw []byte, effectiveModel string) error
 	// MapRequestModel resolves the current turn's client model to the model
-	// that must be written into the upstream response.create frame.
+	// that must be written into the upstream response.create frame. The result
+	// already includes account mapping and must not be mapped a second time.
 	MapRequestModel func(turn int, originalModel string) (string, error)
 	AfterTurn       func(turn int, result *OpenAIForwardResult, turnErr error)
 }

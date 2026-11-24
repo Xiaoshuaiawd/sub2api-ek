@@ -48,7 +48,7 @@ func (s *defaultOpenAIAccountScheduler) checkOpenAIAgentRecoveryCooldown(ctx con
 	}
 	// A transient upstream failure can park just this account and mapped model
 	// without setting either of the persisted account-level deadlines.
-	model := canonicalOpenAIAccountSchedulingModel(account, req.RequestedModel)
+	model := canonicalOpenAIAccountSchedulingModelForRequest(ctx, account, req.RequestedModel, req.RequireCompact)
 	if until := s.service.getOpenAIAccountModelTransientState().blockedUntil(account.ID, model, now); until.After(retryAt) {
 		retryAt, reason = until, "owner_overloaded"
 	}
@@ -65,11 +65,11 @@ func (s *defaultOpenAIAccountScheduler) checkOpenAIAgentRecoveryCooldown(ctx con
 		account.HasManagedOpenAIConnections() || account.AuthConnectionID != "" ||
 		!account.IsOpenAI() || !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) ||
 		(req.RequirePrivacySet && !account.IsPrivacySet()) ||
-		!supportsOpenAIRequestModel(account, req.RequestedModel, req.RequireCompact) ||
-		!account.IsModelAllowedInGroup(req.GroupID, req.RequestedModel) ||
-		!pelicanGroupTestModelAllowed(ctx, account, req.RequestedModel) ||
+		!supportsOpenAIRequestModel(account, AccountModelMappingInput(ctx, account, req.RequestedModel, req.RequireCompact), req.RequireCompact) ||
+		!account.IsModelAllowedInGroup(req.GroupID, AccountModelMappingInput(ctx, account, req.RequestedModel, req.RequireCompact)) ||
+		!pelicanGroupTestModelAllowed(ctx, account, AccountModelMappingInput(ctx, account, req.RequestedModel, req.RequireCompact)) ||
 		!accountSupportsOpenAICapabilitiesForRequest(ctx, account, req.RequestedModel, req.RequiredCapability, req.RequiredImageCapability) ||
-		!s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+		!s.isAccountTransportCompatibleForRequest(ctx, account, req) {
 		return openAIAgentRecoveryError("owner_unavailable")
 	}
 	if req.GroupID != nil && s.service.needsUpstreamChannelRestrictionCheck(ctx, req.GroupID) &&

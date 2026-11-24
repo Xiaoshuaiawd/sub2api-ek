@@ -33,11 +33,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	validationModel := parsed.Model
 	if account != nil {
 		if account.IsBedrock() {
-			if resolved, ok := ResolveBedrockModelID(account, validationModel); ok {
+			if resolved, ok := ResolveBedrockModelID(account, validationModel, ctx); ok {
 				validationModel = resolved
 			}
 		} else if account.Type == AccountTypeAPIKey {
-			validationModel = account.GetMappedModel(validationModel)
+			validationModel = AccountMappedModelForRequest(ctx, account, validationModel)
 		}
 	}
 	prepared, err := prepareClaudeMessagesRequest(account, parsed, validationModel)
@@ -51,7 +51,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		passthroughBody := parsed.Body.Bytes()
 		passthroughModel := parsed.Model
 		if reqModel := parsed.Model; reqModel != "" {
-			if mappedModel := account.GetMappedModel(reqModel); mappedModel != reqModel {
+			if mappedModel := AccountMappedModelForRequest(ctx, account, reqModel); mappedModel != reqModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
 				passthroughModel = mappedModel
 				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s)", reqModel, mappedModel, account.Name)
@@ -118,8 +118,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if reqModel != "" {
 		mappedModel := reqModel
 		mappingSource := ""
-		if account.Type == AccountTypeAPIKey {
-			mappedModel = account.GetMappedModel(reqModel)
+		if target, matched := httpAccountModelOverride(ctx, account, reqModel); matched {
+			mappedModel, mappingSource = target, "account"
+		}
+		if mappingSource == "" && account.Type == AccountTypeAPIKey {
+			mappedModel = AccountMappedModelForRequest(ctx, account, reqModel)
 			if mappedModel != reqModel {
 				mappingSource = "account"
 			}

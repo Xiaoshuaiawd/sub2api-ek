@@ -101,7 +101,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	ctx = s.withOpenAIHTTPBudget(ctx, c)
 	clientModel, _ := ctx.Value(openAIClientModelContextKey{}).(string)
 	if account.gatewayProtocolsPending() {
-		view, err := s.gatewayProtocolAccount(ctx, account, "openai", gatewayProtocolBodyModel(body))
+		view, err := s.gatewayProtocolAccount(ctx, account, "openai", AccountModelMappingInput(ctx, account, gatewayProtocolBodyModel(body), IsOpenAIResponsesCompactPath(c)))
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +249,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
-	modelForBPS := gjson.GetBytes(body, "model").String()
+	modelForBPS := AccountModelMappingInput(ctx, account, gjson.GetBytes(body, "model").String(), false)
 	if err := s.checkControlledRoute(ctx, c, account, modelForBPS); err != nil {
 		return nil, err
 	}
@@ -318,7 +318,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		body = sanitizedToolBody
 	}
 	if account.IsOpenAIOAuthLike() {
-		reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(body, account.GetMappedModel(gjson.GetBytes(body, "model").String()))
+		reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(body, AccountMappedModelForRequest(ctx, account, gjson.GetBytes(body, "model").String()))
 		if reasoningErr != nil {
 			return nil, fmt.Errorf("normalize OpenAI Responses reasoning.mode: %w", reasoningErr)
 		}
@@ -452,7 +452,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	// 上游协议统一由 resolveUpstreamProtocol 判定（按模型分流时带上游模型目录）。OpenAI API Key 账号只会落到
 	// Responses / Chat Completions，上面的归一化对两条路径都生效。
-	routingModel := upstreamRoutingModel(account, body, "")
+	routingModel := httpUpstreamRoutingModel(ctx, account, body, "")
 	if account.IsOpenCodeGo() && IsOpenCodeUnsupportedModel(routingModel) {
 		return nil, writeOpenCodeUnsupportedModelError(c, false, routingModel)
 	}
@@ -547,7 +547,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
-		mappedModel := account.GetMappedModel(reqModel)
+		mappedModel := AccountMappedModelForRequest(ctx, account, reqModel)
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel)
 		// 国产模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
 		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
@@ -650,9 +650,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	isCompactRequest := compactPath
 	requestedModel := reqModel
-	billingModel, upstreamModel := resolveOpenAIForwardMappedModels(account, requestedModel, isCompactRequest)
+	billingModel, upstreamModel := resolveOpenAIForwardMappedModelsForRequest(ctx, account, requestedModel, isCompactRequest)
 	if isCompactRequest {
-		if compactModel := s.resolveOpenAICompactFallbackModel(account, requestedModel); compactModel != "" {
+		compactInput := AccountModelMappingInput(ctx, account, requestedModel, true)
+		if compactModel := s.resolveOpenAICompactFallbackModel(account, compactInput); compactModel != "" {
 			upstreamModel = compactModel
 		}
 	}

@@ -145,9 +145,19 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	ctx = withOpenAITransportMode(ctx, "passthrough")
 	requestedModel := reqModel
 	upstreamPassthroughModel := ""
+	if mappedModel, matched := httpAccountModelOverride(ctx, account, reqModel); matched {
+		mappedModel = normalizeOpenAIModelForUpstream(account, mappedModel)
+		nextBody, setErr := sjson.SetBytes(body, "model", mappedModel)
+		if setErr != nil {
+			return nil, fmt.Errorf("set original account passthrough model: %w", setErr)
+		}
+		body = nextBody
+		upstreamPassthroughModel = mappedModel
+		attemptImageIntentInvalidated = true
+	}
 	// Gateway accounts retain explicit portable mappings even though their
 	// transport uses passthrough. Legacy passthrough keeps its original contract.
-	if account != nil && account.gatewayProtocolSource != nil {
+	if upstreamPassthroughModel == "" && account != nil && account.gatewayProtocolSource != nil {
 		mappedModel := account.GetMappedModel(reqModel)
 		if mappedModel != "" && mappedModel != reqModel {
 			nextBody, setErr := sjson.SetBytes(body, "model", mappedModel)
@@ -160,7 +170,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 	}
 	if isOpenAIResponsesCompactPath(c) && !account.IsCopilotSDKEnabled() {
-		compactMappedModel := s.resolveOpenAICompactFallbackModel(account, reqModel)
+		compactInput := AccountModelMappingInput(ctx, account, reqModel, true)
+		compactMappedModel := s.resolveOpenAICompactFallbackModel(account, compactInput)
+		if compactMappedModel == "" {
+			if _, _, contextual := AccountModelMappingModels(ctx); contextual {
+				compactMappedModel = ResolveOpenAIAccountUpstreamModelForRequestWithContext(ctx, account, reqModel, true)
+			}
+		}
 		if compactMappedModel != "" && compactMappedModel != reqModel {
 			nextBody, setErr := sjson.SetBytes(body, "model", compactMappedModel)
 			if setErr != nil {

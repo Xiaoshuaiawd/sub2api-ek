@@ -282,7 +282,7 @@ func (s *OpenAIGatewayService) forwardPrismBrowser(ctx context.Context, c *gin.C
 		fail(http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, errors.New("prism adapter model is required")
 	}
-	upstreamModel := account.GetMappedModel(model)
+	upstreamModel := AccountMappedModelForRequest(ctx, account, model)
 	SetOpsUpstreamModel(c, upstreamModel)
 	if upstreamModel != model {
 		mapped, mapErr := sjson.SetBytes(body, "model", upstreamModel)

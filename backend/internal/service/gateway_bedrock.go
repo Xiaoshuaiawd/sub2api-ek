@@ -25,7 +25,7 @@ func (s *GatewayService) ApplyBedrockCCCompat(c *gin.Context, body []byte, model
 	if !s.isBedrockCCCompatEnabled(c.Request.Context(), account, groupID) {
 		return body
 	}
-	if resolved, ok := ResolveBedrockModelID(account, model); ok {
+	if resolved, ok := ResolveBedrockModelID(account, model, c.Request.Context()); ok {
 		model = resolved
 	}
 	body = sanitizeBedrockCCFields(body)
@@ -68,7 +68,7 @@ func (s *GatewayService) forwardBedrock(
 	body := parsed.Body.Bytes()
 
 	region := bedrockRuntimeRegion(account)
-	mappedModel, ok := ResolveBedrockModelID(account, reqModel)
+	mappedModel, ok := ResolveBedrockModelID(account, reqModel, ctx)
 	if !ok {
 		return nil, fmt.Errorf("unsupported bedrock model: %s", reqModel)
 	}

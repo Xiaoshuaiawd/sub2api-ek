@@ -132,14 +132,14 @@ func (s *defaultOpenAIAccountScheduler) shouldRebalancePrioritySticky(ctx contex
 		account := &accounts[i]
 		if account.ID == sticky.ID || !account.IsSchedulable() || (!quotaSticky && account.Priority > sticky.Priority) ||
 			!s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) ||
-			!s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) ||
-			s.service.isExcelBPSCoolingDown(account, req.RequestedModel) {
+			!s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatibleForRequest(ctx, account, req) ||
+			s.service.isExcelBPSCoolingDownForRequest(ctx, account, req.RequestedModel, req.RequireCompact) {
 			continue
 		}
 		if _, excluded := req.ExcludedIDs[account.ID]; excluded {
 			continue
 		}
-		if !balanceProtocols && sticky.IsExcelBPSEnabledForModel(req.RequestedModel) && !account.IsExcelBPSEnabledForModel(req.RequestedModel) {
+		if !balanceProtocols && isExcelBPSEnabledForRequest(ctx, sticky, req.RequestedModel, req.RequireCompact) && !isExcelBPSEnabledForRequest(ctx, account, req.RequestedModel, req.RequireCompact) {
 			continue
 		}
 		if req.RequireCompact && openAICompactSupportTier(account) < openAICompactSupportTier(sticky) {

@@ -49,6 +49,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 		return nil, fmt.Errorf("parse chat completions request: %w", err)
 	}
 	originalModel := ccReq.Model
+	responseModel := gatewayClientResponseModel(c, originalModel)
 	if strings.TrimSpace(originalModel) == "" {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, fmt.Errorf("missing model in request")
@@ -70,7 +71,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 		return nil, err
 	}
 	// Resolve the mapped model before choosing its thinking/tool protocol.
-	billingModel := resolveOpenAIChannelForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveHTTPChannelForwardModel(ctx, account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	SetOpsUpstreamModel(c, upstreamModel)
 	if err := validateClaude55Request(body, upstreamModel); err != nil {
@@ -156,9 +157,9 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaNativeAnthropic(
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, forwardedBody, upstreamModel)
 
 	if clientStream {
-		return s.handleCCStreamingFromNativeAnthropic(resp, c, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, account)
+		return s.handleCCStreamingFromNativeAnthropic(resp, c, responseModel, billingModel, upstreamModel, reasoningEffort, startTime, account)
 	}
-	return s.handleCCBufferedFromNativeAnthropic(resp, c, originalModel, billingModel, upstreamModel, reasoningEffort, startTime, account)
+	return s.handleCCBufferedFromNativeAnthropic(resp, c, responseModel, billingModel, upstreamModel, reasoningEffort, startTime, account)
 }
 
 // handleCCBufferedFromNativeAnthropic reads Anthropic SSE events, assembles the

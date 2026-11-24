@@ -45,6 +45,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		return nil, fmt.Errorf("parse anthropic request: %w", err)
 	}
 	originalModel := anthropicReq.Model
+	responseModel := gatewayClientResponseModel(c, originalModel)
 	if strings.TrimSpace(originalModel) == "" {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, fmt.Errorf("missing model in request")
@@ -62,7 +63,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		return nil, fmt.Errorf("convert anthropic to chat completions: %w", err)
 	}
 
-	billingModel := resolveOpenAIForwardModel(account, anthropicReq.Model, defaultMappedModel)
+	billingModel := resolveHTTPForwardModel(ctx, account, anthropicReq.Model, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	SetOpsUpstreamModel(c, upstreamModel)
 	if err := validateGPT61RawEffort(body, upstreamModel); err != nil {
@@ -160,13 +161,13 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 
 	// 5. Convert response
 	if clientStream {
-		result, forwardErr := s.streamChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr := s.streamChatCompletionsAsAnthropic(c, resp, account, responseModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 		if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
 			return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
 		}
 		return result, forwardErr
 	}
-	result, forwardErr := s.bufferChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	result, forwardErr := s.bufferChatCompletionsAsAnthropic(c, resp, account, responseModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
 		return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
 	}

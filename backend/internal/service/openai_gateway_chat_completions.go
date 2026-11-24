@@ -100,7 +100,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 ) (*OpenAIForwardResult, error) {
 	ctx = s.withOpenAIHTTPBudget(ctx, c)
 	if account.gatewayProtocolsPending() {
-		view, err := s.gatewayProtocolAccount(ctx, account, "openai", gatewayProtocolBodyModel(body))
+		view, err := s.gatewayProtocolAccount(ctx, account, "openai", AccountModelMappingInput(ctx, account, gatewayProtocolBodyModel(body), false))
 		if err != nil {
 			return nil, err
 		}
@@ -218,7 +218,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	routingModel := ""
 	if account.routesByModel() {
 		requestedModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-		routingModel = normalizeOpenAIModelForUpstream(account, resolveOpenAIChannelForwardModel(account, requestedModel, defaultMappedModel))
+		routingModel = normalizeOpenAIModelForUpstream(account, resolveHTTPChannelForwardModel(ctx, account, requestedModel, defaultMappedModel))
 	}
 	if account.IsOpenCodeGo() && IsOpenCodeUnsupportedModel(routingModel) {
 		return nil, writeOpenCodeUnsupportedModelError(c, false, routingModel)
@@ -260,11 +260,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, fmt.Errorf("parse chat completions request: %w", err)
 	}
 	originalModel := chatReq.Model
+	responseModel := gatewayClientResponseModel(c, originalModel)
 	clientStream := chatReq.Stream
 
 	// 2. Resolve model mapping early so compat prompt_cache_key injection can
 	// derive a stable seed from the final upstream model family.
-	billingModel := resolveOpenAIChannelForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveHTTPChannelForwardModel(ctx, account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	juiceEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
 	juiceEffort = ApplyThinkingEnabledFallback(juiceEffort, body, billingModel)
@@ -560,9 +561,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 9. Handle normal response
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleChatStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body))
+		result, handleErr = s.handleChatStreamingResponse(resp, c, account, responseModel, billingModel, upstreamModel, startTime, len(body))
 	} else {
-		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, responseModel, billingModel, upstreamModel, startTime)
 	}
 	stampOpenAIResponsesUpstreamEndpoint(c, result)
 

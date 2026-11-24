@@ -455,11 +455,33 @@ func (s *OpenAIGatewayService) admitOpenAITurnWithGroup(
 	if !intelligenceRoutingAllowsAccount(ctx, latest) {
 		return nil, denyOpenAITurn("intelligence_routing_class_mismatch")
 	}
-	if err := s.validateExcelOAuthRoute(ctx, latest, outboundModel); err != nil && !latest.HasManagedOpenAIConnections() {
+	groupModel := outboundModel
+	if _, channelModel, contextual := AccountModelMappingModels(ctx); contextual {
+		compact := false
+		if forward, ok := openAIForwardModelFromContext(ctx); ok {
+			compact = forward.useCompactModelMapping
+		}
+		// Some adapters check admission while their body still contains A and
+		// carry B separately. Fresh authority must start from the preserved
+		// channel fallback, not from either that raw body or a serialized E.
+		fallbackModel := outboundModel
+		if channelModel != "" {
+			fallbackModel = channelModel
+		}
+		input := AccountModelMappingInput(ctx, latest, fallbackModel, compact)
+		// Markers describe an earlier serialization, not the current account's
+		// authority. Recompute the source and true target after the primary read.
+		outboundModel = s.openAICodexTicketOutboundModelForRequest(ctx, latest, fallbackModel, compact)
+		if !supportsOpenAIRequestModel(latest, input, compact, oauth429ConfiguredCompactModel(s.cfg)) ||
+			!latest.oauthInitialSelectionAllows(outboundModel) || isRetiredOpenAISubscriptionModel(latest, outboundModel) {
+			return nil, denyOpenAITurn("model_not_supported")
+		}
+		groupModel = input
+	}
+	if err := s.validateExcelOAuthRoute(ctx, latest, groupModel); err != nil && !latest.HasManagedOpenAIConnections() {
 		return nil, &OpenAITurnAdmissionError{Reason: excelOAuthRouteErrorCode, cause: err}
 	}
 	// 会话中途被收窄了分组内的可用模型、或后续 turn 换成了不允许的模型时，要求客户端重连重新选号。
-	groupModel := outboundModel
 	if latest.gatewayProtocolSource != nil {
 		groupModel = latest.gatewayProtocolModel
 	}

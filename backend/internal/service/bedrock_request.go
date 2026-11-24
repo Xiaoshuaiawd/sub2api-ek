@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -150,12 +151,12 @@ func normalizeBedrockModelID(modelID string) (normalized string, shouldAdjustReg
 // ResolveBedrockModelID resolves a requested Claude model into a Bedrock model ID.
 // It applies account model_mapping first, then default Bedrock aliases, and finally
 // adjusts Anthropic cross-region prefixes to match the account region.
-func ResolveBedrockModelID(account *Account, requestedModel string) (string, bool) {
+func ResolveBedrockModelID(account *Account, requestedModel string, contexts ...context.Context) (string, bool) {
 	if account == nil {
 		return "", false
 	}
 
-	mappedModel := account.GetMappedModel(requestedModel)
+	mappedModel := AccountMappedModelForRequest(httpModelMappingContext(contexts), account, requestedModel)
 	modelID, shouldAdjustRegion, ok := normalizeBedrockModelID(mappedModel)
 	if !ok {
 		return "", false

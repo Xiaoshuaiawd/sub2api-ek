@@ -403,6 +403,7 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
+	requestedModel = AccountModelMappingInput(ctx, account, requestedModel, requireCompact)
 	if !intelligenceRoutingAllowsAccount(ctx, account) {
 		return "intelligence_routing_class_mismatch"
 	}
@@ -461,6 +462,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	modelCompact := requireCompact
 	if route, ok := ctx.Value(oauth429RequestRouteKey{}).(oauth429RequestRoute); ok {
 		modelCompact = route.Compact
+	}
+	if !accountMappingTargetAllowedForRequest(ctx, account, requestedModel, modelCompact) {
+		return "model_not_supported"
 	}
 	if requestedModel != "" && !supportsOpenAIRequestModel(account, requestedModel, modelCompact, oauth429CompactModel(ctx)) {
 		return "model_not_supported"
@@ -906,6 +910,45 @@ func ResolveOpenAIAccountUpstreamModelForRequest(account *Account, requestedMode
 	return resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
 }
 
+// ResolveOpenAIAccountUpstreamModelForRequestWithContext follows the preserved
+// channel input for each account. A serialized wire marker is only a mapping
+// idempotency hint; admission uses the marker-independent sibling below.
+func ResolveOpenAIAccountUpstreamModelForRequestWithContext(ctx context.Context, account *Account, requestedModel string, requireCompact bool) string {
+	return resolveOpenAIContextModel(ctx, account, requestedModel, requireCompact, true)
+}
+
+func resolveOpenAIAccountModelForScheduling(ctx context.Context, account *Account, requestedModel string, requireCompact bool) string {
+	return resolveOpenAIContextModel(ctx, account, requestedModel, requireCompact, false)
+}
+
+func resolveOpenAIContextModel(ctx context.Context, account *Account, requestedModel string, requireCompact, serialized bool) string {
+	if serialized {
+		if model, ok := ResolvedAccountModel(ctx, account, requestedModel); ok {
+			return model
+		}
+	}
+	source, _, contextual := AccountModelMappingModels(ctx)
+	if !contextual {
+		return resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
+	}
+	input := AccountModelMappingInput(ctx, account, requestedModel, requireCompact)
+	owner := configuredModelMappingAccount(account)
+	if requireCompact && owner != nil {
+		if target, matched := owner.ResolveCompactMappedModel(source); matched && strings.TrimSpace(target) != "" {
+			return normalizeOpenAIModelForUpstream(account, target)
+		}
+	}
+	if target, matched := ResolveAccountOriginalModelMapping(ctx, account); matched {
+		// This target has already passed its ordinary account rule. Only the
+		// existing compact-specific fallback and provider spelling may follow.
+		if requireCompact {
+			target = resolveOpenAICompactForwardModel(owner, target)
+		}
+		return normalizeOpenAIModelForUpstream(account, target)
+	}
+	return resolveOpenAIAccountUpstreamModelForRequest(account, input, requireCompact)
+}
+
 // resolveOpenAIForwardMappedModels is the shared account mapping chain for
 // Forward callers. billingModel retains the ordinary mapping used for usage
 // accounting, while upstreamModel is the model the scheduler has admitted.
@@ -920,6 +963,31 @@ func resolveOpenAIForwardMappedModels(account *Account, requestedModel string, r
 		billingModel = requestedModel
 	}
 	upstreamModel = resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
+	if strings.TrimSpace(upstreamModel) == "" {
+		upstreamModel = billingModel
+	}
+	return billingModel, upstreamModel
+}
+
+func resolveOpenAIForwardMappedModelsForRequest(ctx context.Context, account *Account, requestedModel string, requireCompact bool) (billingModel, upstreamModel string) {
+	if model, resolved := ResolvedAccountModel(ctx, account, requestedModel); resolved {
+		return model, model
+	}
+	if _, _, contextual := AccountModelMappingModels(ctx); !contextual {
+		return resolveOpenAIForwardMappedModels(account, requestedModel, requireCompact)
+	}
+	input := AccountModelMappingInput(ctx, account, requestedModel, requireCompact)
+	if target, matched := ResolveAccountOriginalModelMapping(ctx, account); matched {
+		billingModel = target
+	} else if account == nil || account.IsOpenAIPassthroughEnabled() {
+		billingModel = input
+	} else {
+		billingModel = account.GetMappedModel(input)
+	}
+	if strings.TrimSpace(billingModel) == "" {
+		billingModel = input
+	}
+	upstreamModel = ResolveOpenAIAccountUpstreamModelForRequestWithContext(ctx, account, requestedModel, requireCompact)
 	if strings.TrimSpace(upstreamModel) == "" {
 		upstreamModel = billingModel
 	}
@@ -1036,7 +1104,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel, requireCompact) {
+	if s.isOpenAIAccountRequestRuntimeBlockedForRequest(ctx, account, requestedModel, requireCompact) {
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
@@ -1048,10 +1116,10 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 	// A stale sticky binding must not bypass BPS after it is enabled on the
 	// requested model. Clear it and let normal selection choose an eligible BPS
 	// account instead of silently forwarding this turn to /v1/responses.
-	if platform == PlatformOpenAI && strings.TrimSpace(requestedModel) != "" && !account.IsExcelBPSEnabledForModel(requestedModel) {
+	if platform == PlatformOpenAI && strings.TrimSpace(requestedModel) != "" && !isExcelBPSEnabledForRequest(ctx, account, requestedModel, requireCompact) {
 		if candidates, listErr := s.listSchedulableAccountsForRequest(ctx, groupID, platform, requestedModel, requireCompact, excludedIDs); listErr == nil {
 			for i := range candidates {
-				if candidates[i].ID != account.ID && candidates[i].IsExcelBPSEnabledForModel(requestedModel) {
+				if candidates[i].ID != account.ID && isExcelBPSEnabledForRequest(ctx, &candidates[i], requestedModel, requireCompact) {
 					_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					return nil
 				}
@@ -1100,11 +1168,11 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 			filterStats.exclude("excluded")
 			continue
 		}
-		if s.isExcelBPSModelCoolingDown(acc, requestedModel) {
+		if s.isExcelBPSModelCoolingDownForRequest(ctx, acc, requestedModel, requireCompact) {
 			filterStats.exclude(excelBPSModelPermissionFilterReason)
 			continue
 		}
-		if s.isExcelBPSCoolingDown(acc, requestedModel) {
+		if s.isExcelBPSCoolingDownForRequest(ctx, acc, requestedModel, requireCompact) {
 			filterStats.exclude(excelBPSRateLimitedFilterReason)
 			continue
 		}
@@ -1153,8 +1221,8 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 	sort.SliceStable(eligible, func(i, j int) bool {
 		a, b := eligible[i], eligible[j]
 		if bpsPreferred {
-			aBPS := a.IsExcelBPSEnabledForModel(requestedModel)
-			bBPS := b.IsExcelBPSEnabledForModel(requestedModel)
+			aBPS := isExcelBPSEnabledForRequest(ctx, a, requestedModel, requireCompact)
+			bBPS := isExcelBPSEnabledForRequest(ctx, b, requestedModel, requireCompact)
 			if aBPS != bBPS {
 				return aBPS
 			}
@@ -1378,7 +1446,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
-					} else if s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel, requireCompact) {
+					} else if s.isOpenAIAccountRequestRuntimeBlockedForRequest(ctx, account, requestedModel, requireCompact) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -1450,15 +1518,15 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			filterStats.exclude("shadow_parent_unhealthy")
 			continue
 		}
-		if s.isExcelBPSModelCoolingDown(acc, requestedModel) {
+		if s.isExcelBPSModelCoolingDownForRequest(ctx, acc, requestedModel, requireCompact) {
 			filterStats.exclude(excelBPSModelPermissionFilterReason)
 			continue
 		}
-		if s.isExcelBPSCoolingDown(acc, requestedModel) {
+		if s.isExcelBPSCoolingDownForRequest(ctx, acc, requestedModel, requireCompact) {
 			filterStats.exclude(excelBPSRateLimitedFilterReason)
 			continue
 		}
-		if s.isOpenAIAccountRequestRuntimeBlocked(acc, requestedModel, requireCompact) {
+		if s.isOpenAIAccountRequestRuntimeBlockedForRequest(ctx, acc, requestedModel, requireCompact) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
@@ -1782,7 +1850,7 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccountBeforeProfit(
 	if len(ticketCompactOverride) > 0 {
 		ticketCompact = ticketCompactOverride[0]
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(fresh, requestedModel, ticketCompact) {
+	if s.isOpenAIAccountRequestRuntimeBlockedForRequest(ctx, fresh, requestedModel, ticketCompact) {
 		return nil
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, fresh) {
@@ -1870,7 +1938,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if len(ticketCompactOverride) > 0 {
 		ticketCompact = ticketCompactOverride[0]
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(latest, requestedModel, ticketCompact) {
+	if s.isOpenAIAccountRequestRuntimeBlockedForRequest(ctx, latest, requestedModel, ticketCompact) {
 		return nil
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, latest) {
@@ -1879,7 +1947,11 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if s.isOpenAIProxyStreamQuarantined(ctx, latest) {
 		return nil
 	}
-	return latest
+	// Retain this primary authority through the final hydration step. UpdatedAt
+	// alone cannot distinguish concurrent edits that share timestamp precision.
+	checked := *latest
+	checked.schedulingPrimaryRead = true
+	return &checked
 }
 
 func (s *OpenAIGatewayService) openAIAccountMatchesSchedulingGroup(account *Account, groupID *int64) bool {
@@ -1971,6 +2043,9 @@ func (s *OpenAIGatewayService) isOpenAIAccountBlockedBySchedulingThreshold(ctx c
 func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, account *Account) (*Account, error) {
 	if account != nil && account.gatewayProtocolSource != nil {
 		return s.openAIGatewaySelectionView(ctx, account)
+	}
+	if account != nil && account.schedulingPrimaryRead && !account.IsSchedulingCandidate() {
+		return account, nil
 	}
 	if account == nil || s.schedulerSnapshot == nil {
 		return account, nil

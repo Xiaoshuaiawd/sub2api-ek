@@ -1184,6 +1184,7 @@ func (s *GatewayService) isAccountSchedulableForModelSelection(ctx context.Conte
 	if account == nil {
 		return false
 	}
+	requestedModel = AccountModelMappingInput(ctx, account, requestedModel, false)
 	if account.IsGateway() {
 		return account.gatewayMessagesView != nil && account.gatewayMessagesView.IsSchedulableForModelWithContext(ctx, requestedModel)
 	}
@@ -2855,6 +2856,14 @@ func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Contex
 			return false
 		}
 	}
+	if account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth {
+		if _, configured := ResolveAccountOriginalModelMapping(ctx, account); configured {
+			// Provider source normalization is a fallback. It must not replace a
+			// configured short source before its account-owned boundary is checked.
+			input := AccountModelMappingInput(ctx, account, requestedModel, false)
+			return account.IsModelSupported(input) && accountMappingTargetAllowedForRequest(ctx, account, requestedModel, false)
+		}
+	}
 	if account.Platform == PlatformAntigravity {
 		if strings.TrimSpace(requestedModel) == "" {
 			return true
@@ -2880,6 +2889,7 @@ func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Contex
 // isModelSupportedByAccountInGroup 在账号自身的模型支持之外，再检查账号在当前调度分组里
 // 是否被限制了可用模型。选号的每一处模型判断都要走这里，否则分组内的限制会被绕过。
 func (s *GatewayService) isModelSupportedByAccountInGroup(ctx context.Context, account *Account, groupID *int64, requestedModel string) bool {
+	requestedModel = AccountModelMappingInput(ctx, account, requestedModel, false)
 	return s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) && account.IsModelAllowedInGroup(groupID, requestedModel)
 }
 

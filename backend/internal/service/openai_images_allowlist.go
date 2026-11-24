@@ -69,14 +69,22 @@ func (r *OpenAIImagesRequest) needsExtraImageAuthorization(channelModel string) 
 // ValidateAccountModels checks the complete chain against one account. Existing
 // composite aliases for built-in models retain their behavior; introducing a
 // custom model also requires explicit approval of the original public alias.
-func (r *OpenAIImagesRequest) ValidateAccountModels(account *Account, channelModel string) error {
+func (r *OpenAIImagesRequest) ValidateAccountModels(account *Account, channelModel string, contexts ...context.Context) error {
 	if account == nil {
 		return &OpenAIImagesModelError{Model: r.Model}
 	}
+	ctx := httpModelMappingContext(contexts)
 	requestModel := firstNonEmptyString(strings.TrimSpace(channelModel), r.Model)
-	upstreamModel := account.GetMappedModel(requestModel)
+	serializedModel := requestModel
+	requestModel = AccountModelMappingInput(ctx, account, requestModel, false)
+	// Authorization recomputes from the account rules; a serialized marker is
+	// an idempotency hint, never permission for a different image target.
+	upstreamModel := AccountMappedModelForRequest(WithResolvedAccountModel(ctx, 0, ""), account, requestModel)
 	models := []string{r.Model, requestModel, upstreamModel}
-	if r.needsExtraImageAuthorization(channelModel) || validateCompatibleImagesModel(upstreamModel) != nil {
+	if serialized, resolved := ResolvedAccountModel(ctx, account, serializedModel); resolved && serialized != upstreamModel {
+		models = append(models, serialized)
+	}
+	if r.needsExtraImageAuthorization(requestModel) || validateCompatibleImagesModel(upstreamModel) != nil {
 		models = append(models, r.clientModel)
 	}
 	for _, model := range models {

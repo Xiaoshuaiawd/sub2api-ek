@@ -864,6 +864,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		imageInputSize           string
 		payloadBytes             int
 		requestedReasoningEffort *string
+		modelMapping             openAIWSModelMappingSnapshot
 	}
 	ingressSessionOriginalModel := ""
 
@@ -1069,17 +1070,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				normalized = rebuilt
 			}
 		}
-		requestModel := originalModel
+		upstreamModel := ""
 		if hooks != nil && hooks.MapRequestModel != nil {
 			mappedModel, mapErr := hooks.MapRequestModel(turn, originalModel)
 			if mapErr != nil {
 				return openAIWSClientPayload{}, mapErr
 			}
-			if mappedModel = strings.TrimSpace(mappedModel); mappedModel != "" {
-				requestModel = mappedModel
-			}
+			upstreamModel = strings.TrimSpace(mappedModel)
 		}
-		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(requestModel))
+		if upstreamModel == "" {
+			// Standalone callers without a final-model hook retain the legacy
+			// account mapping. A hook result is already the complete wire model.
+			upstreamModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
+		}
 		if modelMissing || upstreamModel != originalModel || (hooks != nil && hooks.APIKeyModelMapping) {
 			var next []byte
 			var setErr error
@@ -1182,6 +1185,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			imageInputSize:           imageInputSize,
 			payloadBytes:             len(normalized),
 			requestedReasoningEffort: requestedReasoningEffort,
+			modelMapping:             captureOpenAIWSModelMapping(c, account, upstreamModel),
 		}, nil
 	}
 
@@ -1513,9 +1517,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					openAIWSRawPayloadHasToolCallOutput(currentBridgePayload.payloadRaw),
 				)
 			}
+			turnModelCtx := currentBridgePayload.modelMapping.withContext(ctx)
 			grokCacheIdentity := ""
 			if account.Platform == PlatformGrok {
-				grokCacheIdentity, err = resolveGrokWSCacheIdentity(
+				grokCacheIdentity, err = resolveGrokWSCacheIdentityForRequest(
+					turnModelCtx,
 					c,
 					account,
 					grokCacheSeedPayload,
@@ -1526,7 +1532,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					return fmt.Errorf("resolve Grok websocket cache identity: %w", err)
 				}
 			}
-			bridgeCtx := context.WithValue(ctx, openAIWSAgentSourceKey{}, currentBridgePayload.clientPayloadRaw)
+			bridgeCtx := context.WithValue(turnModelCtx, openAIWSAgentSourceKey{}, currentBridgePayload.clientPayloadRaw)
 			var result *OpenAIForwardResult
 			var bridgeErr error
 			warmupHandled := false
@@ -1677,9 +1683,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 	}
 
+	var poolTurnPayload atomic.Pointer[openAIWSClientPayload]
+	poolTurnPayload.Store(&firstPayload)
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
 	wsHeaders, _, buildHdrErr := s.buildOpenAIWSHeaders(
-		ctx,
+		firstPayload.modelMapping.withContext(ctx),
 		c,
 		account,
 		token,
@@ -1699,24 +1707,26 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		WSURL:   wsURL,
 		Headers: wsHeaders,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
-			latest, err := s.admitOpenAITurnForGroup(factoryCtx, groupID, enforceGroup, account, firstRoutingFields[0].String(), firstPayload.payloadRaw)
+			turnPayload := poolTurnPayload.Load()
+			factoryCtx = turnPayload.modelMapping.withContext(factoryCtx)
+			latest, err := s.admitOpenAITurnForGroup(factoryCtx, groupID, enforceGroup, account, turnPayload.modelMapping.wireModel, turnPayload.payloadRaw)
 			if err != nil {
 				s.invalidateOpenAIWSTurnStateAfterAdmissionFailure(
 					factoryCtx,
 					groupID,
 					sessionHash,
-					firstPayload.previousResponseID,
+					turnPayload.previousResponseID,
 					account.ID,
 					err,
 				)
 				return nil, err
 			}
-			if err := s.applyOpenAICodexTicket(factoryCtx, latest, firstRoutingFields[0].String(), headers, "websocket"); err != nil {
+			if err := s.applyOpenAICodexTicket(factoryCtx, latest, turnPayload.modelMapping.wireModel, headers, "websocket"); err != nil {
 				s.invalidateOpenAIWSTurnStateAfterAdmissionFailure(
 					factoryCtx,
 					groupID,
 					sessionHash,
-					firstPayload.previousResponseID,
+					turnPayload.previousResponseID,
 					account.ID,
 					err,
 				)
@@ -1725,27 +1735,30 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
 		BindHandshake: func(headers http.Header) *openAIWSTurnBinding {
-			return s.bindOpenAIWSHandshake(account, firstRoutingFields[0].String(), headers)
+			turnPayload := poolTurnPayload.Load()
+			return s.bindOpenAIWSHandshake(account, turnPayload.modelMapping.wireModel, headers)
 		},
 		CheckBinding: func(checkCtx context.Context, binding *openAIWSTurnBinding) error {
-			latest, err := s.admitOpenAITurnForGroup(checkCtx, groupID, enforceGroup, account, firstRoutingFields[0].String(), firstPayload.payloadRaw)
+			turnPayload := poolTurnPayload.Load()
+			checkCtx = turnPayload.modelMapping.withContext(checkCtx)
+			latest, err := s.admitOpenAITurnForGroup(checkCtx, groupID, enforceGroup, account, turnPayload.modelMapping.wireModel, turnPayload.payloadRaw)
 			if err != nil {
 				s.invalidateOpenAIWSTurnStateAfterAdmissionFailure(
 					checkCtx,
 					groupID,
 					sessionHash,
-					firstPayload.previousResponseID,
+					turnPayload.previousResponseID,
 					account.ID,
 					err,
 				)
 				return err
 			}
-			if err := s.checkOpenAIWSBinding(latest, firstRoutingFields[0].String(), binding); err != nil {
+			if err := s.checkOpenAIWSBinding(latest, turnPayload.modelMapping.wireModel, binding); err != nil {
 				s.invalidateOpenAIWSTurnStateAfterAdmissionFailure(
 					checkCtx,
 					groupID,
 					sessionHash,
-					firstPayload.previousResponseID,
+					turnPayload.previousResponseID,
 					account.ID,
 					err,
 				)
@@ -1930,6 +1943,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	latencyGenerationStartedTurn := 0
 	priorityLatencyCtx := ctx
 	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string, clientPayload []byte) (forwardResult *OpenAIForwardResult, forwardErr error) {
+		ctx := poolTurnPayload.Load().modelMapping.withContext(ctx)
 		responseModelObserver := &upstreamResponseModelObserver{}
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
@@ -1956,7 +1970,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		turnStart := requesttiming.Now(ctx)
 		turnCtx, startDrain, finishDrain := openAIWSDrainContext(ctx)
 		defer finishDrain()
-		ctx := turnCtx
+		ctx = turnCtx
 		wroteDownstream := false
 		if err := s.acquireOpenAIRPMForSend(ctx, latest); err != nil {
 			return nil, err
@@ -3218,12 +3232,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if s.ProtectsWSNodeContinuation(account, nextClientMessage) && nextPayload.previousResponseID != strings.TrimSpace(gjson.GetBytes(nextClientMessage, "previous_response_id").String()) {
 			return wsNodeOwnerRejection()
 		}
+		// Publish one immutable turn snapshot for lazy/reconnect pool callbacks.
+		poolTurnPayload.Store(&nextPayload)
 		nextRoutingFields := gjson.GetManyBytes(nextPayload.payloadRaw, "model", "service_tier")
 		if nextPayload.promptCacheKey != "" {
 			// ingress 会话在整个客户端 WS 生命周期内复用同一上游连接；
 			// prompt_cache_key 对握手头的更新仅在未来需要重新建连时生效。
 			updatedHeaders, _, updHdrErr := s.buildOpenAIWSHeaders(
-				ctx,
+				nextPayload.modelMapping.withContext(ctx),
 				c,
 				account,
 				token,

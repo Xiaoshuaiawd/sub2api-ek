@@ -1807,10 +1807,11 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if requestModel == "" {
 		requestModel = "gpt-image-2"
 	}
+	requestModel = AccountModelMappingInput(ctx, account, requestModel, false)
 	if err := validateOpenAIImagesModel(requestModel); err != nil {
 		return nil, err
 	}
-	upstreamModel := account.GetMappedModel(requestModel)
+	upstreamModel := AccountMappedModelForRequest(ctx, account, requestModel)
 	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
 		return nil, err
 	}

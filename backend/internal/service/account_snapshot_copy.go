@@ -8,6 +8,7 @@ import "maps"
 func (a *Account) CopySchedulerSnapshot() Account {
 	copy := *a
 	copy.schedulingCandidate = false
+	copy.schedulingPrimaryRead = false
 	copy.Credentials = cloneSchedulerSnapshotMap(a.Credentials)
 	copy.Extra = cloneSchedulerSnapshotMap(a.Extra)
 	copy.GroupIDs = append([]int64(nil), a.GroupIDs...)
@@ -33,6 +34,7 @@ func (a *Account) CopySchedulerSnapshot() Account {
 func (a *Account) CopySchedulingCandidate() Account {
 	copy := *a
 	copy.schedulingCandidate = true
+	copy.schedulingPrimaryRead = false
 	copy.PrepareSharedSnapshot()
 	return copy
 }

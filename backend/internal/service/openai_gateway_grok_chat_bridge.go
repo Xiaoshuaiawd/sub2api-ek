@@ -528,8 +528,9 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 		return nil, fmt.Errorf("parse grok chat completions request: %w", err)
 	}
 	originalModel := chatReq.Model
+	responseModel := gatewayClientResponseModel(c, originalModel)
 	clientStream := chatReq.Stream
-	billingModel := resolveOpenAIChannelForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveHTTPChannelForwardModel(ctx, account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	SetOpsUpstreamModel(c, upstreamModel)
 	cacheIdentity := resolveGrokCacheIdentity(c, body, promptCacheKey, upstreamModel)
@@ -659,9 +660,9 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 
 	var result *OpenAIForwardResult
 	if clientStream {
-		result, err = s.handleChatStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body))
+		result, err = s.handleChatStreamingResponse(resp, c, account, responseModel, billingModel, upstreamModel, startTime, len(body))
 	} else {
-		result, err = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+		result, err = s.handleChatBufferedStreamingResponse(resp, c, account, responseModel, billingModel, upstreamModel, startTime)
 	}
 	if result != nil {
 		result.UpstreamEndpoint = grokChatResponsesEndpoint

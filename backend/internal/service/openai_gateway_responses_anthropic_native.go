@@ -64,11 +64,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	if strings.TrimSpace(responseModel) == "" {
 		responseModel = originalModel
 	}
+	responseModel = gatewayClientResponseModel(c, responseModel)
 	clientStream := responsesReq.Stream
 
 	// 3. Convert Responses → Anthropic
 	// Resolve the mapped model before choosing its thinking/tool protocol.
-	billingModel := resolveOpenAIChannelForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveHTTPChannelForwardModel(ctx, account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	SetOpsUpstreamModel(c, upstreamModel)
 	if err := validateClaude55Request(body, upstreamModel); err != nil {

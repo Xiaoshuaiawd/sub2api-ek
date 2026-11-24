@@ -44,13 +44,14 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 	SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
 
 	originalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	responseModel := gatewayClientResponseModel(c, originalModel)
 	if originalModel == "" {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return nil, fmt.Errorf("missing model in request")
 	}
 	clientStream := gjson.GetBytes(body, "stream").Bool()
 
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveHTTPForwardModel(ctx, account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	if upstreamModel != originalModel {
 		rewritten, err := sjson.SetBytes(body, "model", upstreamModel)
@@ -128,9 +129,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 	}
 
 	if clientStream {
-		return s.handleNativeAnthropicStreamingResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, reasoningEffort, startTime)
+		return s.handleNativeAnthropicStreamingResponse(ctx, resp, c, account, responseModel, billingModel, upstreamModel, reasoningEffort, startTime)
 	}
-	return s.handleNativeAnthropicBufferedResponse(ctx, resp, c, account, originalModel, billingModel, upstreamModel, reasoningEffort, startTime)
+	return s.handleNativeAnthropicBufferedResponse(ctx, resp, c, account, responseModel, billingModel, upstreamModel, reasoningEffort, startTime)
 }
 
 // nativeAnthropicTargetURL 组装国产供应商原生 Anthropic messages 端点。
@@ -239,7 +240,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 }
 
 // handleNativeAnthropicBufferedResponse 处理非流式原生 Anthropic 响应：
-// 校验 JSON、解析 usage、透传响应头后原样回写（仅工具名反向还原）。
+// 校验 JSON、解析 usage 后透传，仅恢复工具名和显式客户端模型。
 func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 	ctx context.Context,
 	resp *http.Response,
@@ -287,6 +288,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 		contentType = "application/json"
 	}
 	body = reverseToolNamesIfPresent(c, body)
+	body = rewriteGatewayClientModel(c, body, "model")
 	c.Data(resp.StatusCode, contentType, body)
 
 	result := &OpenAIForwardResult{

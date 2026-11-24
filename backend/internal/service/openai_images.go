@@ -671,7 +671,7 @@ func (s *OpenAIGatewayService) ForwardImages(
 	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
 		return nil, err
 	}
-	if err := parsed.ValidateAccountModels(account, channelMappedModel); err != nil {
+	if err := parsed.ValidateAccountModels(account, channelMappedModel, ctx); err != nil {
 		return nil, err
 	}
 	if account.IsSIWCEnabled() {
@@ -719,10 +719,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {
 		requestModel = mapped
 	}
-	if err := parsed.ValidateAccountModels(account, channelMappedModel); err != nil {
+	if err := parsed.ValidateAccountModels(account, channelMappedModel, ctx); err != nil {
 		return nil, err
 	}
-	upstreamModel := account.GetMappedModel(requestModel)
+	upstreamModel := AccountMappedModelForRequest(ctx, account, requestModel)
 	SetOpsUpstreamModel(c, upstreamModel)
 	logger.LegacyPrintf(
 		"service.openai_gateway",

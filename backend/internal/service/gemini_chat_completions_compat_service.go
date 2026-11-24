@@ -106,8 +106,10 @@ func (s *GeminiMessagesCompatService) forwardGeminiOpenAICompat(
 	}
 
 	mappedModel := req.Model
-	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
-		mappedModel = account.GetMappedModel(req.Model)
+	if target, matched := httpAccountModelOverride(ctx, account, req.Model); matched {
+		mappedModel = target
+	} else if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
+		mappedModel = AccountMappedModelForRequest(ctx, account, req.Model)
 	}
 
 	geminiReq, err := convertClaudeMessagesToGeminiGenerateContent(claudeBody, mappedModel)

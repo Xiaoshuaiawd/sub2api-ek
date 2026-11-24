@@ -49,6 +49,16 @@ func clientRequestedUsageFields(c *gin.Context, mapping service.ChannelMappingRe
 	return fields
 }
 
+func clientRequestedUsageFieldsForAccount(c *gin.Context, mapping service.ChannelMappingResult, fallbackModel, upstreamModel string, account *service.Account, requireCompact bool) service.ChannelUsageFields {
+	sourceModel := fallbackModel
+	if c != nil && c.Request != nil {
+		if source, _, ok := service.AccountModelMappingModels(c.Request.Context()); ok {
+			sourceModel = source
+		}
+	}
+	return clientRequestedUsageFields(c, mapping.ForAccount(account, sourceModel, requireCompact), fallbackModel, upstreamModel)
+}
+
 func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
 	if svc == nil || c == nil || c.Request == nil {
 		return nil

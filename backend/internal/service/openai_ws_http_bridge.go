@@ -661,7 +661,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		return upstreamReq, nil
 	}
 	if account.Platform == PlatformGrok {
-		upstreamModel := resolveGrokWSUpstreamModel(account, body, originalModel)
+		upstreamModel := resolveGrokWSUpstreamModelForRequest(ctx, account, body, originalModel)
 		body, err = patchGrokResponsesBody(body, upstreamModel)
 		if err != nil {
 			return nil, err
@@ -807,7 +807,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody)
 		if account.Platform == PlatformGrok {
 			shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
-			s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, resolveGrokWSUpstreamModel(account, body, originalModel)), account, resp.StatusCode, resp.Header, respBody)
+			s.handleGrokAccountUpstreamError(withGrokTeamRateLimitModel(ctx, resolveGrokWSUpstreamModelForRequest(ctx, account, body, originalModel)), account, resp.StatusCode, resp.Header, respBody)
 			if shouldFailover && (turn == 1 || resp.StatusCode == http.StatusTooManyRequests) {
 				return nil, newOpenAIUpstreamFailoverError(resp.StatusCode, resp.Header, respBody, upstreamMsg, false).WithGrokForbiddenPolicy(account)
 			}
@@ -835,7 +835,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	// upstreamCtx cancellation interrupts the transport read. Keep Body.Close
 	// on this reader's goroutine: compressed bodies cannot close during Read.
 	if account.Platform == PlatformGrok {
-		s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, resolveGrokWSUpstreamModel(account, body, originalModel)), account, resp.Header, resp.StatusCode)
+		s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, resolveGrokWSUpstreamModelForRequest(ctx, account, body, originalModel)), account, resp.Header, resp.StatusCode)
 	}
 
 	responseID := ""
@@ -1291,11 +1291,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 }
 
 func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, seedPayload, currentPayload []byte, originalModel string) (string, error) {
+	return resolveGrokWSCacheIdentityForRequest(context.Background(), c, account, seedPayload, currentPayload, originalModel)
+}
+
+func resolveGrokWSCacheIdentityForRequest(ctx context.Context, c *gin.Context, account *Account, seedPayload, currentPayload []byte, originalModel string) (string, error) {
 	body, err := prepareOpenAIWSHTTPBridgeBody(account, seedPayload)
 	if err != nil {
 		return "", err
 	}
-	upstreamModel := resolveGrokWSUpstreamModel(account, currentPayload, originalModel)
+	upstreamModel := resolveGrokWSUpstreamModelForRequest(ctx, account, currentPayload, originalModel)
 	body, err = patchGrokResponsesBody(body, upstreamModel)
 	if err != nil {
 		return "", err
@@ -1304,8 +1308,22 @@ func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, seedPayload, c
 }
 
 func resolveGrokWSUpstreamModel(account *Account, body []byte, originalModel string) string {
+	return resolveGrokWSUpstreamModelForRequest(context.Background(), account, body, originalModel)
+}
+
+func resolveGrokWSUpstreamModelForRequest(ctx context.Context, account *Account, body []byte, originalModel string) string {
 	upstreamModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	originalModel = strings.TrimSpace(originalModel)
+	if resolved, ok := ResolvedAccountModel(ctx, account, upstreamModel); ok {
+		_, _, hasBasis := AccountModelMappingModels(ctx)
+		_, explicit := account.ResolveConfiguredModelMapping(originalModel)
+		// Legacy standalone hooks may echo an unresolved provider alias. Their
+		// snapshot must not suppress builtin defaults such as grok→grok-4.6.
+		// Contextual decisions and explicit identity rules are already final.
+		if hasBasis || explicit || upstreamModel != originalModel {
+			return resolved
+		}
+	}
 	// Shared ingress has already applied channel and account mappings when the
 	// body model differs from the client-facing model. Only resolve from the
 	// original model when the body still carries that original value.

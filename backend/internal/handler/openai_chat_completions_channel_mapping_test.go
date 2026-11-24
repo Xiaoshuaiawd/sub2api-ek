@@ -82,7 +82,6 @@ func TestOpenAIChatCompletions_ChannelMappingRestoresClientModel(t *testing.T) {
 					"api_key":  "sk-test",
 					"base_url": "https://upstream.example/v1",
 					"model_mapping": map[string]any{
-						"client-model-a":   "client-model-a",
 						"upstream-model-b": "upstream-model-b",
 					},
 				},

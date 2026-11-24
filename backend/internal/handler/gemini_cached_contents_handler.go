@@ -131,6 +131,7 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, modelName)
+	c.Request = c.Request.WithContext(service.WithAccountModelMapping(c.Request.Context(), modelName, channelMapping.MappedModel))
 	reqModel := modelName
 	if channelMapping.Mapped {
 		modelName = channelMapping.MappedModel
@@ -216,7 +217,7 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 		attempts++
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		mappedModel := account.GetMappedModel(modelName)
+		mappedModel := service.AccountMappedModelForRequest(c.Request.Context(), account, modelName)
 		// Account selection may lower the context boundary after ingress admission.
 		// Recheck before creating an upstream cache or incurring storage charges.
 		currentAPIKey := apiKey
@@ -236,7 +237,7 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 			googleErrorWithType(c, http.StatusBadRequest, "invalid_request_error", service.APIKeyContextLengthExceededCode, service.APIKeyContextLengthExceededMessage)
 			return
 		}
-		usageFields := clientRequestedUsageFields(c, channelMapping, reqModel, mappedModel)
+		usageFields := clientRequestedUsageFieldsForAccount(c, channelMapping, reqModel, mappedModel, account, false)
 		if !h.gatewayService.CacheStoragePriced(c.Request.Context(), &service.RecordUsageInput{
 			Result:             &service.ForwardResult{Model: modelName, UpstreamModel: mappedModel, CacheStorageTokenHours: 1},
 			APIKey:             apiKey,

@@ -428,15 +428,27 @@ func inflightAccountMappedModelsFromSnapshot(list inflightSnapshotLister, resolv
 		if IsIntelligenceRouting(ctx) {
 			accounts = filterIntelligenceRoutingAccounts(ctx, accounts)
 		}
-		return accountMappedModelsFrom(accounts, model)
+		return accountMappedModelsFromContext(ctx, accounts, model)
 	}
 }
 
 func accountMappedModelsFrom(accounts []Account, model string) []string {
+	return accountMappedModelsFromContext(context.Background(), accounts, model)
+}
+
+func accountMappedModelsFromContext(ctx context.Context, accounts []Account, model string) []string {
 	var seen map[string]struct{}
 	var out []string
 	for i := range accounts {
 		mapped, matched := accounts[i].ResolveMappedModel(model)
+		if _, _, contextual := AccountModelMappingModels(ctx); contextual {
+			input := AccountModelMappingInput(ctx, &accounts[i], model, false)
+			if !accounts[i].IsModelSupported(input) || !accountMappingTargetAllowedForRequest(ctx, &accounts[i], model, false) {
+				continue
+			}
+			mapped = canonicalOpenAIAccountSchedulingModelForRequest(ctx, &accounts[i], model, false)
+			matched = mapped != ""
+		}
 		mapped = strings.TrimSpace(mapped)
 		if !matched || mapped == "" || mapped == model {
 			continue
@@ -492,7 +504,8 @@ func inflightBillingModelCandidates(ctx context.Context, deps inflightEstimateDe
 	}
 	if deps.resolveMapping != nil {
 		m := deps.resolveMapping(ctx, *apiKey.GroupID, channelInput)
-		probeAccountMapping = IsIntelligenceRouting(ctx) && (m.BillingModelSource == BillingModelSourceUpstream || m.BillingModelSource == BillingModelSourceResponse)
+		_, _, contextual := AccountModelMappingModels(ctx)
+		probeAccountMapping = (IsIntelligenceRouting(ctx) || contextual) && (m.BillingModelSource == BillingModelSourceUpstream || m.BillingModelSource == BillingModelSourceResponse)
 		// Account mappings are resolved from the actual forwarded model. The
 		// configured channel target can still be the billing basis when this
 		// request deliberately bypasses channel forwarding.
@@ -761,7 +774,7 @@ func (s *GatewayService) inflightEstimateDeps() inflightEstimateDeps {
 		snap := s.schedulerSnapshot
 		d.accountMappedModels = inflightAccountMappedModelsFromSnapshot(
 			func(ctx context.Context, groupID *int64, platform string, forced bool) ([]Account, error) {
-				accounts, _, err := snap.ListSchedulableAccounts(ctx, groupID, platform, forced)
+				accounts, _, err := snap.ListSchedulableCandidateAccounts(ctx, groupID, platform, forced)
 				return accounts, err
 			},
 			func(ctx context.Context, apiKey *APIKey, model string) (string, bool, bool) {
@@ -792,7 +805,7 @@ func (s *OpenAIGatewayService) inflightEstimateDeps() inflightEstimateDeps {
 		snap := s.schedulerSnapshot
 		d.accountMappedModels = inflightAccountMappedModelsFromSnapshot(
 			func(ctx context.Context, groupID *int64, platform string, forced bool) ([]Account, error) {
-				accounts, _, err := snap.ListSchedulableAccounts(ctx, groupID, platform, forced)
+				accounts, _, err := snap.ListSchedulableCandidateAccounts(ctx, groupID, platform, forced)
 				return accounts, err
 			},
 			func(ctx context.Context, apiKey *APIKey, model string) (string, bool, bool) {

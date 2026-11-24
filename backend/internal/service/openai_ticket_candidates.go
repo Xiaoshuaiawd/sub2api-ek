@@ -30,7 +30,7 @@ func (s *OpenAIGatewayService) listSchedulableAccountsForRequest(
 		if !account.IsSchedulable() || !isOpenAICodexTicketAccount(account) {
 			continue
 		}
-		model := s.openAICodexTicketOutboundModel(account, requestedModel, requireCompact)
+		model := s.openAICodexTicketOutboundModelForRequest(ctx, account, requestedModel, requireCompact)
 		if !isOpenAICodexTicketAccount(account, model) || !s.openAICodexTicketGatedModel(model) {
 			continue
 		}

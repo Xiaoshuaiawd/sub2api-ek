@@ -91,6 +91,7 @@ func (h *GatewayHandler) SystemOne(c *gin.Context) {
 	pricingCtx, pricingAt := service.WithGatewayTokenRequestPricing(c.Request.Context())
 	c.Request = c.Request.WithContext(pricingCtx)
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, model)
+	c.Request = c.Request.WithContext(service.WithAccountModelMapping(c.Request.Context(), model, channelMapping.MappedModel))
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 
 	streamStarted := false
@@ -271,7 +272,7 @@ func (h *GatewayHandler) recordSystemOneUsage(c *gin.Context, apiKey *service.AP
 			RequestPayloadHash: requestPayloadHash,
 			APIKeyService:      h.apiKeyService,
 			QuotaPlatform:      quotaPlatform,
-			ChannelUsageFields: clientRequestedUsageFields(c, mapping, model, result.UpstreamModel),
+			ChannelUsageFields: clientRequestedUsageFieldsForAccount(c, mapping, model, result.UpstreamModel, account, false),
 		}); err != nil {
 			logger.L().With(
 				zap.String("component", "handler.gateway.systemone"),

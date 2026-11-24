@@ -102,6 +102,9 @@ type Account struct {
 	// schedulingCandidate marks an internal read-only configuration view. Only
 	// its value fields and copy-on-write helpers may change before hydration.
 	schedulingCandidate bool
+	// schedulingPrimaryRead belongs only to a successful selected-account
+	// primary recheck. It prevents later cache hydration from undoing that read.
+	schedulingPrimaryRead bool
 
 	// header_overrides 热路径缓存（非持久化字段，同 model_mapping 缓存先例）
 	headerOverrideCache               map[string]string

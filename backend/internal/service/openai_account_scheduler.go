@@ -740,7 +740,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 				groupCompatible = s.service.openAIAccountMatchesSchedulingGroup(selection.Account, req.GroupID)
 			}
 			if !groupCompatible ||
-				!compatible || !s.isAccountTransportCompatible(selection.Account, req.RequiredTransport, req.RequestedModel) {
+				!compatible || !s.isAccountTransportCompatibleForRequest(ctx, selection.Account, req) {
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
@@ -881,29 +881,29 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		clearBinding()
 		return nil, false, nil
 	}
-	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
+	if shouldClearStickySession(account, AccountModelMappingInput(ctx, account, req.RequestedModel, req.RequireCompact)) || account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
 		clearBinding()
 		return nil, false, nil
 	}
 	if !s.isAccountRequestCompatible(ctx, account, req) {
 		return nil, false, nil
 	}
-	if !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+	if !s.isAccountTransportCompatibleForRequest(ctx, account, req) {
 		clearBinding()
 		return nil, false, nil
 	}
 	account = s.service.recheckSelectedOpenAIAccountFromDB(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
-	if account == nil || !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) || !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+	if account == nil || !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) || !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatibleForRequest(ctx, account, req) {
 		clearBinding()
 		return nil, false, nil
 	}
 	// A sticky binding created before BPS was enabled may still point at a
 	// native account. Do not let that old binding bypass the explicit BPS route
 	// while an eligible BPS account is available for this model.
-	if !openAIAgentRecoveryBound(ctx) && req.Platform == PlatformOpenAI && strings.TrimSpace(req.RequestedModel) != "" && !account.IsExcelBPSEnabledForModel(req.RequestedModel) && !s.service.balancesPriorityProtocols(req) {
+	if !openAIAgentRecoveryBound(ctx) && req.Platform == PlatformOpenAI && strings.TrimSpace(req.RequestedModel) != "" && !isExcelBPSEnabledForRequest(ctx, account, req.RequestedModel, req.RequireCompact) && !s.service.balancesPriorityProtocols(req) {
 		if candidates, listErr := s.service.listSchedulableAccountsForRequest(ctx, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.ExcludedIDs); listErr == nil {
 			for i := range candidates {
-				if candidates[i].ID != account.ID && candidates[i].IsExcelBPSEnabledForModel(req.RequestedModel) {
+				if candidates[i].ID != account.ID && isExcelBPSEnabledForRequest(ctx, &candidates[i], req.RequestedModel, req.RequireCompact) {
 					clearBinding()
 					return nil, false, nil
 				}
@@ -929,7 +929,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	}
 	// Team+model cool: sticky must not pin a sibling under the same team 429 window.
 	now := time.Now()
-	upstreamModel := canonicalOpenAIAccountSchedulingModel(account, req.RequestedModel)
+	upstreamModel := canonicalOpenAIAccountSchedulingModelForRequest(ctx, account, req.RequestedModel, req.RequireCompact)
 	if account != nil && isGrokTeamModelRateLimited(account, upstreamModel, now) {
 		clearBinding()
 		return nil, false, nil
@@ -1335,7 +1335,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		candidateCount:            len(candidates),
 	}
 	if len(candidates) == 0 {
-		plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
+		plan.selectionOrder = s.buildOpenAISelectionOrderForRequest(ctx, req, plan)
 		return plan
 	}
 
@@ -1489,11 +1489,19 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		plan.topK = 1
 	}
 
-	plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
+	plan.selectionOrder = s.buildOpenAISelectionOrderForRequest(ctx, req, plan)
 	return plan
 }
 
 func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
+	req OpenAIAccountScheduleRequest,
+	plan openAIAccountLoadPlan,
+) []openAIAccountCandidateScore {
+	return s.buildOpenAISelectionOrderForRequest(context.Background(), req, plan)
+}
+
+func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrderForRequest(
+	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
 	plan openAIAccountLoadPlan,
 ) []openAIAccountCandidateScore {
@@ -1524,7 +1532,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 					}
 					others = append(others, candidate.account)
 				}
-				skipSessionSticky = stickyAcc != nil && s.service.openAICodexTicketShouldYieldStickyTo(stickyAcc, others, req.RequestedModel, req.RequireCompact, req.ExcludedIDs)
+				skipSessionSticky = stickyAcc != nil && s.service.openAICodexTicketShouldYieldStickyToForRequest(ctx, stickyAcc, others, req.RequestedModel, req.RequireCompact, req.ExcludedIDs)
 			}
 			for _, stickyID := range []int64{req.StickyPreviousAccountID, req.StickyAccountID} {
 				if stickyID <= 0 {
@@ -1584,7 +1592,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		bps := make([]openAIAccountCandidateScore, 0, len(pool))
 		native := make([]openAIAccountCandidateScore, 0, len(pool))
 		for _, candidate := range pool {
-			if candidate.account != nil && candidate.account.IsExcelBPSEnabledForModel(req.RequestedModel) {
+			if candidate.account != nil && isExcelBPSEnabledForRequest(ctx, candidate.account, req.RequestedModel, req.RequireCompact) {
 				bps = append(bps, candidate)
 			} else {
 				native = append(native, candidate)
@@ -1704,7 +1712,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 		}
 
 		fresh := s.service.resolveFreshSchedulableOpenAIAccount(ctx, candidate.account, req.GroupID, req.Platform, req.RequestedModel, false, req.RequiredCapability, req.RequireCompact)
-		if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport, req.RequestedModel) || !s.isAccountRequestCompatible(ctx, fresh, req) {
+		if fresh == nil || !s.isAccountTransportCompatibleForRequest(ctx, fresh, req) || !s.isAccountRequestCompatible(ctx, fresh, req) {
 			release(result)
 			continue
 		}
@@ -1713,7 +1721,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 			break
 		}
 		fresh = s.service.recheckSelectedOpenAIAccountFromDB(ctx, fresh, req.GroupID, req.Platform, req.RequestedModel, false, req.RequiredCapability, req.RequireCompact)
-		if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport, req.RequestedModel) || !s.isAccountRequestCompatible(ctx, fresh, req) {
+		if fresh == nil || !s.isAccountTransportCompatibleForRequest(ctx, fresh, req) || !s.isAccountRequestCompatible(ctx, fresh, req) {
 			release(result)
 			continue
 		}
@@ -1796,7 +1804,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 		if err != nil || account == nil {
 			continue
 		}
-		if !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+		if !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatibleForRequest(ctx, account, req) {
 			continue
 		}
 		account = s.service.recheckSelectedOpenAIAccountFromDB(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
@@ -1812,7 +1820,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			}
 			continue
 		}
-		if !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+		if !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatibleForRequest(ctx, account, req) {
 			continue
 		}
 		if req.RequireCompact && openAICompactSupportTier(account) == 0 {
@@ -1834,7 +1842,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 		if len(s.filterGrokFreeQuotaAccounts(ctx, []Account{*account})) == 0 {
 			continue
 		}
-		upstreamModel := canonicalOpenAIAccountSchedulingModel(account, req.RequestedModel)
+		upstreamModel := canonicalOpenAIAccountSchedulingModelForRequest(ctx, account, req.RequestedModel, req.RequireCompact)
 		now := time.Now()
 		if isGrokTeamModelRateLimited(account, upstreamModel, now) ||
 			isGrokModelQuotaBlocked(account.ID, upstreamModel, now) {
@@ -1947,7 +1955,7 @@ func (s *defaultOpenAIAccountScheduler) loadOpenAIEligibleAccounts(ctx context.C
 	// Team+model rate-limit cool: siblings of a 429'd team skip the hot model.
 	if req.Platform == PlatformGrok {
 		now := time.Now()
-		filtered := filterGrokTeamModelRateLimitedAccounts(accounts, req.RequestedModel, now)
+		filtered := filterGrokSchedulingModelsForRequest(ctx, accounts, req.RequestedModel, req.RequireCompact, false, now)
 		if len(filtered) == 0 && len(accounts) > 0 {
 			return ctx, nil, nil, openAISelectionFilterStats{}, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary("grok_team_model_rate_limit"))
 		}
@@ -1955,7 +1963,7 @@ func (s *defaultOpenAIAccountScheduler) loadOpenAIEligibleAccounts(ctx context.C
 			accounts = filtered
 		}
 		// Per-account model free-usage soft-block (other models stay eligible).
-		modelFiltered := filterGrokModelQuotaBlockedAccounts(accounts, req.RequestedModel, now)
+		modelFiltered := filterGrokSchedulingModelsForRequest(ctx, accounts, req.RequestedModel, req.RequireCompact, true, now)
 		if len(modelFiltered) == 0 && len(accounts) > 0 {
 			return ctx, nil, nil, openAISelectionFilterStats{}, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary("grok_model_quota_block"))
 		}
@@ -1993,15 +2001,15 @@ func (s *defaultOpenAIAccountScheduler) loadOpenAIEligibleAccounts(ctx context.C
 			filterStats.exclude("platform_mismatch")
 			continue
 		}
-		if s.service.isExcelBPSModelCoolingDown(account, req.RequestedModel) {
+		if s.service.isExcelBPSModelCoolingDownForRequest(ctx, account, req.RequestedModel, req.RequireCompact) {
 			filterStats.exclude(excelBPSModelPermissionFilterReason)
 			continue
 		}
-		if s.service.isExcelBPSCoolingDown(account, req.RequestedModel) {
+		if s.service.isExcelBPSCoolingDownForRequest(ctx, account, req.RequestedModel, req.RequireCompact) {
 			filterStats.exclude(excelBPSRateLimitedFilterReason)
 			continue
 		}
-		if s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel, req.RequireCompact) {
+		if s.service.isOpenAIAccountRequestRuntimeBlockedForRequest(ctx, account, req.RequestedModel, req.RequireCompact) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
@@ -2016,7 +2024,7 @@ func (s *defaultOpenAIAccountScheduler) loadOpenAIEligibleAccounts(ctx context.C
 			filterStats.exclude(reason)
 			continue
 		}
-		if !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+		if !s.isAccountTransportCompatibleForRequest(ctx, account, req) {
 			filterStats.exclude("transport_incompatible")
 			continue
 		}
@@ -2031,7 +2039,7 @@ func (s *defaultOpenAIAccountScheduler) loadOpenAIEligibleAccounts(ctx context.C
 			// Use the existing scheduling authority here; selected-account primary
 			// rechecks remain after acquisition, avoiding a full-pool SQL fanout.
 			account = s.service.resolveFreshSchedulableOpenAIAccount(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
-			if account == nil || !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) || !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatible(account, req.RequiredTransport, req.RequestedModel) {
+			if account == nil || !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) || !s.isAccountRequestCompatible(ctx, account, req) || !s.isAccountTransportCompatibleForRequest(ctx, account, req) {
 				filterStats.exclude("fresh_ineligible")
 				continue
 			}
@@ -2079,7 +2087,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	if req.Platform == PlatformOpenAI && strings.TrimSpace(req.RequestedModel) != "" && !s.service.balancesPriorityProtocols(req) {
 		var bps, native []*Account
 		for _, account := range filtered {
-			if account.IsExcelBPSEnabledForModel(req.RequestedModel) {
+			if isExcelBPSEnabledForRequest(ctx, account, req.RequestedModel, req.RequireCompact) {
 				bps = append(bps, account)
 			} else {
 				native = append(native, account)
@@ -2332,14 +2340,14 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 				}
 			}
 			fresh := s.service.resolveFreshSchedulableOpenAIAccount(ctx, candidate.account, req.GroupID, req.Platform, req.RequestedModel, false, req.RequiredCapability, req.RequireCompact)
-			if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport, req.RequestedModel) || !s.isAccountRequestCompatible(ctx, fresh, req) {
+			if fresh == nil || !s.isAccountTransportCompatibleForRequest(ctx, fresh, req) || !s.isAccountRequestCompatible(ctx, fresh, req) {
 				continue
 			}
 			if !s.consumeOpenAISelectionDBRecheck(budget) {
 				return nil, candidateCount, topK, loadSkew, budget.selectionExhaustedError(noAvailableOpenAISelectionError(req.RequestedModel, compactBlocked, filterStats.summary("selection_order_exhausted")))
 			}
 			fresh = s.service.recheckSelectedOpenAIAccountFromDB(ctx, fresh, req.GroupID, req.Platform, req.RequestedModel, false, req.RequiredCapability, req.RequireCompact)
-			if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport, req.RequestedModel) || !s.isAccountRequestCompatible(ctx, fresh, req) {
+			if fresh == nil || !s.isAccountTransportCompatibleForRequest(ctx, fresh, req) || !s.isAccountRequestCompatible(ctx, fresh, req) {
 				continue
 			}
 			if denied := s.service.priorityLatencyAdmission(req, fresh); denied != nil {
@@ -2410,6 +2418,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	req.RequestedModel = AccountModelMappingInput(ctx, account, req.RequestedModel, req.RequireCompact)
 	if !intelligenceRoutingAllowsAccount(ctx, account) {
 		return false, "intelligence_routing_class_mismatch"
 	}
@@ -2427,7 +2436,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if req.RequirePrivacySet && !account.IsPrivacySet() {
 		return false, "privacy_not_set"
 	}
-	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel, req.RequireCompact) {
+	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlockedForRequest(ctx, account, req.RequestedModel, req.RequireCompact) {
 		return false, "runtime_blocked"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {
@@ -2455,7 +2464,8 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}) {
 		return false, "shadow_parent_unhealthy"
 	}
-	if req.RequestedModel != "" && !supportsOpenAIRequestModel(account, req.RequestedModel, req.RequireCompact) {
+	if !accountMappingTargetAllowedForRequest(ctx, account, req.RequestedModel, req.RequireCompact) ||
+		req.RequestedModel != "" && !supportsOpenAIRequestModel(account, req.RequestedModel, req.RequireCompact) {
 		return false, "model_not_supported"
 	}
 	if req.RequestedModel != "" && !pelicanGroupTestModelAllowed(ctx, account, req.RequestedModel) {
@@ -2949,7 +2959,7 @@ func (s *OpenAIGatewayService) selectLegacyAccountByPreviousResponse(
 		ExcludedIDs:             excludedIDs,
 		RequirePrivacySet:       s.openAIGroupRequiresPrivacySet(ctx, groupID),
 	})
-	if !s.openAIAccountMatchesSchedulingGroup(account, groupID) || !compatible || !scheduler.isAccountTransportCompatible(account, requiredTransport, requestedModel) {
+	if !s.openAIAccountMatchesSchedulingGroup(account, groupID) || !compatible || !s.isOpenAIAccountTransportCompatibleForRequest(ctx, account, requiredTransport, requestedModel, requireCompact) {
 		if selection.ReleaseFunc != nil {
 			selection.ReleaseFunc()
 		}
@@ -3074,7 +3084,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 			legacySessionHash = ""
 		}
 		acceptLegacyAccount := func(account *Account) bool {
-			return s.isOpenAIAccountTransportCompatible(account, requiredTransport, requestedModel) &&
+			return s.isOpenAIAccountTransportCompatibleForRequest(ctx, account, requiredTransport, requestedModel, requireCompact) &&
 				accountSupportsOpenAICapabilitiesForRequest(ctx, account, requestedModel, requiredCapability, requiredImageCapability)
 		}
 		if requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE {
@@ -3181,6 +3191,8 @@ func accountSupportsOpenAICapabilities(ctx context.Context, account *Account, re
 }
 
 func accountSupportsOpenAICapabilitiesForRequest(ctx context.Context, account *Account, requestedModel string, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) bool {
+	compact := requiredCapability == OpenAIEndpointCapabilityResponsesCompact
+	requestedModel = AccountModelMappingInput(ctx, account, requestedModel, compact)
 	if openAIImageRequestRejection(ctx, account, requestedModel) != "" {
 		return false
 	}

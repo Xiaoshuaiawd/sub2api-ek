@@ -127,7 +127,7 @@ func (s *OpenAIGatewayService) forwardSIWC(ctx context.Context, c *gin.Context, 
 		return nil, infraerrors.BadRequest("OPENAI_SIWC_UNSUPPORTED_ENDPOINT", "SIWC supports /v1/responses only")
 	}
 	reqModel := gjson.GetBytes(body, "model").String()
-	mapped := normalizeOpenAIModelForUpstream(account, resolveOpenAIForwardModel(account, reqModel, ""))
+	mapped := normalizeOpenAIModelForUpstream(account, resolveHTTPForwardModel(ctx, account, reqModel, ""))
 	upstream, err := sjson.SetBytes(body, "model", mapped)
 	if err != nil {
 		return nil, err
@@ -152,5 +152,12 @@ func (s *OpenAIGatewayService) forwardSIWC(ctx context.Context, c *gin.Context, 
 	defer releaseProxy()
 	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 	clientModel, _ := ctx.Value(openAIClientModelContextKey{}).(string)
-	return s.forwardOpenAIPassthrough(withOpenAITransportMode(proxyCtx, "siwc"), c, account, body, upstream, reqModel, false, extractOpenAIReasoningEffortFromBody(body, reqModel), gjson.GetBytes(body, "stream").Bool(), start, clientModel)
+	if clientModel == "" {
+		clientModel = gatewayClientResponseModel(c, reqModel)
+	}
+	result, forwardErr := s.forwardOpenAIPassthrough(withOpenAITransportMode(proxyCtx, "siwc"), c, account, upstream, body, reqModel, true, extractOpenAIReasoningEffortFromBody(upstream, mapped), gjson.GetBytes(body, "stream").Bool(), start, clientModel)
+	if result != nil && result.UpstreamModel == "" {
+		result.UpstreamModel = mapped
+	}
+	return result, forwardErr
 }

@@ -18,8 +18,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// A is the client model, B is a channel-only mapping, and C is an account
-// mapping. Intelligence requests bypass A→B, but must still apply A→C.
+// A is the channel input, B is its configured target, and C is an explicit
+// account target. An account rule keyed by A takes precedence for every request.
 func TestIntelligenceChannelMappingOpenAIHTTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, endpoint := range []string{"chat", "responses"} {
@@ -31,7 +31,11 @@ func TestIntelligenceChannelMappingOpenAIHTTP(t *testing.T) {
 				wantUpstream string
 				history      string
 			}{
-				{"ordinary_retains_channel_mapping", false, map[string]any{"client-model-a": "account-model-c", "upstream-model-b": "upstream-model-b"}, "upstream-model-b", ""},
+				{"account_original_rule_overrides_channel", false, map[string]any{"client-model-a": "account-model-c", "upstream-model-b": "upstream-model-b"}, "account-model-c", ""},
+				{"ordinary_without_original_account_rule_retains_channel", false, map[string]any{"upstream-model-b": "upstream-model-b"}, "upstream-model-b", ""},
+				{"account_identity_rule_overrides_channel", false, map[string]any{"client-model-a": "client-model-a", "upstream-model-b": "upstream-model-b"}, "client-model-a", ""},
+				{"account_wildcard_rule_overrides_channel", false, map[string]any{"client-model-*": "account-model-c", "upstream-model-b": "upstream-model-b"}, "account-model-c", ""},
+				{"account_target_is_not_mapped_twice", false, map[string]any{"client-model-a": "account-model-c", "account-model-c": "wrong-second-target", "upstream-model-b": "upstream-model-b"}, "account-model-c", ""},
 				{"intelligence_preserves_original_model", true, map[string]any{"client-model-a": "client-model-a"}, "client-model-a", ""},
 				{"intelligence_preserves_account_mapping", true, map[string]any{"client-model-a": "account-model-c"}, "account-model-c", ""},
 				{"ordinary_after_intelligence_history", false, map[string]any{"upstream-model-b": "upstream-model-b"}, "upstream-model-b", "Create an SVG of a pelican riding a bicycle"},
@@ -122,12 +126,9 @@ func TestIntelligenceChannelMappingResponsesWebSocket(t *testing.T) {
 				accountModelMapping: map[string]any{"public-model": "account-model"},
 			})
 			require.Len(t, got.upstreamPayloads, 2)
-			// WebSocket passthrough has always skipped account-level mapping;
-			// ctx_pool retains it. Both must skip the channel mapping.
+			// The explicit account rule wins over the channel target in every
+			// websocket transport, including passthrough.
 			want := "account-model"
-			if mode == service.OpenAIWSIngressModePassthrough {
-				want = "public-model"
-			}
 			for _, payload := range got.upstreamPayloads {
 				require.Equal(t, want, gjson.GetBytes(payload, "model").String())
 			}

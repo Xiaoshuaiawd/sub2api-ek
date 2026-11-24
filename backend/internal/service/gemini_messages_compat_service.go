@@ -552,7 +552,7 @@ func (s *GeminiMessagesCompatService) HasAntigravityAccounts(ctx context.Context
 
 func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
 	if account.gatewayProtocolsPending() {
-		view, err := s.gatewayProtocolAccount(ctx, account, "gemini", gatewayProtocolBodyModel(body))
+		view, err := s.gatewayProtocolAccount(ctx, account, "gemini", AccountModelMappingInput(ctx, account, gatewayProtocolBodyModel(body), false))
 		if err != nil {
 			return nil, err
 		}
@@ -579,8 +579,10 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 	originalModel := req.Model
 	mappedModel := req.Model
-	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
-		mappedModel = account.GetMappedModel(req.Model)
+	if target, matched := httpAccountModelOverride(ctx, account, req.Model); matched {
+		mappedModel = target
+	} else if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
+		mappedModel = AccountMappedModelForRequest(ctx, account, req.Model)
 	}
 
 	geminiReq, err := convertClaudeMessagesToGeminiGenerateContent(body, mappedModel)
@@ -1139,7 +1141,7 @@ func isGeminiSignatureRelatedError(respBody []byte) bool {
 
 func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte) (*ForwardResult, error) {
 	if account.gatewayProtocolsPending() {
-		view, err := s.gatewayProtocolAccount(ctx, account, "gemini", originalModel)
+		view, err := s.gatewayProtocolAccount(ctx, account, "gemini", AccountModelMappingInput(ctx, account, originalModel, false))
 		if err != nil {
 			return nil, err
 		}
@@ -1180,8 +1182,10 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	body = ensureGeminiFunctionCallThoughtSignatures(body)
 
 	mappedModel := originalModel
-	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
-		mappedModel = account.GetMappedModel(originalModel)
+	if target, matched := httpAccountModelOverride(ctx, account, originalModel); matched {
+		mappedModel = target
+	} else if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
+		mappedModel = AccountMappedModelForRequest(ctx, account, originalModel)
 	}
 	if action != "countTokens" && geminiImageGenerationDenied(c, body, originalModel, mappedModel) {
 		return nil, s.writeGoogleError(c, http.StatusBadRequest, ImageGenerationPermissionMessage())

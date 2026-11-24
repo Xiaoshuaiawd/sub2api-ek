@@ -65,6 +65,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if len(responseModels) > 0 && strings.TrimSpace(responseModels[0]) != "" {
 		responseModel = responseModels[0]
 	}
+	responseModel = gatewayClientResponseModel(c, responseModel)
 
 	clientStream := responsesReq.Stream
 	// Codex omits reasoning.summary when configured with summary=none.
@@ -96,7 +97,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return nil, fmt.Errorf("convert responses to chat completions: %w", err)
 	}
 
-	billingModel := resolveOpenAIForwardModel(account, originalModel, "")
+	billingModel := resolveHTTPForwardModel(ctx, account, originalModel, "")
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	if err := validateGPT61CompatRequest(body, upstreamModel); err != nil {
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())

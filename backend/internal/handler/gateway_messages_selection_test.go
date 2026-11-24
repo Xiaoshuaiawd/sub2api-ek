@@ -252,9 +252,9 @@ func TestGatewayProtocolMessagesChannelMappingPreservesBindingModel(t *testing.T
 					Credentials: map[string]any{"upstream_kind": "new_api", "api_key": "synthetic-only", "base_url": peer.URL + "/tenant/v1"},
 					GroupIDs:    []int64{groupID}, AccountGroups: []service.AccountGroup{{AccountID: 9596, GroupID: groupID, AllowedModels: []string{publicModel}}}}
 				if scenario == "channel-account-mapping" {
-					// Selection checks source keys; forwarding maps the channel result,
-					// exactly as the existing handler and legacy account contract do.
-					account.Credentials["model_mapping"] = map[string]any{publicModel: "selection-target-not-wire", "relay-sonnet": wantWire}
+					// Selection keeps the source key, and its explicit account target
+					// wins over the channel target without a second mapping hop.
+					account.Credentials["model_mapping"] = map[string]any{publicModel: wantWire, "relay-sonnet": "wrong-channel-chain"}
 				}
 				sharedCache := &fakeSchedulerCache{}
 				if legacy {
@@ -352,7 +352,7 @@ func TestGatewayProtocolMessagesChannelMappingPreservesBindingModel(t *testing.T
 					if mapped {
 						chain := publicModel + "→relay-sonnet"
 						if scenario == "channel-account-mapping" {
-							chain += "→" + wantWire
+							chain = publicModel + "→" + wantWire
 						}
 						require.NotNil(t, log.ModelMappingChain)
 						require.Equal(t, chain, *log.ModelMappingChain)

@@ -855,10 +855,14 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 }
 
 func (s *OpenAIGatewayService) openAICodexTicketReadyForRequest(account *Account, requestedModel string, requireCompact bool) bool {
+	return s.openAICodexTicketReadyForContext(context.Background(), account, requestedModel, requireCompact)
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketReadyForContext(ctx context.Context, account *Account, requestedModel string, requireCompact bool) bool {
 	if s == nil || account == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabled() {
 		return false
 	}
-	outbound := s.openAICodexTicketOutboundModel(account, requestedModel, requireCompact)
+	outbound := s.openAICodexTicketOutboundModelForRequest(ctx, account, requestedModel, requireCompact)
 	if !isOpenAICodexTicketAccount(account, outbound) {
 		return false
 	}
@@ -975,10 +979,14 @@ func (s *OpenAIGatewayService) openAICodexTicketHarvestExcluded(account *Account
 // account (for example a 5x that is no longer harvested) would otherwise pin
 // traffic forever even after a higher-priority account such as 20x harvests.
 func (s *OpenAIGatewayService) openAICodexTicketShouldYieldStickyTo(sticky *Account, candidates []*Account, requestedModel string, requireCompact bool, excludedIDs map[int64]struct{}) bool {
+	return s.openAICodexTicketShouldYieldStickyToForRequest(context.Background(), sticky, candidates, requestedModel, requireCompact, excludedIDs)
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketShouldYieldStickyToForRequest(ctx context.Context, sticky *Account, candidates []*Account, requestedModel string, requireCompact bool, excludedIDs map[int64]struct{}) bool {
 	if s == nil || sticky == nil || !s.openAICodexTicketEnabled() {
 		return false
 	}
-	outbound := s.openAICodexTicketOutboundModel(sticky, requestedModel, requireCompact)
+	outbound := s.openAICodexTicketOutboundModelForRequest(ctx, sticky, requestedModel, requireCompact)
 	if !s.openAICodexTicketGatedModel(outbound) {
 		return false
 	}
@@ -995,10 +1003,10 @@ func (s *OpenAIGatewayService) openAICodexTicketShouldYieldStickyTo(sticky *Acco
 		if openAIAccountSchedulingPriority(account) >= stickyPriority {
 			continue
 		}
-		if s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel, requireCompact) {
+		if s.isOpenAIAccountRequestRuntimeBlockedForRequest(ctx, account, requestedModel, requireCompact) {
 			continue
 		}
-		if !s.openAICodexTicketReadyForRequest(account, requestedModel, requireCompact) {
+		if !s.openAICodexTicketReadyForContext(ctx, account, requestedModel, requireCompact) {
 			continue
 		}
 		return true
@@ -1018,7 +1026,7 @@ func (s *OpenAIGatewayService) openAICodexTicketShouldYieldSticky(ctx context.Co
 	for i := range accounts {
 		candidates = append(candidates, &accounts[i])
 	}
-	return s.openAICodexTicketShouldYieldStickyTo(sticky, candidates, requestedModel, requireCompact, excludedIDs)
+	return s.openAICodexTicketShouldYieldStickyToForRequest(ctx, sticky, candidates, requestedModel, requireCompact, excludedIDs)
 }
 
 func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, account *Account, token, model, proxyURL string, attemptTimeout time.Duration) (state string, status int, err error) {
