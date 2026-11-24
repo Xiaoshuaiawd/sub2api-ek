@@ -99,6 +99,9 @@ type Account struct {
 	// modelMappingCacheShared 为 true 时缓存来自只读共享母本（见 PrepareSharedSnapshot），
 	// 指针、长度与运行时版本匹配即直接复用预解析结果，不计算签名。
 	modelMappingCacheShared bool
+	// schedulingCandidate marks an internal read-only configuration view. Only
+	// its value fields and copy-on-write helpers may change before hydration.
+	schedulingCandidate bool
 
 	// header_overrides 热路径缓存（非持久化字段，同 model_mapping 缓存先例）
 	headerOverrideCache               map[string]string

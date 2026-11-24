@@ -1670,6 +1670,7 @@ type ChatCompletionsToResponsesStreamState struct {
 	ToolCalls       map[int]*ChatToolCall
 	ToolItemIDs     map[int]string
 	ToolOutputIndex map[int]int
+	toolArguments   map[int]*strings.Builder
 
 	// CustomTools 是客户端请求中 custom/freeform 工具的名字集合（见
 	// CustomToolNames）。命中的调用按 custom_tool_call 生命周期下发，codex 才能
@@ -1718,11 +1719,32 @@ func NewChatCompletionsToResponsesStreamState(model string) *ChatCompletionsToRe
 		ToolCalls:        make(map[int]*ChatToolCall),
 		ToolItemIDs:      make(map[int]string),
 		ToolOutputIndex:  make(map[int]int),
+		toolArguments:    make(map[int]*strings.Builder),
 		toolIsCustom:     make(map[int]bool),
 		toolIsToolSearch: make(map[int]bool),
 		toolNamespace:    make(map[int]NamespacedToolName),
 		toolAnnounced:    make(map[int]bool),
 	}
+}
+
+func (state *ChatCompletionsToResponsesStreamState) appendToolArguments(index int, call *ChatToolCall, delta string) {
+	if state.toolArguments == nil {
+		state.toolArguments = make(map[int]*strings.Builder)
+	}
+	buffer := state.toolArguments[index]
+	if buffer == nil {
+		buffer = &strings.Builder{}
+		state.toolArguments[index] = buffer
+	}
+	// The published string normally shares this builder's current prefix, so
+	// equality is constant-time. Honor callers that explicitly replace the
+	// public ToolCalls state without rescanning a prefix on ordinary deltas.
+	if buffer.String() != call.Function.Arguments {
+		buffer.Reset()
+		_, _ = buffer.WriteString(call.Function.Arguments)
+	}
+	_, _ = buffer.WriteString(delta)
+	call.Function.Arguments = buffer.String()
 }
 
 // ValidateToolCallArguments checks the accumulated function-call arguments
@@ -1848,7 +1870,7 @@ func ChatCompletionsChunkToResponsesEvents(
 			}
 			events = append(events, announceChatToolItem(state, idx, stored, false)...)
 			if toolCall.Function.Arguments != "" {
-				stored.Function.Arguments += toolCall.Function.Arguments
+				state.appendToolArguments(idx, stored, toolCall.Function.Arguments)
 				// 未宣告（名字未到）时仅累积，宣告时统一补发；custom 调用的
 				// arguments 是包裹 input 的 JSON 片段，无法增量还原为自由文本
 				// 输入，缓冲整份 arguments 收尾时一次性下发（见 closeChatToolItems）；

@@ -273,11 +273,20 @@ func (s *SchedulerSnapshotService) filterPerformanceAccounts(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Account, 0, len(accounts))
+	ownedCandidates := schedulingCandidatesOwnValues(accounts)
+	var out []Account
+	if ownedCandidates {
+		out = accounts[:0]
+	} else {
+		out = make([]Account, 0, len(accounts))
+	}
 	for _, a := range accounts {
 		if !a.PerformancePaused && !paused[a.ID] {
 			out = append(out, a)
 		}
+	}
+	if ownedCandidates {
+		clear(accounts[len(out):])
 	}
 	return out, nil
 }

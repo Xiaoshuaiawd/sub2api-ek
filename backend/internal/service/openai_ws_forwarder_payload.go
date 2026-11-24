@@ -542,12 +542,12 @@ func openAIWSPayloadStringView(payload []byte) string {
 	return unsafe.String(unsafe.SliceData(payload), len(payload))
 }
 
-// openAIWSRawMessageFromResult 优先返回 parent 的子切片（gjson 值零拷贝共享），
-// Index 不可用时回退为复制。共享要求 parent 遵守上面的不可变约定。
+// openAIWSRawMessageFromResult shares an immutable parent region when possible.
+// Clamp capacity so appending to one item cannot overwrite adjacent items.
 func openAIWSRawMessageFromResult(parent []byte, value gjson.Result) json.RawMessage {
 	idx := value.Index
-	if idx > 0 && idx+len(value.Raw) <= len(parent) && string(parent[idx:idx+len(value.Raw)]) == value.Raw {
-		return json.RawMessage(parent[idx : idx+len(value.Raw)])
+	if idx >= 0 && idx+len(value.Raw) <= len(parent) && string(parent[idx:idx+len(value.Raw)]) == value.Raw {
+		return json.RawMessage(parent[idx : idx+len(value.Raw) : idx+len(value.Raw)])
 	}
 	return json.RawMessage(value.Raw)
 }
@@ -596,8 +596,9 @@ func normalizeOpenAIWSPayloadWithoutInputAndPreviousResponseID(payload []byte) (
 	return json.Marshal(decoded)
 }
 
-// openAIWSExtractNormalizedInputSequence 拆出 input 序列。返回的正文尽可能与
-// payload 共享底层数组（零拷贝），受 replay 所有权不变式保护。
+// Inputs normally share the immutable frame. When a small input would pin at
+// least 64 KiB of mostly unrelated metadata/tools, own one input-sized region
+// instead; every item shares that region rather than making per-item copies.
 func openAIWSExtractNormalizedInputSequence(payload []byte) ([]json.RawMessage, bool, error) {
 	if len(payload) == 0 {
 		return nil, false, nil
@@ -605,6 +606,14 @@ func openAIWSExtractNormalizedInputSequence(payload []byte) ([]json.RawMessage, 
 	inputValue := gjson.Get(openAIWSPayloadStringView(payload), "input")
 	if !inputValue.Exists() {
 		return nil, false, nil
+	}
+	if inputValue.Type != gjson.String {
+		const minUnrelatedFrameBytes = 64 << 10
+		inputRaw := openAIWSRawMessageFromResult(payload, inputValue)
+		if len(payload)-len(inputRaw) >= minUnrelatedFrameBytes && len(inputRaw) <= len(payload)/2 {
+			payload = bytes.Clone(inputRaw)
+			inputValue = gjson.Parse(openAIWSPayloadStringView(payload))
+		}
 	}
 	if inputValue.Type == gjson.JSON {
 		if inputValue.IsArray() {

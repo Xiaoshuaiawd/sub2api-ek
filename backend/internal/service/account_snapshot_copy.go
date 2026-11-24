@@ -7,6 +7,7 @@ import "maps"
 // plain struct copy is insufficient even after the model-limit COW fix.
 func (a *Account) CopySchedulerSnapshot() Account {
 	copy := *a
+	copy.schedulingCandidate = false
 	copy.Credentials = cloneSchedulerSnapshotMap(a.Credentials)
 	copy.Extra = cloneSchedulerSnapshotMap(a.Extra)
 	copy.GroupIDs = append([]int64(nil), a.GroupIDs...)
@@ -22,6 +23,38 @@ func (a *Account) CopySchedulerSnapshot() Account {
 	raw, _ := copy.Credentials["model_mapping"].(map[string]any)
 	copy.modelMappingCacheRawPtr = mapPtr(raw)
 	return copy
+}
+
+// CopySchedulingCandidate gives the scheduler its own value fields and lazy
+// caches while sharing immutable configuration with a prepared snapshot.
+// Credentials, Extra and model/group slices must only be read; use existing
+// copy-on-write helpers for local limit updates. Hydrate the selected account
+// before it reaches forwarding or any other mutable account consumer.
+func (a *Account) CopySchedulingCandidate() Account {
+	copy := *a
+	copy.schedulingCandidate = true
+	copy.PrepareSharedSnapshot()
+	return copy
+}
+
+// IsSchedulingCandidate reports an internal configuration-only view. The flag
+// is not serialized and full-account hydration always returns a mutable object.
+func (a *Account) IsSchedulingCandidate() bool {
+	return a != nil && a.schedulingCandidate
+}
+
+// schedulingCandidatesOwnValues permits in-place filtering only for the
+// dedicated reader's independently allocated value slice, never public input.
+func schedulingCandidatesOwnValues(accounts []Account) bool {
+	if len(accounts) == 0 {
+		return false
+	}
+	for i := range accounts {
+		if !accounts[i].IsSchedulingCandidate() {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneSchedulerSnapshotMap(source map[string]any) map[string]any {

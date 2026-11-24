@@ -5,6 +5,7 @@ package service
 // 无任何行为变更。
 
 import (
+	"container/heap"
 	"context"
 	"fmt"
 	"log/slog"
@@ -716,6 +717,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	loadMap, err := s.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if err != nil {
 		if result, ok, legacyErr := s.tryAcquireByLegacyOrder(ctx, candidates, groupID, sessionHash, preferOAuth); legacyErr != nil {
 			return nil, legacyErr
@@ -737,19 +741,15 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 		}
 
-		// 分层过滤选择：优先级 →（可选）最早重置 → 负载率 → LRU
-		for len(available) > 0 {
-			// 1. 取优先级最小的集合
-			candidates := filterByMinPriority(available)
-			// 2. （可选）use-it-or-lose-it：优先选用会话窗口最早重置的账号
-			if cfg.PreferSoonestReset {
-				candidates = filterBySoonestReset(candidates)
+		// Build the layered order once; failed acquisitions consume a candidate
+		// without rescanning/copying all remaining accounts on every retry.
+		ordered := newLoadAwareSelectionQueue(available, cfg.PreferSoonestReset, preferOAuth)
+		for {
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
-			// 3. 取负载率最低的集合
-			candidates = filterByMinLoadRate(candidates)
-			// 4. LRU 选择最久未用的账号
-			selected := selectByLRU(candidates, preferOAuth)
-			if selected == nil {
+			selected, ok := ordered.next(time.Now())
+			if !ok {
 				break
 			}
 
@@ -765,22 +765,15 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					return s.newSelectionResult(ctx, selected.account, true, result.ReleaseFunc, nil)
 				}
 			}
-
-			// 移除已尝试的账号，重新进行分层过滤
-			selectedID := selected.account.ID
-			newAvailable := make([]accountWithLoad, 0, len(available)-1)
-			for _, acc := range available {
-				if acc.account.ID != selectedID {
-					newAvailable = append(newAvailable, acc)
-				}
-			}
-			available = newAvailable
 		}
 	}
 
 	// ============ Layer 3: 兜底排队 ============
 	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
 	for _, acc := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// 会话数量限制检查（等待计划也需要占用会话配额）
 		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
 			continue // 会话限制已满，尝试下一个账号
@@ -800,6 +793,9 @@ func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates
 	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
 
 	for _, acc := range ordered {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
 		if err == nil && result.Acquired {
 			// 会话数量限制检查
@@ -1600,6 +1596,204 @@ func (s *GatewayService) newSelectionResult(ctx context.Context, account *Accoun
 		ReleaseFunc: release,
 		WaitPlan:    waitPlan,
 	}), nil
+}
+
+// loadAwareSelectionQueue owns a request-local slice, never account snapshots.
+// Priorities are visited separately so a later priority's reset window cannot
+// outrank an earlier priority's unknown window. Within a priority, live reset
+// buckets precede unknown/expired buckets, using the same weighted-load/LRU/
+// OAuth tiers as the old layered filters. Each entry moves buckets at most once:
+// construction and complete consumption take O(N log N) time and O(N) space.
+type loadAwareSelectionQueue struct {
+	remaining   []accountWithLoad
+	preferReset bool
+	preferOAuth bool
+	tiers       []loadSelectionBucket
+	active      loadSelectionHeap
+	unknown     loadSelectionHeap
+	attempted   map[int64]struct{}
+}
+
+type loadSelectionBucket struct {
+	reset   time.Time
+	tier    int
+	members []accountWithLoad
+}
+
+type loadSelectionHeap struct {
+	buckets []*loadSelectionBucket
+	byReset bool
+}
+
+func (h loadSelectionHeap) Len() int { return len(h.buckets) }
+func (h loadSelectionHeap) Less(i, j int) bool {
+	a, b := h.buckets[i], h.buckets[j]
+	if h.byReset && !a.reset.Equal(b.reset) {
+		return a.reset.Before(b.reset)
+	}
+	return a.tier < b.tier
+}
+func (h loadSelectionHeap) Swap(i, j int) { h.buckets[i], h.buckets[j] = h.buckets[j], h.buckets[i] }
+func (h *loadSelectionHeap) Push(value any) {
+	h.buckets = append(h.buckets, value.(*loadSelectionBucket))
+}
+func (h *loadSelectionHeap) Pop() any {
+	i := len(h.buckets) - 1
+	value := h.buckets[i]
+	h.buckets[i] = nil
+	h.buckets = h.buckets[:i]
+	return value
+}
+
+// Layer2's LRU filter uses complete timestamps. The legacy fallback shuffle
+// intentionally groups by seconds, so its sameLastUsedAt helper is unsuitable.
+func sameLoadSelectionLastUsed(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+func sameLoadSelectionTier(a, b accountWithLoad, preferOAuth bool) bool {
+	return accountLoadPreferenceRate(a.account, a.loadInfo.LoadRate) == accountLoadPreferenceRate(b.account, b.loadInfo.LoadRate) &&
+		sameLoadSelectionLastUsed(a.account.LastUsedAt, b.account.LastUsedAt) &&
+		(!preferOAuth || (a.account.Type == AccountTypeOAuth) == (b.account.Type == AccountTypeOAuth))
+}
+
+func newLoadAwareSelectionQueue(accounts []accountWithLoad, preferReset, preferOAuth bool) *loadAwareSelectionQueue {
+	sort.Slice(accounts, func(i, j int) bool {
+		a, b := accounts[i], accounts[j]
+		if a.account.Priority != b.account.Priority {
+			return a.account.Priority < b.account.Priority
+		}
+		aLoad := accountLoadPreferenceRate(a.account, a.loadInfo.LoadRate)
+		bLoad := accountLoadPreferenceRate(b.account, b.loadInfo.LoadRate)
+		if aLoad != bLoad {
+			return aLoad < bLoad
+		}
+		aUsed, bUsed := a.account.LastUsedAt, b.account.LastUsedAt
+		if !sameLoadSelectionLastUsed(aUsed, bUsed) {
+			if aUsed == nil {
+				return true
+			}
+			if bUsed == nil {
+				return false
+			}
+			return aUsed.Before(*bUsed)
+		}
+		return preferOAuth && a.account.Type == AccountTypeOAuth && b.account.Type != AccountTypeOAuth
+	})
+	return &loadAwareSelectionQueue{
+		remaining: accounts, preferReset: preferReset, preferOAuth: preferOAuth,
+		attempted: make(map[int64]struct{}, len(accounts)),
+	}
+}
+
+func (q *loadAwareSelectionQueue) nextPriority() bool {
+	if len(q.remaining) == 0 {
+		return false
+	}
+	n := 1
+	for n < len(q.remaining) && q.remaining[n].account.Priority == q.remaining[0].account.Priority {
+		n++
+	}
+	accounts := q.remaining[:n]
+	q.remaining = q.remaining[n:]
+	q.tiers = make([]loadSelectionBucket, n)
+	q.active = loadSelectionHeap{byReset: true}
+	q.unknown = loadSelectionHeap{}
+	type resetEntry struct {
+		account accountWithLoad
+		tier    int
+	}
+	var resets []resetEntry
+	tier := -1
+	for i, account := range accounts {
+		if i == 0 || !sameLoadSelectionTier(accounts[i-1], account, q.preferOAuth) {
+			tier++
+			q.tiers[tier].tier = tier
+		}
+		if q.preferReset && account.account.SessionWindowEnd != nil {
+			resets = append(resets, resetEntry{account: account, tier: tier})
+		} else {
+			q.tiers[tier].members = append(q.tiers[tier].members, account)
+		}
+	}
+	// Group equal reset timestamps with Equal/Before, matching the old filter
+	// even when timestamps have different locations or monotonic metadata.
+	sort.Slice(resets, func(i, j int) bool {
+		a, b := resets[i], resets[j]
+		aEnd, bEnd := a.account.account.SessionWindowEnd, b.account.account.SessionWindowEnd
+		if !aEnd.Equal(*bEnd) {
+			return aEnd.Before(*bEnd)
+		}
+		return a.tier < b.tier
+	})
+	for i := 0; i < len(resets); {
+		j := i + 1
+		for j < len(resets) && resets[j].tier == resets[i].tier && resets[j].account.account.SessionWindowEnd.Equal(*resets[i].account.account.SessionWindowEnd) {
+			j++
+		}
+		bucket := &loadSelectionBucket{reset: *resets[i].account.account.SessionWindowEnd, tier: resets[i].tier, members: make([]accountWithLoad, j-i)}
+		for k := i; k < j; k++ {
+			bucket.members[k-i] = resets[k].account
+		}
+		q.active.buckets = append(q.active.buckets, bucket)
+		i = j
+	}
+	q.tiers = q.tiers[:tier+1]
+	for i := range q.tiers {
+		if len(q.tiers[i].members) > 0 {
+			q.unknown.buckets = append(q.unknown.buckets, &q.tiers[i])
+		}
+	}
+	heap.Init(&q.active)
+	heap.Init(&q.unknown)
+	return true
+}
+
+func (q *loadAwareSelectionQueue) next(now time.Time) (accountWithLoad, bool) {
+	for {
+		if q.active.Len() == 0 && q.unknown.Len() == 0 && !q.nextPriority() {
+			return accountWithLoad{}, false
+		}
+		// Reevaluate reset expiry on every attempt. Expired candidates rejoin
+		// the unknown tier, rather than retaining their old reset preference.
+		for q.active.Len() > 0 && !now.Before(q.active.buckets[0].reset) {
+			expired := heap.Pop(&q.active).(*loadSelectionBucket)
+			unknown := &q.tiers[expired.tier]
+			wasEmpty := len(unknown.members) == 0
+			unknown.members = append(unknown.members, expired.members...)
+			expired.members = nil
+			if wasEmpty {
+				heap.Push(&q.unknown, unknown)
+			}
+		}
+		ordered := &q.active
+		if ordered.Len() == 0 {
+			ordered = &q.unknown
+		}
+		bucket := ordered.buckets[0]
+		// Draw again after every failure and after expiry merges equal tiers.
+		// Preassigning random ranks would bias newly merged candidates.
+		i := 0
+		if len(bucket.members) > 1 {
+			i = mathrand.Intn(len(bucket.members))
+		}
+		selected := bucket.members[i]
+		last := len(bucket.members) - 1
+		bucket.members[i] = bucket.members[last]
+		bucket.members[last] = accountWithLoad{}
+		bucket.members = bucket.members[:last]
+		if last == 0 {
+			heap.Pop(ordered)
+		}
+		if _, duplicate := q.attempted[selected.account.ID]; duplicate {
+			continue
+		}
+		q.attempted[selected.account.ID] = struct{}{}
+		return selected, true
+	}
 }
 
 // filterByMinPriority 过滤出优先级最小的账号集合

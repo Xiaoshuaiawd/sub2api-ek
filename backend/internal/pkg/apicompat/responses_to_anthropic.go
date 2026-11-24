@@ -220,6 +220,8 @@ type ResponsesEventToAnthropicState struct {
 	CurrentToolName     string
 	CurrentToolArgs     string
 	CurrentToolHadDelta bool
+	currentToolArgs     *strings.Builder
+	currentToolJSON     toolArgumentJSONFraming
 	// PendingThinkingSignature is filled from reasoning.encrypted_content and
 	// emitted as signature_delta before the thinking block is closed.
 	PendingThinkingSignature string
@@ -248,6 +250,68 @@ type ResponsesEventToAnthropicState struct {
 	ResponseID string
 	Model      string
 	Created    int64
+}
+
+// Framing only gates a strict json.Valid check; it never establishes JSON
+// validity. Scan new bytes once while an object/array/string is incomplete.
+// Scalars retain the existing first-valid-prefix behavior at chunk boundaries.
+type toolArgumentJSONFraming struct {
+	root     byte
+	depth    int
+	inString bool
+	escaped  bool
+}
+
+func (f *toolArgumentJSONFraming) append(fragment string) {
+	for i := 0; i < len(fragment); i++ {
+		b := fragment[i]
+		if f.inString {
+			if f.escaped {
+				f.escaped = false
+			} else if b == '\\' {
+				f.escaped = true
+			} else if b == '"' {
+				f.inString = false
+			}
+			continue
+		}
+		if f.root == 0 {
+			if b == ' ' || b == '\t' || b == '\r' || b == '\n' {
+				continue
+			}
+			f.root = b
+		}
+		switch b {
+		case '"':
+			f.inString = true
+		case '{', '[':
+			f.depth++
+		case '}', ']':
+			f.depth--
+		}
+	}
+}
+
+func (f *toolArgumentJSONFraming) ready() bool {
+	if f.root == 0 || f.inString {
+		return false
+	}
+	return (f.root != '{' && f.root != '[') || f.depth <= 0
+}
+
+func (state *ResponsesEventToAnthropicState) appendReadToolArguments(delta string) {
+	if state.currentToolArgs == nil {
+		state.currentToolArgs = &strings.Builder{}
+	}
+	if state.currentToolArgs.String() != state.CurrentToolArgs {
+		state.currentToolArgs.Reset()
+		_, _ = state.currentToolArgs.WriteString(state.CurrentToolArgs)
+		state.currentToolJSON = toolArgumentJSONFraming{}
+		state.currentToolJSON.append(state.CurrentToolArgs)
+	}
+	_, _ = state.currentToolArgs.WriteString(delta)
+	state.CurrentToolArgs = state.currentToolArgs.String()
+	state.currentToolJSON.append(delta)
 }
 
 // NewResponsesEventToAnthropicState returns an initialised stream state.
@@ -405,6 +469,8 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 		state.CurrentBlockType = "tool_use"
 		state.CurrentToolName = evt.Item.Name
 		state.CurrentToolArgs = ""
+		state.currentToolArgs = nil
+		state.currentToolJSON = toolArgumentJSONFraming{}
 		state.CurrentToolHadDelta = false
 		state.HasToolCall = true
 
@@ -545,8 +611,8 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 	}
 
 	if state.CurrentBlockType == "tool_use" && state.CurrentToolName == "Read" {
-		state.CurrentToolArgs += evt.Delta
-		if state.CurrentToolHadDelta || !json.Valid([]byte(state.CurrentToolArgs)) {
+		state.appendReadToolArguments(evt.Delta)
+		if state.CurrentToolHadDelta || !state.currentToolJSON.ready() || !json.Valid([]byte(state.CurrentToolArgs)) {
 			return nil
 		}
 
@@ -852,6 +918,8 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 	state.ContentBlockIndex++
 	state.CurrentToolName = ""
 	state.CurrentToolArgs = ""
+	state.currentToolArgs = nil
+	state.currentToolJSON = toolArgumentJSONFraming{}
 	state.CurrentToolHadDelta = false
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_stop",

@@ -227,7 +227,7 @@ func (h *ConcurrencyHelper) DecrementWaitCount(ctx context.Context, userID int64
 
 // IncrementAccountWaitCount increments the wait count for an account
 func (h *ConcurrencyHelper) IncrementAccountWaitCount(ctx context.Context, accountID int64, maxWait int) (bool, error) {
-	return h.concurrencyService.IncrementAccountWaitCount(ctx, accountID, maxWait)
+	return h.concurrencyService.TryIncrementAccountWaitCount(ctx, accountID, maxWait)
 }
 
 // DecrementAccountWaitCount decrements the wait count for an account
@@ -602,6 +602,29 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 // AcquireAccountSlotWithWaitTimeout acquires an account slot with a custom timeout (keeps SSE ping).
 func (h *ConcurrencyHelper) AcquireAccountSlotWithWaitTimeout(c *gin.Context, accountID int64, maxConcurrency int, timeout time.Duration, isStream bool, streamStarted *bool) (func(), error) {
 	return h.waitForSlotWithPingTimeout(c, "account", accountID, maxConcurrency, timeout, isStream, streamStarted, true)
+}
+
+// AcquireAccountSlotWithWaitPlan bounds queued requests without charging an
+// immediately available slot against the waiting limit. A counted waiter owns
+// its counter only until acquisition, cancellation or timeout.
+func (h *ConcurrencyHelper) AcquireAccountSlotWithWaitPlan(c *gin.Context, accountID int64, plan *service.AccountWaitPlan, isStream bool, streamStarted *bool) (func(), error) {
+	if plan == nil {
+		return nil, fmt.Errorf("account wait plan is required")
+	}
+	ctx := c.Request.Context()
+	release, acquired, err := h.TryAcquireAccountSlot(ctx, accountID, plan.MaxConcurrency)
+	if err != nil || acquired {
+		return release, err
+	}
+	canWait, err := h.IncrementAccountWaitCount(ctx, accountID, plan.MaxWaiting)
+	if err != nil {
+		return nil, err
+	}
+	if !canWait {
+		return nil, &WaitQueueFullError{SlotType: "account"}
+	}
+	defer h.DecrementAccountWaitCount(ctx, accountID)
+	return h.AcquireAccountSlotWithWaitTimeout(c, accountID, plan.MaxConcurrency, plan.Timeout, isStream, streamStarted)
 }
 
 // nextBackoff 计算下一次退避时间

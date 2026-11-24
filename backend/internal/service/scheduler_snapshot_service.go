@@ -246,6 +246,17 @@ func (s *SchedulerSnapshotService) Stop() {
 }
 
 func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) (accountsResult []Account, mixedResult bool, resultErr error) {
+	return s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, false)
+}
+
+// ListSchedulableCandidateAccounts is the internal read-only enumeration path.
+// Public snapshot APIs retain their deep-copy isolation. Selected candidates
+// still go through full-account hydration and the existing primary DB checks.
+func (s *SchedulerSnapshotService) ListSchedulableCandidateAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
+	return s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform, true)
+}
+
+func (s *SchedulerSnapshotService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform, candidates bool) (accountsResult []Account, mixedResult bool, resultErr error) {
 	defer func() {
 		if resultErr == nil {
 			accountsResult, resultErr = s.filterPerformanceAccounts(ctx, accountsResult)
@@ -273,7 +284,19 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	}
 
 	if s.cache != nil {
-		cached, hit, err := s.readSnapshotAccounts(ctx, bucket)
+		var cached []Account
+		var hit bool
+		var err error
+		if reader, ok := s.cache.(interface {
+			GetSchedulingCandidates(context.Context, SchedulerBucket) ([]Account, bool, error)
+		}); candidates && ok {
+			cached, hit, err = reader.GetSchedulingCandidates(ctx, bucket)
+			if err == nil && hit {
+				cached = compactSchedulableAccounts(cached)
+			}
+		} else {
+			cached, hit, err = s.readSnapshotAccounts(ctx, bucket)
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, useMixed, ctxErr
 		}

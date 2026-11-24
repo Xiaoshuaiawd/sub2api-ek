@@ -468,6 +468,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
+	blockText := make(map[int]*bufferedAnthropicBlockText)
 	streamStatus := newAnthropicCompatStream(s.cfg, c, resp, "anthropic buffered", requestID)
 	defer streamStatus.stop()
 
@@ -507,13 +508,18 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		if event.Type == "content_block_delta" && event.Delta != nil && finalResp != nil && event.Index != nil {
 			idx := *event.Index
 			if idx >= 0 && idx < len(finalResp.Content) {
+				buffer := blockText[idx]
+				if buffer == nil {
+					buffer = &bufferedAnthropicBlockText{}
+					blockText[idx] = buffer
+				}
 				switch event.Delta.Type {
 				case "text_delta":
-					finalResp.Content[idx].Text += event.Delta.Text
+					finalResp.Content[idx].Text = appendBufferedAnthropicString(&buffer.text, finalResp.Content[idx].Text, event.Delta.Text)
 				case "thinking_delta":
-					finalResp.Content[idx].Thinking += event.Delta.Thinking
+					finalResp.Content[idx].Thinking = appendBufferedAnthropicString(&buffer.thinking, finalResp.Content[idx].Thinking, event.Delta.Thinking)
 				case "signature_delta":
-					finalResp.Content[idx].Signature += event.Delta.Signature
+					finalResp.Content[idx].Signature = appendBufferedAnthropicString(&buffer.signature, finalResp.Content[idx].Signature, event.Delta.Signature)
 				case "input_json_delta":
 					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
 				}
@@ -786,16 +792,52 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 }
 
 // appendRawJSON appends a JSON fragment string to existing raw JSON.
+type bufferedAnthropicBlockText struct {
+	text      strings.Builder
+	thinking  strings.Builder
+	signature strings.Builder
+}
+
+func appendBufferedAnthropicString(buffer *strings.Builder, existing, fragment string) string {
+	if buffer.String() != existing {
+		buffer.Reset()
+		_, _ = buffer.WriteString(existing)
+	}
+	_, _ = buffer.WriteString(fragment)
+	return buffer.String()
+}
+
+func emptyRawJSONObject(raw []byte) bool {
+	i := 0
+	skipSpace := func() {
+		for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\r' || raw[i] == '\n') {
+			i++
+		}
+	}
+	skipSpace()
+	if i == len(raw) || raw[i] != '{' {
+		return false
+	}
+	i++
+	skipSpace()
+	if i == len(raw) || raw[i] != '}' {
+		return false
+	}
+	i++
+	skipSpace()
+	return i == len(raw)
+}
+
 func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
 	// Anthropic initializes tool_use.input to {} in content_block_start, then
 	// streams the actual input through input_json_delta events. Treat that empty
 	// object as a placeholder instead of prefixing it to the streamed JSON.
-	var existingObject map[string]json.RawMessage
-	isEmptyObject := json.Unmarshal(existing, &existingObject) == nil && existingObject != nil && len(existingObject) == 0
-	if len(existing) == 0 || isEmptyObject {
+	if len(existing) == 0 || emptyRawJSONObject(existing) {
 		return json.RawMessage(fragment)
 	}
-	return json.RawMessage(string(existing) + fragment)
+	// Existing holders keep the same visible prefix. The returned buffer owns
+	// its spare capacity and can grow amortized across subsequent deltas.
+	return append(existing, fragment...)
 }
 
 // writeGatewayResponsesUpstreamError redacts upstream model identifiers only in client-facing errors.

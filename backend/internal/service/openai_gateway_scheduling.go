@@ -1701,7 +1701,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot != nil {
-		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
+		accounts, _, err := s.schedulerSnapshot.ListSchedulableCandidateAccounts(ctx, groupID, platform, false)
 		if err != nil {
 			return accounts, err
 		}
@@ -1942,12 +1942,21 @@ func (s *OpenAIGatewayService) filterOpenAIAccountsBySchedulingThreshold(ctx con
 		return accounts
 	}
 
-	filtered := make([]Account, 0, len(accounts))
+	ownedCandidates := schedulingCandidatesOwnValues(accounts)
+	var filtered []Account
+	if ownedCandidates {
+		filtered = accounts[:0]
+	} else {
+		filtered = make([]Account, 0, len(accounts))
+	}
 	for i := range accounts {
 		if !intelligenceRoutingAllowsAccount(ctx, &accounts[i]) || s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, &accounts[i]) {
 			continue
 		}
 		filtered = append(filtered, accounts[i])
+	}
+	if ownedCandidates {
+		clear(accounts[len(filtered):])
 	}
 	return filtered
 }

@@ -656,6 +656,16 @@ func (s *ConcurrencyService) IncrementAccountWaitCount(ctx context.Context, acco
 	return result, nil
 }
 
+// TryIncrementAccountWaitCount preserves an unconfirmed Redis result. Callers
+// that release their own waiting position must not treat a failed increment as
+// ownership of a counter, even when other legacy callers choose to fail open.
+func (s *ConcurrencyService) TryIncrementAccountWaitCount(ctx context.Context, accountID int64, maxWait int) (bool, error) {
+	if s == nil || s.cache == nil {
+		return false, errors.New("account wait counter unavailable")
+	}
+	return s.cache.IncrementAccountWaitCount(ctx, accountID, maxWait)
+}
+
 // DecrementAccountWaitCount decrements the wait queue counter for an account.
 func (s *ConcurrencyService) DecrementAccountWaitCount(ctx context.Context, accountID int64) {
 	if s.cache == nil {

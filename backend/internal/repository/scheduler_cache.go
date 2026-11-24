@@ -358,6 +358,18 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 // last_used 读取结果在条目内复用 schedulerLastUsedCacheMaxAge。
 // 返回账号使用 fork 的独立深拷贝，允许选号路径修改嵌套配置；加载与解码仍按 bucket 合并。
 func (c *schedulerCache) GetSnapshotValues(ctx context.Context, bucket service.SchedulerBucket) ([]service.Account, bool, error) {
+	return c.getSnapshotValues(ctx, bucket, false)
+}
+
+// GetSchedulingCandidates is reserved for read-only candidate enumeration.
+// Each call owns its Account value slice. Nested configuration is immutable;
+// consumers must hydrate the selected account before forwarding or editing it.
+// Revision, revocation and last-used checks are identical to public snapshots.
+func (c *schedulerCache) GetSchedulingCandidates(ctx context.Context, bucket service.SchedulerBucket) ([]service.Account, bool, error) {
+	return c.getSnapshotValues(ctx, bucket, true)
+}
+
+func (c *schedulerCache) getSnapshotValues(ctx context.Context, bucket service.SchedulerBucket, candidates bool) ([]service.Account, bool, error) {
 	entry, err := c.snapshotEntry(ctx, bucket)
 	if err != nil {
 		return nil, false, err
@@ -365,7 +377,7 @@ func (c *schedulerCache) GetSnapshotValues(ctx context.Context, bucket service.S
 	if entry == nil {
 		return nil, false, nil
 	}
-	accounts, err := c.snapshotAccountsFromEntry(ctx, entry)
+	accounts, err := c.snapshotAccountValues(ctx, entry, candidates)
 	if err != nil {
 		return nil, false, err
 	}
@@ -591,8 +603,9 @@ func (e *schedulerSnapshotEntry) masterIndex() map[string]int {
 	return index
 }
 
-// snapshotAccountsFromEntry 为本次调用一次性分配一组母本副本，并套用 last_used。
-func (c *schedulerCache) snapshotAccountsFromEntry(ctx context.Context, entry *schedulerSnapshotEntry) ([]service.Account, error) {
+// snapshotAccountValues owns the returned value slice and applies fresh LRU
+// data. Only the dedicated candidate reader may share immutable nested config.
+func (c *schedulerCache) snapshotAccountValues(ctx context.Context, entry *schedulerSnapshotEntry, candidates bool) ([]service.Account, error) {
 	chunkSize := c.mgetChunkSize
 	if chunkSize <= 0 {
 		chunkSize = defaultSchedulerSnapshotMGetChunkSize
@@ -617,7 +630,11 @@ func (c *schedulerCache) snapshotAccountsFromEntry(ctx context.Context, entry *s
 	}
 	accounts := make([]service.Account, len(entry.accounts))
 	for i, master := range entry.accounts {
-		accounts[i] = master.CopySchedulerSnapshot()
+		if candidates {
+			accounts[i] = master.CopySchedulingCandidate()
+		} else {
+			accounts[i] = master.CopySchedulerSnapshot()
+		}
 		if lastUsed[i] != nil {
 			value := *lastUsed[i]
 			accounts[i].LastUsedAt = &value
